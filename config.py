@@ -1,0 +1,15 @@
+EMPRESA = "FM Master 98.3"
+
+CUIT = "20-20687162-9"
+
+DIRECCION = "El Indio 1048"
+
+TELEFONO = "2921 407710"
+
+EMAIL = "radiofmmaster@hotmail.com"
+
+COLOR_PRINCIPAL = "#C00000"
+
+COLOR_NEGRO = "#111111"
+
+COLOR_BLANCO = "#FFFFFF"
