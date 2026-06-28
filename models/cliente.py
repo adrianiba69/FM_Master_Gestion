@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 
+
 @dataclass
 class Cliente:
     id: int = None
     codigo: str = ""
     razon_social: str = ""
+    nombre_comercial: str = ""
     responsable: str = ""
     direccion: str = ""
     localidad: str = ""
@@ -14,9 +16,10 @@ class Cliente:
     cuit: str = ""
     iva: str = ""
     servicio: str = ""
-    importe: float = 0.0
-    descuento: float = 0.0
+    importe: float = 0
+    descuento: float = 0
     vencimiento: int = 1
-    estado: str = "ACTIVO"
+    estado: str = "Activo"
     observaciones: str = ""
     fecha_alta: str = ""
+    fecha_modificacion: str = ""
