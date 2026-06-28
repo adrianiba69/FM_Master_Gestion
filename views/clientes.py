@@ -79,42 +79,62 @@ class ClientesFrame(ctk.CTkFrame):
         boton_nuevo = ctk.CTkButton(
             barra,
             text="+ Nuevo",
-            width=105,
+            width=95,
             fg_color="#C00000",
             hover_color="#990000",
             command=self.abrir_ventana_nuevo_cliente,
         )
-        boton_nuevo.grid(row=0, column=3, padx=(10, 0))
+        boton_nuevo.grid(row=1, column=0, sticky="w", pady=(10, 0))
 
         boton_modificar = ctk.CTkButton(
             barra,
             text="Modificar",
-            width=105,
+            width=95,
             fg_color="#444444",
             hover_color="#222222",
             command=self.modificar_cliente_seleccionado,
         )
-        boton_modificar.grid(row=0, column=4, padx=(10, 0))
+        boton_modificar.grid(row=1, column=1, padx=(10, 0), pady=(10, 0))
 
         boton_eliminar = ctk.CTkButton(
             barra,
             text="Eliminar",
-            width=105,
+            width=95,
             fg_color="#7A0000",
             hover_color="#550000",
             command=self.eliminar_cliente_seleccionado,
         )
-        boton_eliminar.grid(row=0, column=5, padx=(10, 0), sticky="e")
+        boton_eliminar.grid(row=1, column=2, padx=(10, 0), pady=(10, 0))
 
         boton_servicios = ctk.CTkButton(
             barra,
             text="Servicios",
-            width=105,
+            width=95,
             fg_color="#006666",
             hover_color="#004C4C",
             command=self.abrir_servicios_cliente,
         )
-        boton_servicios.grid(row=0, column=6, padx=(10, 0), sticky="e")
+        boton_servicios.grid(row=1, column=3, padx=(10, 0), pady=(10, 0))
+
+        boton_resumen = ctk.CTkButton(
+            barra,
+            text="Generar resumen",
+            width=125,
+            fg_color="#C00000",
+            hover_color="#990000",
+            command=self.abrir_resumen_cliente,
+        )
+        boton_resumen.grid(row=1, column=4, padx=(10, 0), pady=(10, 0))
+
+        boton_cuenta = ctk.CTkButton(
+            barra,
+            text="Cuenta Corriente",
+            width=140,
+            fg_color="#006666",
+            hover_color="#004C4C",
+            command=self.abrir_cuenta_corriente,
+        )
+        boton_cuenta.grid(row=1, column=5, padx=(10, 0), pady=(10, 0))
 
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
@@ -224,6 +244,26 @@ class ClientesFrame(ctk.CTkFrame):
         valores = self.tabla.item(self.tabla.selection()[0], "values")
         nombre = valores[2] if len(valores) > 2 else "Cliente"
         ServiciosWindow(self, id_cliente, nombre)
+
+    def abrir_resumen_cliente(self):
+        id_cliente = self.obtener_id_seleccionado()
+        if id_cliente is None:
+            messagebox.showwarning("Atencion", "Seleccione un cliente para generar el resumen.")
+            return
+
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_resumenes"):
+            aplicacion.mostrar_resumenes(cliente_id=id_cliente)
+
+    def abrir_cuenta_corriente(self):
+        id_cliente = self.obtener_id_seleccionado()
+        if id_cliente is None:
+            messagebox.showwarning("Atencion", "Seleccione un cliente para ver su cuenta corriente.")
+            return
+
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_cobros"):
+            aplicacion.mostrar_cobros(cliente_id=id_cliente)
 
     def abrir_formulario(self, titulo, cliente=None):
         ventana = ctk.CTkToplevel(self)

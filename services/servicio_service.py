@@ -78,7 +78,9 @@ class ServicioService:
         ))
 
         conn.commit()
+        servicio_id = cur.lastrowid
         conn.close()
+        return servicio_id
 
     @staticmethod
     def actualizar(servicio):

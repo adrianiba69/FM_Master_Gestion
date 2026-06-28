@@ -3,6 +3,8 @@ import customtkinter as ctk
 from config import COLOR_NEGRO, COLOR_PRINCIPAL
 from database import crear_base
 from views.clientes import ClientesFrame
+from views.cobros import CobrosFrame
+from views.resumenes import ResumenesFrame
 
 
 ctk.set_appearance_mode("light")
@@ -70,8 +72,8 @@ class FMMasterApp(ctk.CTk):
         botones = [
             ("Inicio", self.mostrar_inicio),
             ("Clientes", self.mostrar_clientes),
-            ("Resumenes", None),
-            ("Cobros", None),
+            ("Resumenes", self.mostrar_resumenes),
+            ("Cobros", self.mostrar_cobros),
             ("Informes", None),
             ("Configuracion", None),
         ]
@@ -127,6 +129,18 @@ class FMMasterApp(ctk.CTk):
 
         clientes = ClientesFrame(self.panel)
         clientes.grid(row=0, column=0, sticky="nsew")
+
+    def mostrar_resumenes(self, cliente_id=None):
+        self.limpiar_panel()
+
+        resumenes = ResumenesFrame(self.panel, cliente_id=cliente_id)
+        resumenes.grid(row=0, column=0, sticky="nsew")
+
+    def mostrar_cobros(self, cliente_id=None):
+        self.limpiar_panel()
+
+        cobros = CobrosFrame(self.panel, cliente_id=cliente_id)
+        cobros.grid(row=0, column=0, sticky="nsew")
 
 
 if __name__ == "__main__":
