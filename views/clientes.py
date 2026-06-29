@@ -62,6 +62,7 @@ class ClientesFrame(ctk.CTkFrame):
             barra,
             text="Buscar",
             width=95,
+            height=36,
             command=self.buscar_clientes,
         )
         boton_buscar.grid(row=0, column=1, padx=(10, 0))
@@ -70,6 +71,7 @@ class ClientesFrame(ctk.CTkFrame):
             barra,
             text="Limpiar",
             width=95,
+            height=36,
             fg_color="#555555",
             hover_color="#333333",
             command=self.limpiar_busqueda,
@@ -78,8 +80,9 @@ class ClientesFrame(ctk.CTkFrame):
 
         boton_nuevo = ctk.CTkButton(
             barra,
-            text="+ Nuevo",
+            text="Nuevo",
             width=95,
+            height=36,
             fg_color="#C00000",
             hover_color="#990000",
             command=self.abrir_ventana_nuevo_cliente,
@@ -90,6 +93,7 @@ class ClientesFrame(ctk.CTkFrame):
             barra,
             text="Modificar",
             width=95,
+            height=36,
             fg_color="#444444",
             hover_color="#222222",
             command=self.modificar_cliente_seleccionado,
@@ -100,6 +104,7 @@ class ClientesFrame(ctk.CTkFrame):
             barra,
             text="Eliminar",
             width=95,
+            height=36,
             fg_color="#7A0000",
             hover_color="#550000",
             command=self.eliminar_cliente_seleccionado,
@@ -110,8 +115,9 @@ class ClientesFrame(ctk.CTkFrame):
             barra,
             text="Servicios",
             width=95,
-            fg_color="#006666",
-            hover_color="#004C4C",
+            height=36,
+            fg_color="#333333",
+            hover_color="#111111",
             command=self.abrir_servicios_cliente,
         )
         boton_servicios.grid(row=1, column=3, padx=(10, 0), pady=(10, 0))
@@ -120,6 +126,7 @@ class ClientesFrame(ctk.CTkFrame):
             barra,
             text="Generar resumen",
             width=125,
+            height=36,
             fg_color="#C00000",
             hover_color="#990000",
             command=self.abrir_resumen_cliente,
@@ -130,11 +137,23 @@ class ClientesFrame(ctk.CTkFrame):
             barra,
             text="Cuenta Corriente",
             width=140,
-            fg_color="#006666",
-            hover_color="#004C4C",
+            height=36,
+            fg_color="#333333",
+            hover_color="#111111",
             command=self.abrir_cuenta_corriente,
         )
         boton_cuenta.grid(row=1, column=5, padx=(10, 0), pady=(10, 0))
+
+        boton_tarea = ctk.CTkButton(
+            barra,
+            text="Nueva tarea",
+            width=115,
+            height=36,
+            fg_color="#444444",
+            hover_color="#222222",
+            command=self.abrir_nueva_tarea,
+        )
+        boton_tarea.grid(row=2, column=0, sticky="w", pady=(10, 0))
 
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
@@ -265,10 +284,21 @@ class ClientesFrame(ctk.CTkFrame):
         if hasattr(aplicacion, "mostrar_cobros"):
             aplicacion.mostrar_cobros(cliente_id=id_cliente)
 
+    def abrir_nueva_tarea(self):
+        id_cliente = self.obtener_id_seleccionado()
+        if id_cliente is None:
+            messagebox.showwarning("Atencion", "Seleccione un cliente para crear la tarea.")
+            return
+
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_agenda"):
+            aplicacion.mostrar_agenda(cliente_id=id_cliente, nueva_tarea=True)
+
     def abrir_formulario(self, titulo, cliente=None):
         ventana = ctk.CTkToplevel(self)
         ventana.title(titulo)
-        ventana.geometry("560x650")
+        ventana.geometry("650x720")
+        ventana.minsize(580, 650)
         ventana.resizable(False, True)
         ventana.transient(self.winfo_toplevel())
         ventana.grab_set()
@@ -303,6 +333,7 @@ class ClientesFrame(ctk.CTkFrame):
         boton_guardar = ctk.CTkButton(
             contenedor,
             text="Guardar",
+            height=40,
             fg_color="#C00000",
             hover_color="#990000",
             command=lambda: self.guardar_formulario(ventana, cliente),
@@ -372,6 +403,13 @@ class ClientesFrame(ctk.CTkFrame):
 
         ventana.destroy()
         self.cargar_clientes()
+        messagebox.showinfo(
+            "Clientes",
+            "Cliente modificado correctamente."
+            if cliente_original
+            else "Cliente creado correctamente.",
+            parent=self,
+        )
 
     def crear_cliente_desde_fila(self, fila):
         return Cliente(

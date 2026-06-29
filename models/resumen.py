@@ -12,6 +12,8 @@ class ResumenConcepto:
     importe: float = 0
     descuento: float = 0
     total: float = 0
+    fecha_inicio: str = ""
+    fecha_fin: str = ""
 
 
 @dataclass

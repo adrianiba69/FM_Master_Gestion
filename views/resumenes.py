@@ -6,8 +6,10 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 
 from pdf.resumen_pdf import ResumenPDF
+from runtime_paths import PDF_DIR
 from services.cliente_service import ClienteService
 from services.resumen_service import ResumenService
+from services.whatsapp_service import WhatsAppService
 
 
 class ResumenesFrame(ctk.CTkFrame):
@@ -67,6 +69,7 @@ class ResumenesFrame(ctk.CTkFrame):
             emision,
             text="Generar PDF",
             width=135,
+            height=38,
             fg_color="#C00000",
             hover_color="#990000",
             command=self.generar_resumen,
@@ -84,15 +87,38 @@ class ResumenesFrame(ctk.CTkFrame):
             text_color="#222222",
         ).grid(row=0, column=0, sticky="w")
 
+        self.boton_pendientes = ctk.CTkButton(
+            barra,
+            text="Generar resúmenes pendientes",
+            width=205,
+            height=38,
+            fg_color="#C00000",
+            hover_color="#990000",
+            command=self.abrir_resumenes_pendientes,
+        )
+        self.boton_pendientes.grid(row=0, column=1, padx=(10, 0))
+
         boton_abrir = ctk.CTkButton(
             barra,
             text="Abrir PDF",
             width=115,
+            height=38,
             fg_color="#444444",
             hover_color="#222222",
             command=self.abrir_pdf_seleccionado,
         )
-        boton_abrir.grid(row=0, column=1, padx=(10, 0))
+        boton_abrir.grid(row=0, column=2, padx=(10, 0))
+
+        self.boton_whatsapp = ctk.CTkButton(
+            barra,
+            text="Enviar por WhatsApp",
+            width=165,
+            height=38,
+            fg_color="#333333",
+            hover_color="#111111",
+            command=self.enviar_whatsapp_seleccionado,
+        )
+        self.boton_whatsapp.grid(row=0, column=3, padx=(10, 0))
 
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
@@ -219,6 +245,175 @@ class ResumenesFrame(ctk.CTkFrame):
             f"Resumen Nro. {resumen.numero:06d} generado correctamente.\n{ruta}",
         )
 
+    def abrir_resumenes_pendientes(self):
+        pendientes = ResumenService.listar_pendientes()
+        if not pendientes:
+            messagebox.showinfo(
+                "Resúmenes pendientes",
+                "No hay resúmenes pendientes para generar.",
+                parent=self,
+            )
+            return
+
+        ventana = ctk.CTkToplevel(self)
+        self.ventana_pendientes = ventana
+        ventana.title("Generar resúmenes pendientes")
+        ventana.geometry("950x560")
+        ventana.minsize(820, 500)
+        ventana.configure(fg_color="white")
+        ventana.transient(self.winfo_toplevel())
+        ventana.grab_set()
+        ventana.grid_rowconfigure(2, weight=1)
+        ventana.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            ventana,
+            text="RESÚMENES PENDIENTES",
+            font=("Arial", 22, "bold"),
+            text_color="#C00000",
+        ).grid(row=0, column=0, sticky="w", padx=20, pady=(20, 10))
+
+        seleccion = ctk.CTkFrame(ventana, fg_color="white", corner_radius=0)
+        seleccion.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
+        ctk.CTkButton(
+            seleccion,
+            text="Seleccionar todos",
+            width=135,
+            height=36,
+            fg_color="#444444",
+            hover_color="#222222",
+            command=lambda: self.tabla_pendientes.selection_set(
+                self.tabla_pendientes.get_children()
+            ),
+        ).grid(row=0, column=0, padx=(0, 8))
+        ctk.CTkButton(
+            seleccion,
+            text="Deseleccionar todos",
+            width=145,
+            height=36,
+            fg_color="#666666",
+            hover_color="#444444",
+            command=lambda: self.tabla_pendientes.selection_remove(
+                self.tabla_pendientes.get_children()
+            ),
+        ).grid(row=0, column=1)
+
+        tabla_frame = ctk.CTkFrame(ventana, fg_color="white", corner_radius=0)
+        tabla_frame.grid(row=2, column=0, sticky="nsew", padx=20)
+        tabla_frame.grid_rowconfigure(0, weight=1)
+        tabla_frame.grid_columnconfigure(0, weight=1)
+        columnas = ("cliente", "servicios", "inicio", "fin", "total")
+        self.tabla_pendientes = ttk.Treeview(
+            tabla_frame,
+            columns=columnas,
+            show="headings",
+            selectmode="extended",
+            height=14,
+        )
+        encabezados = {
+            "cliente": ("Cliente", 220),
+            "servicios": ("Servicios incluidos", 330),
+            "inicio": ("Fecha inicio", 105),
+            "fin": ("Fecha fin", 105),
+            "total": ("Total", 115),
+        }
+        for columna, (texto, ancho) in encabezados.items():
+            self.tabla_pendientes.heading(columna, text=texto)
+            self.tabla_pendientes.column(
+                columna,
+                width=ancho,
+                anchor="w",
+                stretch=columna in ("cliente", "servicios"),
+            )
+        for pendiente in pendientes:
+            conceptos = ", ".join(
+                servicio["concepto"] for servicio in pendiente["servicios"]
+            )
+            self.tabla_pendientes.insert(
+                "",
+                "end",
+                iid=str(pendiente["cliente_id"]),
+                values=(
+                    pendiente["cliente"],
+                    conceptos,
+                    self.formatear_fecha(pendiente["fecha_inicio"]),
+                    self.formatear_fecha(pendiente["fecha_fin"]),
+                    self.formatear_moneda(pendiente["total"]),
+                ),
+            )
+        scroll = ttk.Scrollbar(
+            tabla_frame,
+            orient="vertical",
+            command=self.tabla_pendientes.yview,
+        )
+        self.tabla_pendientes.configure(yscrollcommand=scroll.set)
+        self.tabla_pendientes.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.tabla_pendientes.selection_set(self.tabla_pendientes.get_children())
+
+        botones = ctk.CTkFrame(ventana, fg_color="white", corner_radius=0)
+        botones.grid(row=3, column=0, sticky="e", padx=20, pady=18)
+        self.boton_confirmar_pendientes = ctk.CTkButton(
+            botones,
+            text="Generar seleccionados",
+            width=170,
+            height=38,
+            fg_color="#C00000",
+            hover_color="#990000",
+            command=self.generar_pendientes_seleccionados,
+        )
+        self.boton_confirmar_pendientes.grid(row=0, column=0, padx=(0, 8))
+        ctk.CTkButton(
+            botones,
+            text="Cancelar",
+            width=105,
+            height=38,
+            fg_color="#666666",
+            hover_color="#444444",
+            command=ventana.destroy,
+        ).grid(row=0, column=1)
+
+    def generar_pendientes_seleccionados(self):
+        seleccion = self.tabla_pendientes.selection()
+        if not seleccion:
+            messagebox.showwarning(
+                "Resúmenes pendientes",
+                "Seleccione al menos un cliente.",
+                parent=self.ventana_pendientes,
+            )
+            return
+
+        generados = 0
+        omitidos = 0
+        errores = []
+        carpeta = PDF_DIR / "resumenes" / date.today().strftime("%Y-%m")
+        for item in seleccion:
+            cliente_id = int(item)
+            try:
+                resumen = ResumenService.generar_pendiente_cliente(cliente_id)
+                if resumen is None:
+                    omitidos += 1
+                    continue
+                ruta = carpeta / f"resumen_{resumen.numero:06d}.pdf"
+                ResumenPDF.generar(resumen.id, ruta)
+                generados += 1
+            except Exception as error:
+                if "resumen" in locals() and resumen is not None:
+                    ResumenService.eliminar_generacion(resumen.id)
+                errores.append(str(error))
+            finally:
+                resumen = None
+
+        self.ventana_pendientes.destroy()
+        self.cargar_resumenes()
+        messagebox.showinfo(
+            "Resultado de generación",
+            f"Generados: {generados}\n"
+            f"Omitidos: {omitidos}\n"
+            f"Errores: {len(errores)}",
+            parent=self,
+        )
+
     def abrir_pdf_seleccionado(self):
         seleccion = self.tabla.selection()
         if not seleccion:
@@ -236,6 +431,27 @@ class ResumenesFrame(ctk.CTkFrame):
             os.startfile(str(Path(ruta).resolve()))
         except (OSError, ValueError) as error:
             messagebox.showerror("Error", f"No se pudo abrir el PDF: {error}")
+
+    def enviar_whatsapp_seleccionado(self):
+        seleccion = self.tabla.selection()
+        if not seleccion:
+            messagebox.showwarning("Atencion", "Seleccione un resumen para enviar.")
+            return
+
+        valores = self.tabla.item(seleccion[0], "values")
+        resumen_id = int(valores[0])
+        try:
+            datos = WhatsAppService.abrir_whatsapp_resumen(resumen_id)
+        except (ValueError, OSError) as error:
+            messagebox.showerror("WhatsApp", str(error), parent=self)
+            return
+
+        messagebox.showinfo(
+            "WhatsApp Web",
+            "WhatsApp se abrió con el mensaje preparado. "
+            "Adjuntá manualmente el PDF que se abrió en la carpeta.",
+            parent=self,
+        )
 
     @staticmethod
     def formatear_fecha(valor):

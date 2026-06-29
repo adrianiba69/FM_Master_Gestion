@@ -51,8 +51,9 @@ class CobrosFrame(ctk.CTkFrame):
 
         self.boton_registrar = ctk.CTkButton(
             selector,
-            text="Registrar Cobro",
+            text="Nuevo",
             width=145,
+            height=38,
             fg_color="#C00000",
             hover_color="#990000",
             command=self.abrir_nuevo_cobro,
@@ -87,8 +88,9 @@ class CobrosFrame(ctk.CTkFrame):
 
         self.boton_modificar = ctk.CTkButton(
             acciones,
-            text="Modificar Cobro",
+            text="Modificar",
             width=135,
+            height=38,
             fg_color="#444444",
             hover_color="#222222",
             command=self.modificar_cobro_seleccionado,
@@ -97,8 +99,9 @@ class CobrosFrame(ctk.CTkFrame):
 
         self.boton_eliminar = ctk.CTkButton(
             acciones,
-            text="Eliminar Cobro",
+            text="Eliminar",
             width=125,
+            height=38,
             fg_color="#7A0000",
             hover_color="#550000",
             command=self.eliminar_cobro_seleccionado,
@@ -288,7 +291,8 @@ class CobrosFrame(ctk.CTkFrame):
     def abrir_formulario(self, titulo, cobro=None):
         ventana = ctk.CTkToplevel(self)
         ventana.title(titulo)
-        ventana.geometry("520x570")
+        ventana.geometry("620x650")
+        ventana.minsize(560, 600)
         ventana.resizable(False, False)
         ventana.configure(fg_color="white")
         ventana.transient(self.winfo_toplevel())
@@ -349,6 +353,7 @@ class CobrosFrame(ctk.CTkFrame):
             botones,
             text="Guardar",
             width=130,
+            height=40,
             fg_color="#C00000",
             hover_color="#990000",
             command=lambda: self.guardar_formulario(ventana, cobro),
@@ -357,6 +362,7 @@ class CobrosFrame(ctk.CTkFrame):
             botones,
             text="Cancelar",
             width=110,
+            height=40,
             fg_color="#666666",
             hover_color="#444444",
             command=ventana.destroy,
@@ -397,6 +403,13 @@ class CobrosFrame(ctk.CTkFrame):
         ventana.destroy()
         self.actualizar_cuenta()
         self.pestanas.select(1)
+        messagebox.showinfo(
+            "Cobros",
+            "Cobro modificado correctamente."
+            if cobro_original
+            else "Cobro registrado correctamente.",
+            parent=self,
+        )
 
     def obtener_cobro_seleccionado(self):
         seleccion = self.tabla_cobros.selection()

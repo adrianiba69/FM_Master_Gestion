@@ -1,3 +1,4 @@
+from datetime import date, datetime
 from tkinter import messagebox, ttk
 
 import customtkinter as ctk
@@ -15,10 +16,11 @@ class ServiciosWindow(ctk.CTkToplevel):
         self.cliente_nombre = cliente_nombre
         self.campos_formulario = {}
         self.activo_var = ctk.IntVar(value=1)
+        self.renovable_var = ctk.IntVar(value=1)
 
         self.title(f"Servicios - {cliente_nombre}")
-        self.geometry("1050x650")
-        self.minsize(900, 580)
+        self.geometry("1180x700")
+        self.minsize(1000, 650)
         self.configure(fg_color="white")
         self.transient(master.winfo_toplevel())
         self.grab_set()
@@ -80,6 +82,8 @@ class ServiciosWindow(ctk.CTkToplevel):
             ("cantidad", "Cantidad"),
             ("importe", "Importe"),
             ("descuento", "Descuento"),
+            ("fecha_inicio", "Fecha de inicio * (DD/MM/AAAA)"),
+            ("fecha_fin", "Fecha de fin"),
         )
         for fila, (clave, etiqueta) in enumerate(campos, start=1):
             ctk.CTkLabel(formulario, text=etiqueta, anchor="w").grid(
@@ -93,6 +97,14 @@ class ServiciosWindow(ctk.CTkToplevel):
             entrada.grid(row=fila * 2, column=0, sticky="ew", padx=16)
             self.campos_formulario[clave] = entrada
 
+        self.campos_formulario["fecha_inicio"].bind(
+            "<KeyRelease>", lambda _evento: self.actualizar_fecha_fin_formulario()
+        )
+        self.campos_formulario["fecha_inicio"].bind(
+            "<FocusOut>", lambda _evento: self.actualizar_fecha_fin_formulario()
+        )
+        self.campos_formulario["fecha_fin"].configure(state="disabled")
+
         self.check_activo = ctk.CTkCheckBox(
             formulario,
             text="Servicio activo",
@@ -102,23 +114,39 @@ class ServiciosWindow(ctk.CTkToplevel):
             fg_color="#C00000",
             hover_color="#990000",
         )
-        self.check_activo.grid(row=11, column=0, sticky="w", padx=16, pady=(18, 14))
+        self.check_activo.grid(row=15, column=0, sticky="w", padx=16, pady=(18, 6))
+
+        self.check_renovable = ctk.CTkCheckBox(
+            formulario,
+            text="Renovable",
+            variable=self.renovable_var,
+            onvalue=1,
+            offvalue=0,
+            fg_color="#C00000",
+            hover_color="#990000",
+        )
+        self.check_renovable.grid(row=16, column=0, sticky="w", padx=16, pady=(4, 14))
 
         tabla_frame = ctk.CTkFrame(contenido, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=0, column=1, sticky="nsew")
         tabla_frame.grid_rowconfigure(0, weight=1)
         tabla_frame.grid_columnconfigure(0, weight=1)
 
-        columnas = ("id", "concepto", "cantidad", "importe", "descuento", "total", "activo")
+        columnas = (
+            "id", "concepto", "cantidad", "total", "inicio", "fin",
+            "renovable", "estado_periodo", "activo",
+        )
         self.tabla = ttk.Treeview(tabla_frame, columns=columnas, show="headings", height=15)
         encabezados = {
             "id": ("ID", 48),
             "concepto": ("Concepto", 210),
             "cantidad": ("Cantidad", 75),
-            "importe": ("Importe", 100),
-            "descuento": ("Descuento", 100),
             "total": ("Total", 105),
-            "activo": ("Activo", 65),
+            "inicio": ("Inicio", 95),
+            "fin": ("Fin", 95),
+            "renovable": ("Renovable", 80),
+            "estado_periodo": ("Periodo", 90),
+            "activo": ("Activo", 60),
         }
         for columna, (texto, ancho) in encabezados.items():
             self.tabla.heading(columna, text=texto)
@@ -131,6 +159,7 @@ class ServiciosWindow(ctk.CTkToplevel):
 
         self.tabla.bind("<<TreeviewSelect>>", self.cargar_seleccion_en_formulario)
         self.tabla.bind("<Double-1>", self.cargar_seleccion_en_formulario)
+        self.tabla.tag_configure("vencido", foreground="#C00000")
 
         scroll_y = ttk.Scrollbar(tabla_frame, orient="vertical", command=self.tabla.yview)
         scroll_x = ttk.Scrollbar(tabla_frame, orient="horizontal", command=self.tabla.xview)
@@ -147,6 +176,7 @@ class ServiciosWindow(ctk.CTkToplevel):
             acciones,
             text="Guardar",
             width=125,
+            height=38,
             fg_color="#C00000",
             hover_color="#990000",
             command=self.guardar_servicio,
@@ -157,6 +187,7 @@ class ServiciosWindow(ctk.CTkToplevel):
             acciones,
             text="Modificar",
             width=125,
+            height=38,
             fg_color="#444444",
             hover_color="#222222",
             command=self.modificar_servicio,
@@ -167,26 +198,40 @@ class ServiciosWindow(ctk.CTkToplevel):
             acciones,
             text="Eliminar",
             width=125,
+            height=38,
             fg_color="#7A0000",
             hover_color="#550000",
             command=self.eliminar_servicio_seleccionado,
         )
         self.boton_eliminar.grid(row=0, column=2, padx=8)
 
+        self.boton_renovar = ctk.CTkButton(
+            acciones,
+            text="Renovar periodo",
+            width=140,
+            height=38,
+            fg_color="#333333",
+            hover_color="#111111",
+            command=self.renovar_periodo,
+        )
+        self.boton_renovar.grid(row=0, column=3, padx=8)
+
         self.boton_limpiar = ctk.CTkButton(
             acciones,
-            text="Limpiar / Nuevo",
+            text="Limpiar",
             width=145,
-            fg_color="#006666",
-            hover_color="#004C4C",
+            height=38,
+            fg_color="#555555",
+            hover_color="#333333",
             command=self.limpiar_formulario,
         )
-        self.boton_limpiar.grid(row=0, column=3, padx=8)
+        self.boton_limpiar.grid(row=0, column=4, padx=8)
 
         self.boton_cerrar = ctk.CTkButton(
             acciones,
             text="Cerrar",
             width=110,
+            height=38,
             fg_color="#666666",
             hover_color="#444444",
             command=self.destroy,
@@ -199,6 +244,7 @@ class ServiciosWindow(ctk.CTkToplevel):
 
         item_seleccionado = None
         for servicio in ServicioService.listar(self.cliente_id):
+            estado_periodo = servicio[12] or "Activo"
             item = self.tabla.insert(
                 "",
                 "end",
@@ -206,11 +252,16 @@ class ServiciosWindow(ctk.CTkToplevel):
                     servicio[0],
                     servicio[2],
                     self.formatear_numero(servicio[4]),
-                    self.formatear_moneda(servicio[5]),
-                    self.formatear_moneda(servicio[6]),
                     self.formatear_moneda(servicio[8]),
+                    self.formatear_fecha(servicio[9]),
+                    self.formatear_fecha(servicio[10]),
+                    "Si" if servicio[11] else "No",
+                    estado_periodo,
                     "Si" if servicio[7] else "No",
                 ),
+                tags=("vencido",)
+                if estado_periodo in ("Vencido", "Finalizado")
+                else (),
             )
             if servicio[0] == seleccionar_id:
                 item_seleccionado = item
@@ -233,6 +284,11 @@ class ServiciosWindow(ctk.CTkToplevel):
         nuevo_id = ServicioService.guardar(servicio)
         self.cargar_servicios(seleccionar_id=nuevo_id)
         self.limpiar_formulario(limpiar_seleccion=False)
+        messagebox.showinfo(
+            "Servicios",
+            "Servicio creado correctamente.",
+            parent=self,
+        )
 
     def modificar_servicio(self):
         id_servicio = self.obtener_id_seleccionado()
@@ -246,6 +302,30 @@ class ServiciosWindow(ctk.CTkToplevel):
 
         ServicioService.actualizar(servicio)
         self.cargar_servicios(seleccionar_id=id_servicio)
+        messagebox.showinfo(
+            "Servicios",
+            "Servicio modificado correctamente.",
+            parent=self,
+        )
+
+    def renovar_periodo(self):
+        id_servicio = self.obtener_id_seleccionado()
+        if id_servicio is None:
+            messagebox.showwarning("Atencion", "Seleccione un servicio para renovar.")
+            return
+
+        try:
+            inicio, fin = ServicioService.renovar_periodo(id_servicio)
+        except ValueError as error:
+            messagebox.showerror("Renovacion", str(error), parent=self)
+            return
+
+        self.cargar_servicios(seleccionar_id=id_servicio)
+        messagebox.showinfo(
+            "Periodo renovado",
+            f"Nuevo periodo: {self.formatear_fecha(inicio)} al {self.formatear_fecha(fin)}.",
+            parent=self,
+        )
 
     def eliminar_servicio_seleccionado(self):
         id_servicio = self.obtener_id_seleccionado()
@@ -280,19 +360,26 @@ class ServiciosWindow(ctk.CTkToplevel):
             "cantidad": self.formatear_numero(fila[4]),
             "importe": self.formatear_numero(fila[5]),
             "descuento": self.formatear_numero(fila[6]),
+            "fecha_inicio": self.formatear_fecha(fila[8]),
+            "fecha_fin": self.formatear_fecha(fila[9]),
         }
         for clave, valor in valores.items():
-            self.campos_formulario[clave].delete(0, "end")
-            self.campos_formulario[clave].insert(0, valor)
+            self.establecer_campo(clave, valor)
         self.activo_var.set(1 if fila[7] else 0)
+        self.renovable_var.set(1 if fila[10] else 0)
+        self.boton_renovar.configure(state="normal" if fila[10] else "disabled")
 
     def limpiar_formulario(self, limpiar_seleccion=True):
-        for entrada in self.campos_formulario.values():
-            entrada.delete(0, "end")
-        self.campos_formulario["cantidad"].insert(0, "1")
-        self.campos_formulario["importe"].insert(0, "0")
-        self.campos_formulario["descuento"].insert(0, "0")
+        for clave in self.campos_formulario:
+            self.establecer_campo(clave, "")
+        self.establecer_campo("cantidad", "1")
+        self.establecer_campo("importe", "0")
+        self.establecer_campo("descuento", "0")
+        self.establecer_campo("fecha_inicio", date.today().strftime("%d/%m/%Y"))
+        self.actualizar_fecha_fin_formulario()
         self.activo_var.set(1)
+        self.renovable_var.set(1)
+        self.boton_renovar.configure(state="disabled")
         if limpiar_seleccion:
             self.tabla.selection_remove(self.tabla.selection())
         self.campos_formulario["concepto"].focus_set()
@@ -307,10 +394,14 @@ class ServiciosWindow(ctk.CTkToplevel):
             cantidad = self.convertir_decimal(self.campos_formulario["cantidad"].get() or "1")
             importe = self.convertir_decimal(self.campos_formulario["importe"].get() or "0")
             descuento = self.convertir_decimal(self.campos_formulario["descuento"].get() or "0")
+            fecha_inicio = datetime.strptime(
+                self.campos_formulario["fecha_inicio"].get().strip(),
+                "%d/%m/%Y",
+            ).date()
         except ValueError:
             messagebox.showerror(
                 "Error",
-                "Cantidad, importe y descuento deben ser numericos.",
+                "Ingrese valores numericos validos y una fecha DD/MM/AAAA.",
                 parent=self,
             )
             return None
@@ -332,7 +423,33 @@ class ServiciosWindow(ctk.CTkToplevel):
             importe=importe,
             descuento=descuento,
             activo=self.activo_var.get(),
+            fecha_inicio=fecha_inicio.isoformat(),
+            fecha_fin=ServicioService.sumar_un_mes(fecha_inicio).isoformat(),
+            renovable=self.renovable_var.get(),
+            estado_periodo="Activo",
         )
+
+    def actualizar_fecha_fin_formulario(self):
+        try:
+            inicio = datetime.strptime(
+                self.campos_formulario["fecha_inicio"].get().strip(),
+                "%d/%m/%Y",
+            ).date()
+        except ValueError:
+            self.establecer_campo("fecha_fin", "")
+            return
+        fin = ServicioService.sumar_un_mes(inicio)
+        self.establecer_campo("fecha_fin", fin.strftime("%d/%m/%Y"))
+
+    def establecer_campo(self, clave, valor):
+        entrada = self.campos_formulario[clave]
+        estado_anterior = entrada.cget("state")
+        if estado_anterior == "disabled":
+            entrada.configure(state="normal")
+        entrada.delete(0, "end")
+        entrada.insert(0, valor)
+        if estado_anterior == "disabled":
+            entrada.configure(state="disabled")
 
     def obtener_id_seleccionado(self):
         seleccion = self.tabla.selection()
@@ -353,6 +470,13 @@ class ServiciosWindow(ctk.CTkToplevel):
     @staticmethod
     def formatear_numero(valor):
         return f"{float(valor or 0):.2f}"
+
+    @staticmethod
+    def formatear_fecha(valor):
+        try:
+            return datetime.strptime(valor, "%Y-%m-%d").strftime("%d/%m/%Y")
+        except (TypeError, ValueError):
+            return valor or ""
 
     @staticmethod
     def formatear_moneda(valor):

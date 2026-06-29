@@ -1,9 +1,16 @@
 import customtkinter as ctk
+from tkinter import messagebox, ttk
 
 from config import COLOR_NEGRO, COLOR_PRINCIPAL
 from database import crear_base
+from services.backup_service import BackupService
+from views.agenda import AgendaFrame
 from views.clientes import ClientesFrame
 from views.cobros import CobrosFrame
+from views.configuracion import ConfiguracionFrame
+from views.inicio import InicioFrame
+from views.informes import InformesFrame
+from views.renovaciones import RenovacionesFrame
 from views.resumenes import ResumenesFrame
 
 
@@ -16,10 +23,12 @@ class FMMasterApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("FM Master Gestion v0.1")
-        self.geometry("1200x700")
-        self.minsize(1000, 650)
+        self.title("FM Master Gestion")
+        self.geometry("1280x760")
+        self.minsize(1050, 680)
         self.configure(fg_color="white")
+
+        self.configurar_estilos()
 
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
@@ -30,6 +39,47 @@ class FMMasterApp(ctk.CTk):
         self.crear_menu_lateral()
         self.crear_panel_principal()
         self.mostrar_inicio()
+
+    def configurar_estilos(self):
+        estilo = ttk.Style(self)
+        estilo.theme_use("clam")
+        estilo.configure(
+            "Treeview",
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            foreground="#222222",
+            rowheight=30,
+            font=("Arial", 10),
+            borderwidth=0,
+        )
+        estilo.configure(
+            "Treeview.Heading",
+            background="#1B1B1B",
+            foreground="#FFFFFF",
+            font=("Arial", 10, "bold"),
+            relief="flat",
+            padding=(7, 8),
+        )
+        estilo.map(
+            "Treeview",
+            background=[("selected", "#C00000")],
+            foreground=[("selected", "#FFFFFF")],
+        )
+        estilo.map(
+            "Treeview.Heading",
+            background=[("active", "#C00000")],
+        )
+        estilo.configure("TNotebook", background="#FFFFFF", borderwidth=0)
+        estilo.configure(
+            "TNotebook.Tab",
+            font=("Arial", 10, "bold"),
+            padding=(14, 8),
+        )
+        estilo.map(
+            "TNotebook.Tab",
+            background=[("selected", "#C00000")],
+            foreground=[("selected", "#FFFFFF")],
+        )
 
     def crear_topbar(self):
         self.topbar = ctk.CTkFrame(
@@ -54,13 +104,13 @@ class FMMasterApp(ctk.CTk):
         self.main = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         self.main.grid(row=1, column=0, sticky="nsew")
         self.main.grid_rowconfigure(0, weight=1)
-        self.main.grid_columnconfigure(0, weight=0, minsize=220)
+        self.main.grid_columnconfigure(0, weight=0, minsize=230)
         self.main.grid_columnconfigure(1, weight=1)
 
     def crear_menu_lateral(self):
         self.menu = ctk.CTkFrame(
             self.main,
-            width=220,
+            width=230,
             fg_color=COLOR_NEGRO,
             corner_radius=0
         )
@@ -72,10 +122,12 @@ class FMMasterApp(ctk.CTk):
         botones = [
             ("Inicio", self.mostrar_inicio),
             ("Clientes", self.mostrar_clientes),
+            ("Agenda", self.mostrar_agenda),
             ("Resumenes", self.mostrar_resumenes),
             ("Cobros", self.mostrar_cobros),
-            ("Informes", None),
-            ("Configuracion", None),
+            ("Renovaciones", self.mostrar_renovaciones),
+            ("Informes", self.mostrar_informes),
+            ("Configuracion", self.mostrar_configuracion),
         ]
 
         for fila, (texto, comando) in enumerate(botones):
@@ -104,25 +156,8 @@ class FMMasterApp(ctk.CTk):
     def mostrar_inicio(self):
         self.limpiar_panel()
 
-        inicio = ctk.CTkFrame(self.panel, fg_color="white", corner_radius=0)
+        inicio = InicioFrame(self.panel)
         inicio.grid(row=0, column=0, sticky="nsew")
-        inicio.grid_columnconfigure(0, weight=1)
-
-        bienvenida = ctk.CTkLabel(
-            inicio,
-            text="Bienvenido a FM Master Gestion",
-            font=("Arial", 28, "bold"),
-            text_color="black"
-        )
-        bienvenida.grid(row=0, column=0, pady=(40, 10))
-
-        subtitulo = ctk.CTkLabel(
-            inicio,
-            text="Sistema de administracion de clientes y resumenes",
-            font=("Arial", 18),
-            text_color="black"
-        )
-        subtitulo.grid(row=1, column=0)
 
     def mostrar_clientes(self):
         self.limpiar_panel()
@@ -142,8 +177,61 @@ class FMMasterApp(ctk.CTk):
         cobros = CobrosFrame(self.panel, cliente_id=cliente_id)
         cobros.grid(row=0, column=0, sticky="nsew")
 
+    def mostrar_configuracion(self):
+        self.limpiar_panel()
+
+        configuracion = ConfiguracionFrame(self.panel)
+        configuracion.grid(row=0, column=0, sticky="nsew")
+
+    def mostrar_renovaciones(self):
+        self.limpiar_panel()
+
+        renovaciones = RenovacionesFrame(self.panel)
+        renovaciones.grid(row=0, column=0, sticky="nsew")
+
+    def mostrar_agenda(self, cliente_id=None, nueva_tarea=False):
+        self.limpiar_panel()
+
+        agenda = AgendaFrame(
+            self.panel,
+            cliente_id=cliente_id,
+            abrir_nueva=nueva_tarea,
+        )
+        agenda.grid(row=0, column=0, sticky="nsew")
+
+    def mostrar_informes(self):
+        self.limpiar_panel()
+
+        informes = InformesFrame(self.panel)
+        informes.grid(row=0, column=0, sticky="nsew")
+
 
 if __name__ == "__main__":
     crear_base()
+    backup_automatico = None
+    error_backup = None
+    try:
+        backup_automatico = BackupService.crear_backup_automatico()
+    except Exception as error:
+        error_backup = str(error)
+
     app = FMMasterApp()
+    if backup_automatico:
+        app.after(
+            250,
+            lambda ruta=backup_automatico: messagebox.showinfo(
+                "Backup automatico",
+                f"La copia de seguridad diaria se creo correctamente.\n{ruta}",
+                parent=app,
+            ),
+        )
+    elif error_backup:
+        app.after(
+            250,
+            lambda detalle=error_backup: messagebox.showwarning(
+                "Backup automatico",
+                f"No se pudo crear la copia de seguridad diaria.\n{detalle}",
+                parent=app,
+            ),
+        )
     app.mainloop()

@@ -53,14 +53,30 @@ class ResumenService:
                 raise ValueError("No se encontro el cliente seleccionado.")
 
             cur.execute("""
-                SELECT id, concepto, descripcion, cantidad, importe, descuento
-                FROM servicios
-                WHERE cliente_id=? AND activo=1
-                ORDER BY concepto
-            """, (cliente_id,))
+                SELECT
+                    s.id, s.concepto, s.descripcion, s.cantidad, s.importe,
+                    s.descuento, s.fecha_inicio, s.fecha_fin
+                FROM servicios s
+                WHERE s.cliente_id=? AND s.activo=1
+                  AND s.fecha_inicio<=?
+                  AND s.fecha_fin>=?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM resumen_conceptos rc
+                      WHERE rc.servicio_id=s.id
+                        AND rc.fecha_inicio=s.fecha_inicio
+                        AND rc.fecha_fin=s.fecha_fin
+                  )
+                ORDER BY s.concepto
+            """, (
+                cliente_id,
+                fecha_emision.isoformat(),
+                fecha_emision.isoformat(),
+            ))
             servicios = cur.fetchall()
             if not servicios:
-                raise ValueError("El cliente no tiene servicios activos para resumir.")
+                raise ValueError(
+                    "El cliente no tiene servicios activos vigentes para el periodo seleccionado."
+                )
 
             vencimiento = fecha_vencimiento
             if vencimiento is None:
@@ -101,15 +117,289 @@ class ResumenService:
                 cur.execute("""
                     INSERT INTO resumen_conceptos(
                         resumen_id, servicio_id, concepto, descripcion,
-                        cantidad, importe, descuento, total
-                    ) VALUES(?,?,?,?,?,?,?,?)
+                        cantidad, importe, descuento, total,
+                        fecha_inicio, fecha_fin
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)
                 """, (
                     resumen_id, servicio[0], servicio[1], servicio[2],
                     cantidad, importe, descuento, subtotal,
+                    servicio[6], servicio[7],
                 ))
 
             conn.commit()
             return ResumenService.obtener(resumen_id)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def listar_pendientes(fecha_referencia=None):
+        referencia = fecha_referencia or date.today()
+        if isinstance(referencia, str):
+            referencia = datetime.strptime(referencia, "%Y-%m-%d").date()
+
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                s.id,
+                s.cliente_id,
+                COALESCE(NULLIF(c.razon_social, ''), c.nombre),
+                s.concepto,
+                s.descripcion,
+                s.cantidad,
+                s.importe,
+                s.descuento,
+                s.fecha_inicio,
+                s.fecha_fin
+            FROM servicios s
+            JOIN clientes c ON c.id=s.cliente_id
+            WHERE s.activo=1
+              AND s.fecha_fin<=?
+              AND NOT EXISTS (
+                  SELECT 1 FROM resumen_conceptos rc
+                  WHERE rc.servicio_id=s.id
+                    AND rc.fecha_inicio=s.fecha_inicio
+                    AND rc.fecha_fin=s.fecha_fin
+              )
+            ORDER BY c.razon_social, s.fecha_fin, s.concepto
+        """, (referencia.isoformat(),))
+        filas = cur.fetchall()
+        conn.close()
+
+        agrupados = {}
+        for fila in filas:
+            cliente_id = fila[1]
+            grupo = agrupados.setdefault(cliente_id, {
+                "cliente_id": cliente_id,
+                "cliente": fila[2],
+                "servicios": [],
+                "fecha_inicio": fila[8],
+                "fecha_fin": fila[9],
+                "total": 0.0,
+            })
+            subtotal = (
+                float(fila[5] or 0) * float(fila[6] or 0)
+                - float(fila[7] or 0)
+            )
+            grupo["servicios"].append({
+                "id": fila[0],
+                "concepto": fila[3],
+                "fecha_inicio": fila[8],
+                "fecha_fin": fila[9],
+                "total": subtotal,
+            })
+            grupo["fecha_inicio"] = min(grupo["fecha_inicio"], fila[8])
+            grupo["fecha_fin"] = max(grupo["fecha_fin"], fila[9])
+            grupo["total"] += subtotal
+
+        return list(agrupados.values())
+
+    @staticmethod
+    def contar_clientes_pendientes(fecha_referencia=None):
+        return len(ResumenService.listar_pendientes(fecha_referencia))
+
+    @staticmethod
+    def generar_pendiente_cliente(cliente_id, fecha=None):
+        fecha_emision = fecha or date.today()
+        if isinstance(fecha_emision, str):
+            fecha_emision = datetime.strptime(fecha_emision, "%Y-%m-%d").date()
+
+        conn = conectar()
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                SELECT
+                    id, codigo,
+                    COALESCE(NULLIF(razon_social, ''), nombre),
+                    nombre_comercial, responsable, direccion, localidad,
+                    telefono, whatsapp, email, cuit, iva, vencimiento,
+                    estado, observaciones, fecha_alta, fecha_modificacion
+                FROM clientes
+                WHERE id=?
+            """, (cliente_id,))
+            cliente = cur.fetchone()
+            if cliente is None:
+                raise ValueError("No se encontro el cliente seleccionado.")
+
+            cur.execute("""
+                SELECT
+                    s.id, s.concepto, s.descripcion, s.cantidad, s.importe,
+                    s.descuento, s.fecha_inicio, s.fecha_fin
+                FROM servicios s
+                WHERE s.cliente_id=? AND s.activo=1
+                  AND s.fecha_fin<=?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM resumen_conceptos rc
+                      WHERE rc.servicio_id=s.id
+                        AND rc.fecha_inicio=s.fecha_inicio
+                        AND rc.fecha_fin=s.fecha_fin
+                  )
+                ORDER BY s.fecha_fin, s.concepto
+            """, (cliente_id, fecha_emision.isoformat()))
+            servicios = cur.fetchall()
+            if not servicios:
+                conn.rollback()
+                return None
+
+            vencimiento = ResumenService.calcular_vencimiento(cliente, fecha_emision)
+            cur.execute("SELECT COALESCE(MAX(numero), 0) + 1 FROM resumenes")
+            numero = cur.fetchone()[0]
+            total = sum(
+                float(servicio[3] or 0) * float(servicio[4] or 0)
+                - float(servicio[5] or 0)
+                for servicio in servicios
+            )
+            cur.execute("""
+                INSERT INTO resumenes(
+                    numero, cliente_id, fecha, fecha_vencimiento, total,
+                    saldo, estado, fecha_creacion
+                ) VALUES(?,?,?,?,?,?,?,?)
+            """, (
+                numero, cliente_id, fecha_emision.isoformat(),
+                vencimiento.isoformat(), total, total, "Pendiente",
+                datetime.now().isoformat(timespec="seconds"),
+            ))
+            resumen_id = cur.lastrowid
+
+            for servicio in servicios:
+                cantidad = float(servicio[3] or 0)
+                importe = float(servicio[4] or 0)
+                descuento = float(servicio[5] or 0)
+                subtotal = cantidad * importe - descuento
+                cur.execute("""
+                    INSERT INTO resumen_conceptos(
+                        resumen_id, servicio_id, concepto, descripcion,
+                        cantidad, importe, descuento, total,
+                        fecha_inicio, fecha_fin
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    resumen_id, servicio[0], servicio[1], servicio[2],
+                    cantidad, importe, descuento, subtotal,
+                    servicio[6], servicio[7],
+                ))
+
+            conn.commit()
+            return ResumenService.obtener(resumen_id)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def eliminar_generacion(resumen_id):
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE servicio_renovaciones SET resumen_id=NULL WHERE resumen_id=?",
+            (resumen_id,),
+        )
+        cur.execute("DELETE FROM resumen_conceptos WHERE resumen_id=?", (resumen_id,))
+        cur.execute("DELETE FROM resumenes WHERE id=?", (resumen_id,))
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def generar_desde_renovaciones(renovacion_ids, fecha=None):
+        ids = list(dict.fromkeys(int(valor) for valor in renovacion_ids))
+        resultado = {"generados": [], "omitidos": 0, "errores": []}
+        if not ids:
+            return resultado
+
+        fecha_emision = fecha or date.today()
+        if isinstance(fecha_emision, str):
+            fecha_emision = datetime.strptime(fecha_emision, "%Y-%m-%d").date()
+        marcadores = ",".join("?" for _ in ids)
+
+        conn = conectar()
+        cur = conn.cursor()
+        try:
+            cur.execute(f"""
+                SELECT
+                    sr.id, sr.servicio_id, sr.cliente_id,
+                    COALESCE(NULLIF(c.razon_social, ''), c.nombre),
+                    sr.concepto, sr.descripcion, sr.cantidad, sr.importe,
+                    sr.descuento, sr.fecha_inicio_anterior,
+                    sr.fecha_fin_anterior, c.vencimiento
+                FROM servicio_renovaciones sr
+                JOIN clientes c ON c.id=sr.cliente_id
+                WHERE sr.id IN ({marcadores})
+                  AND sr.resumen_id IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM resumen_conceptos rc
+                      WHERE rc.servicio_id=sr.servicio_id
+                        AND rc.fecha_inicio=sr.fecha_inicio_anterior
+                        AND rc.fecha_fin=sr.fecha_fin_anterior
+                  )
+                ORDER BY sr.cliente_id, sr.id
+            """, ids)
+            filas = cur.fetchall()
+            resultado["omitidos"] = len(ids) - len(filas)
+            grupos = {}
+            for fila in filas:
+                grupos.setdefault(fila[2], []).append(fila)
+
+            resumen_ids = []
+            for cliente_id, renovaciones in grupos.items():
+                cur.execute("SELECT COALESCE(MAX(numero), 0) + 1 FROM resumenes")
+                numero = cur.fetchone()[0]
+                total = sum(
+                    float(fila[6] or 0) * float(fila[7] or 0)
+                    - float(fila[8] or 0)
+                    for fila in renovaciones
+                )
+                dia = max(1, min(int(renovaciones[0][11] or 1), 28))
+                if dia >= fecha_emision.day:
+                    vencimiento = fecha_emision.replace(day=dia)
+                elif fecha_emision.month == 12:
+                    vencimiento = fecha_emision.replace(
+                        year=fecha_emision.year + 1, month=1, day=dia
+                    )
+                else:
+                    vencimiento = fecha_emision.replace(
+                        month=fecha_emision.month + 1, day=dia
+                    )
+                cur.execute("""
+                    INSERT INTO resumenes(
+                        numero, cliente_id, fecha, fecha_vencimiento, total,
+                        saldo, estado, fecha_creacion
+                    ) VALUES(?,?,?,?,?,?,?,?)
+                """, (
+                    numero, cliente_id, fecha_emision.isoformat(),
+                    vencimiento.isoformat(), total, total, "Pendiente",
+                    datetime.now().isoformat(timespec="seconds"),
+                ))
+                resumen_id = cur.lastrowid
+                resumen_ids.append(resumen_id)
+
+                for fila in renovaciones:
+                    cantidad = float(fila[6] or 0)
+                    importe = float(fila[7] or 0)
+                    descuento = float(fila[8] or 0)
+                    subtotal = cantidad * importe - descuento
+                    cur.execute("""
+                        INSERT INTO resumen_conceptos(
+                            resumen_id, servicio_id, concepto, descripcion,
+                            cantidad, importe, descuento, total,
+                            fecha_inicio, fecha_fin
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                    """, (
+                        resumen_id, fila[1], fila[4], fila[5], cantidad,
+                        importe, descuento, subtotal, fila[9], fila[10],
+                    ))
+                    cur.execute(
+                        "UPDATE servicio_renovaciones SET resumen_id=? WHERE id=?",
+                        (resumen_id, fila[0]),
+                    )
+
+            conn.commit()
+            resultado["generados"] = [
+                ResumenService.obtener(resumen_id) for resumen_id in resumen_ids
+            ]
+            return resultado
         except Exception:
             conn.rollback()
             raise
@@ -154,7 +444,7 @@ class ResumenService:
         resumen = Resumen(*fila)
         cur.execute("""
             SELECT id, resumen_id, servicio_id, concepto, descripcion,
-                   cantidad, importe, descuento, total
+                   cantidad, importe, descuento, total, fecha_inicio, fecha_fin
             FROM resumen_conceptos
             WHERE resumen_id=? ORDER BY id
         """, (resumen_id,))
