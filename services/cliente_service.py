@@ -74,8 +74,10 @@ class ClienteService:
             cliente.fecha_modificacion
         ))
 
+        cliente_id = cur.lastrowid
         conn.commit()
         conn.close()
+        return cliente_id
 
     @staticmethod
     def obtener(id_cliente):

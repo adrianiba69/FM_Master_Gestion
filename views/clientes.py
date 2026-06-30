@@ -5,6 +5,8 @@ import customtkinter as ctk
 
 from models.cliente import Cliente
 from services.cliente_service import ClienteService
+from services.contacto_service import ContactoService
+from views.crm import CRMWindow
 from views.servicios import ServiciosWindow
 
 
@@ -155,12 +157,19 @@ class ClientesFrame(ctk.CTkFrame):
         )
         boton_tarea.grid(row=2, column=0, sticky="w", pady=(10, 0))
 
+        boton_crm = ctk.CTkButton(
+            barra, text="CRM", width=95, height=36,
+            fg_color="#C00000", hover_color="#990000",
+            command=self.abrir_crm_cliente,
+        )
+        boton_crm.grid(row=2, column=1, padx=(10, 0), pady=(10, 0))
+
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
         tabla_frame.grid_rowconfigure(0, weight=1)
         tabla_frame.grid_columnconfigure(0, weight=1)
 
-        columnas = ("id", "codigo", "razon_social", "telefono", "localidad", "estado")
+        columnas = ("id", "codigo", "razon_social", "telefono", "localidad", "estado", "semaforo")
         self.tabla = ttk.Treeview(tabla_frame, columns=columnas, show="headings", height=18)
 
         encabezados = {
@@ -170,6 +179,7 @@ class ClientesFrame(ctk.CTkFrame):
             "telefono": ("Telefono", 150),
             "localidad": ("Localidad", 180),
             "estado": ("Estado", 110),
+            "semaforo": ("Semáforo comercial", 145),
         }
 
         for columna, (texto, ancho) in encabezados.items():
@@ -177,6 +187,9 @@ class ClientesFrame(ctk.CTkFrame):
             self.tabla.column(columna, width=ancho, anchor="w")
 
         self.tabla.bind("<Double-1>", lambda _event: self.modificar_cliente_seleccionado())
+        self.tabla.tag_configure("verde", foreground="#16823A")
+        self.tabla.tag_configure("amarillo", foreground="#B88600")
+        self.tabla.tag_configure("rojo", foreground="#C00000")
 
         scroll_y = ttk.Scrollbar(tabla_frame, orient="vertical", command=self.tabla.yview)
         self.tabla.configure(yscrollcommand=scroll_y.set)
@@ -188,7 +201,8 @@ class ClientesFrame(ctk.CTkFrame):
         self.limpiar_tabla()
 
         for cliente in ClienteService.listar():
-            self.tabla.insert("", "end", values=cliente)
+            semaforo = ContactoService.semaforo_cliente(cliente[0])
+            self.tabla.insert("", "end", values=(*cliente, semaforo), tags=(semaforo.lower(),))
 
     def buscar_clientes(self):
         texto = self.entrada_buscar.get().strip()
@@ -196,7 +210,8 @@ class ClientesFrame(ctk.CTkFrame):
 
         self.limpiar_tabla()
         for cliente in clientes:
-            self.tabla.insert("", "end", values=cliente)
+            semaforo = ContactoService.semaforo_cliente(cliente[0])
+            self.tabla.insert("", "end", values=(*cliente, semaforo), tags=(semaforo.lower(),))
 
     def limpiar_busqueda(self):
         self.entrada_buscar.delete(0, "end")
@@ -294,6 +309,13 @@ class ClientesFrame(ctk.CTkFrame):
         if hasattr(aplicacion, "mostrar_agenda"):
             aplicacion.mostrar_agenda(cliente_id=id_cliente, nueva_tarea=True)
 
+    def abrir_crm_cliente(self):
+        id_cliente = self.obtener_id_seleccionado()
+        if id_cliente is None:
+            messagebox.showwarning("Atencion", "Seleccione un cliente para abrir el CRM.")
+            return
+        CRMWindow(self, cliente_id=id_cliente)
+
     def abrir_formulario(self, titulo, cliente=None):
         ventana = ctk.CTkToplevel(self)
         ventana.title(titulo)
@@ -314,6 +336,14 @@ class ClientesFrame(ctk.CTkFrame):
             text_color="#C00000",
         )
         etiqueta_titulo.grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        if cliente is not None:
+            semaforo = ContactoService.semaforo_cliente(cliente.id)
+            colores = {"Verde": "#16823A", "Amarillo": "#B88600", "Rojo": "#C00000"}
+            ctk.CTkLabel(
+                contenedor, text=f"SEMÁFORO COMERCIAL: {semaforo.upper()}",
+                font=("Arial", 12, "bold"), text_color=colores[semaforo],
+            ).grid(row=0, column=0, sticky="e", pady=(0, 10))
 
         self.campos_formulario = {}
         for fila, (clave, etiqueta) in enumerate(self.CAMPOS_FORMULARIO, start=1):

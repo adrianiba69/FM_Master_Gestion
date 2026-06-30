@@ -78,6 +78,17 @@ class ConfiguracionFrame(ctk.CTkFrame):
         )
         self.boton_abrir.grid(row=0, column=1)
 
+        self.boton_usuarios = ctk.CTkButton(
+            acciones,
+            text="Usuarios",
+            width=140,
+            height=40,
+            fg_color="#444444",
+            hover_color="#222222",
+            command=self.abrir_usuarios,
+        )
+        self.boton_usuarios.grid(row=0, column=2, padx=(10, 0))
+
     def actualizar_estado(self):
         ultimo = BackupService.ultimo_backup()
         if ultimo is None:
@@ -108,3 +119,15 @@ class ConfiguracionFrame(ctk.CTkFrame):
             BackupService.abrir_carpeta()
         except OSError as error:
             messagebox.showerror("Backups", str(error), parent=self)
+
+    def abrir_usuarios(self):
+        try:
+            from views.usuarios import UsuariosFrame
+        except Exception as error:
+            messagebox.showerror("Usuarios", f"No se pudo abrir la gestión de usuarios.\n{error}", parent=self)
+            return
+        ventana = ctk.CTkToplevel(self)
+        ventana.title("Usuarios")
+        ventana.geometry("800x520")
+        frame = UsuariosFrame(ventana)
+        frame.pack(fill="both", expand=True)

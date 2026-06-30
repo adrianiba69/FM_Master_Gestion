@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\assets', 'assets'), ('C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\database', 'database'), ('C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\backup', 'backup'), ('C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\pdf', 'pdf'), ('C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\exports', 'exports')]
+datas = [('C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\database', 'database')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('customtkinter')
@@ -39,6 +39,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\assets\\iconos\\fm_master.ico'],
 )
 coll = COLLECT(
     exe,

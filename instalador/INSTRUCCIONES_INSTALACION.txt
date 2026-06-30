@@ -1,0 +1,22 @@
+FM MASTER GESTION - INSTRUCCIONES DE INSTALACION
+================================================
+
+1. Copie la carpeta completa:
+   dist\FM_Master_Gestion
+
+   Puede colocarla en la ubicacion de Windows donde desee usar el sistema.
+
+2. Abra la carpeta copiada y ejecute:
+   FM_Master_Gestion.exe
+
+3. Para crear un acceso directo en el Escritorio, puede ejecutar
+   crear_acceso_directo.bat desde la carpeta principal del proyecto.
+
+4. No borre ni mueva por separado las carpetas internas del programa.
+   La base de datos, backups, PDFs, exportaciones y dependencias forman parte
+   de la instalacion y deben permanecer junto al ejecutable.
+
+IMPORTANTE
+----------
+Antes de reemplazar una instalacion existente, conserve una copia de las
+carpetas database y backup para proteger la informacion cargada.

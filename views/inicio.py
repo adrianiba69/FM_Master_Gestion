@@ -5,6 +5,7 @@ import customtkinter as ctk
 
 from services.cliente_service import ClienteService
 from services.dashboard_service import DashboardService
+from views.crm import ContactoFormWindow
 from views.servicios import ServiciosWindow
 
 
@@ -84,10 +85,19 @@ class InicioFrame(ctk.CTkFrame):
             len(configuracion) // 4,
             len(configuracion) % 4 + 1,
         )
+        self.indicadores_seguimientos = self.crear_tarjeta_seguimientos(
+            metricas, len(configuracion) // 4 + 1, 0,
+        )
+        self.indicadores_oportunidades = self.crear_tarjeta_oportunidades(
+            metricas, len(configuracion) // 4 + 1, 2,
+        )
+        self.indicadores_alertas = self.crear_tarjeta_alertas(
+            metricas, len(configuracion) // 4 + 2, 0,
+        )
 
         accesos = ctk.CTkFrame(self, fg_color=self.NEGRO, corner_radius=4)
         accesos.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
-        for columna in range(6):
+        for columna in range(7):
             accesos.grid_columnconfigure(columna, weight=1, uniform="accesos")
 
         acciones = (
@@ -97,6 +107,7 @@ class InicioFrame(ctk.CTkFrame):
             ("Cobros", self.ir_cobros),
             ("Cuenta Corriente", self.ir_cuenta_corriente),
             ("Backup", self.crear_backup),
+            ("Registrar contacto", self.registrar_contacto),
         )
         for columna, (texto, comando) in enumerate(acciones):
             boton = ctk.CTkButton(
@@ -109,6 +120,17 @@ class InicioFrame(ctk.CTkFrame):
                 command=comando,
             )
             boton.grid(row=0, column=columna, sticky="ew", padx=5, pady=9)
+
+        ctk.CTkButton(
+            accesos,
+            text="CIERRE DEL MES",
+            height=48,
+            font=("Arial", 16, "bold"),
+            fg_color=self.ROJO,
+            hover_color="#990000",
+            corner_radius=4,
+            command=self.ir_cierre_mensual,
+        ).grid(row=1, column=0, columnspan=7, sticky="ew", padx=5, pady=(0, 9))
 
         titulo_vencimientos = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         titulo_vencimientos.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 4))
@@ -309,6 +331,80 @@ class InicioFrame(ctk.CTkFrame):
         )
         return etiquetas
 
+    def crear_tarjeta_seguimientos(self, master, fila, columna):
+        tarjeta = ctk.CTkFrame(master, height=76, fg_color=self.NEGRO, corner_radius=6)
+        tarjeta.grid(row=fila, column=columna, columnspan=2, sticky="nsew", padx=6, pady=5)
+        tarjeta.grid_propagate(False)
+        for indice in range(4):
+            tarjeta.grid_columnconfigure(indice, weight=1)
+        ctk.CTkLabel(
+            tarjeta, text="SEGUIMIENTOS", font=("Arial", 10, "bold"), text_color="#E0E0E0",
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(9, 0))
+        etiquetas = {}
+        datos = (
+            ("hoy", "Contactos para hoy: 0", "#F4C542"),
+            ("atrasados", "Atrasados: 0", "#FF4D4D"),
+            ("semana", "Esta semana: 0", "#52C878"),
+        )
+        for indice, (clave, texto, color) in enumerate(datos, start=1):
+            etiqueta = ctk.CTkLabel(
+                tarjeta, text=texto, font=("Arial", 10, "bold"), text_color=color,
+            )
+            etiqueta.grid(row=1, column=indice, padx=6, pady=(4, 8))
+            etiquetas[clave] = etiqueta
+        return etiquetas
+
+    def crear_tarjeta_oportunidades(self, master, fila, columna):
+        tarjeta = ctk.CTkFrame(master, height=76, fg_color=self.NEGRO, corner_radius=6)
+        tarjeta.grid(row=fila, column=columna, columnspan=2, sticky="nsew", padx=6, pady=5)
+        tarjeta.grid_propagate(False)
+        for indice in range(4):
+            tarjeta.grid_columnconfigure(indice, weight=1)
+        ctk.CTkLabel(
+            tarjeta, text="OPORTUNIDADES", font=("Arial", 10, "bold"), text_color="#E0E0E0",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(9, 0))
+        etiquetas = {}
+        for indice, (clave, texto, color) in enumerate((
+            ("nuevas", "Nuevas: 0", "#F4C542"),
+            ("negociacion", "Negociación: 0", "#5DADE2"),
+            ("ganadas_mes", "Ganadas mes: 0", "#52C878"),
+            ("importe_estimado", "$ 0,00", "#FFFFFF"),
+        )):
+            etiqueta = ctk.CTkLabel(
+                tarjeta, text=texto, font=("Arial", 9, "bold"), text_color=color,
+            )
+            etiqueta.grid(row=1, column=indice, padx=3, pady=(4, 8))
+            etiquetas[clave] = etiqueta
+        return etiquetas
+
+    def crear_tarjeta_alertas(self, master, fila, columna):
+        self.tarjeta_alertas = ctk.CTkFrame(
+            master, height=70, fg_color=self.NEGRO, corner_radius=6,
+        )
+        self.tarjeta_alertas.grid(
+            row=fila, column=columna, columnspan=4, sticky="nsew", padx=6, pady=5,
+        )
+        self.tarjeta_alertas.grid_propagate(False)
+        for indice in range(4):
+            self.tarjeta_alertas.grid_columnconfigure(indice, weight=1)
+        ctk.CTkLabel(
+            self.tarjeta_alertas, text="ALERTAS", font=("Arial", 11, "bold"),
+            text_color="white",
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 0))
+        etiquetas = {}
+        for indice, (clave, texto, color) in enumerate((
+            ("urgentes", "Urgentes: 0", "#FF4D4D"),
+            ("pendientes", "Pendientes: 0", "#F4C542"),
+            ("vencidas", "Vencidas: 0", "#FF8C42"),
+        ), start=1):
+            etiqueta = ctk.CTkLabel(
+                self.tarjeta_alertas, text=texto, font=("Arial", 10, "bold"),
+                text_color=color,
+            )
+            etiqueta.grid(row=1, column=indice, padx=6, pady=(2, 7))
+            etiquetas[clave] = etiqueta
+        return etiquetas
+
     def actualizar_dashboard(self):
         datos = DashboardService.obtener_indicadores()
         claves_moneda = {"facturado_mes", "cobrado_mes", "saldo_pendiente"}
@@ -349,6 +445,43 @@ class InicioFrame(ctk.CTkFrame):
             text=f"Próxima: {agenda['proxima']}"
         )
 
+        seguimientos = datos["seguimientos"]
+        self.indicadores_seguimientos["hoy"].configure(
+            text=f"Contactos para hoy: {seguimientos['hoy']}"
+        )
+        self.indicadores_seguimientos["atrasados"].configure(
+            text=f"Atrasados: {seguimientos['atrasados']}"
+        )
+        self.indicadores_seguimientos["semana"].configure(
+            text=f"Esta semana: {seguimientos['semana']}"
+        )
+        oportunidades = datos["oportunidades"]
+        self.indicadores_oportunidades["nuevas"].configure(
+            text=f"Nuevas: {oportunidades['nuevas']}"
+        )
+        self.indicadores_oportunidades["negociacion"].configure(
+            text=f"Negociación: {oportunidades['negociacion']}"
+        )
+        self.indicadores_oportunidades["ganadas_mes"].configure(
+            text=f"Ganadas mes: {oportunidades['ganadas_mes']}"
+        )
+        self.indicadores_oportunidades["importe_estimado"].configure(
+            text=self.formatear_moneda(oportunidades["importe_estimado"])
+        )
+        alertas = datos["alertas"]
+        self.indicadores_alertas["urgentes"].configure(
+            text=f"Urgentes: {alertas['urgentes']}"
+        )
+        self.indicadores_alertas["pendientes"].configure(
+            text=f"Pendientes: {alertas['pendientes']}"
+        )
+        self.indicadores_alertas["vencidas"].configure(
+            text=f"Vencidas: {alertas['vencidas']}"
+        )
+        self.tarjeta_alertas.configure(
+            fg_color=self.ROJO if alertas["urgentes"] else self.NEGRO
+        )
+
         for item in self.tabla_vencimientos.get_children():
             self.tabla_vencimientos.delete(item)
         for resumen in DashboardService.listar_proximos_vencimientos():
@@ -385,9 +518,16 @@ class InicioFrame(ctk.CTkFrame):
         aplicacion = self.winfo_toplevel()
         aplicacion.mostrar_cobros()
 
+    def ir_cierre_mensual(self):
+        aplicacion = self.winfo_toplevel()
+        aplicacion.mostrar_cierre_mensual()
+
     def ir_agenda(self):
         aplicacion = self.winfo_toplevel()
         aplicacion.mostrar_agenda()
+
+    def registrar_contacto(self):
+        ContactoFormWindow(self, al_guardar=self.actualizar_dashboard)
 
     def abrir_selector_servicios(self):
         clientes = ClienteService.listar()

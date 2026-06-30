@@ -4,12 +4,21 @@ from tkinter import messagebox, ttk
 from config import COLOR_NEGRO, COLOR_PRINCIPAL
 from database import crear_base
 from services.backup_service import BackupService
+from services.notificacion_service import NotificacionService
+from services.usuario_service import UsuarioService
 from views.agenda import AgendaFrame
+from views.login import LoginWindow
+from views.usuarios import UsuariosFrame
+from views.ayuda import AyudaFrame
 from views.clientes import ClientesFrame
 from views.cobros import CobrosFrame
+from views.cierre_mensual import CierreMensualFrame
 from views.configuracion import ConfiguracionFrame
+from views.estadisticas import EstadisticasFrame
 from views.inicio import InicioFrame
 from views.informes import InformesFrame
+from views.notificaciones import NotificacionesFrame
+from views.oportunidades import OportunidadesFrame
 from views.renovaciones import RenovacionesFrame
 from views.resumenes import ResumenesFrame
 
@@ -123,11 +132,17 @@ class FMMasterApp(ctk.CTk):
             ("Inicio", self.mostrar_inicio),
             ("Clientes", self.mostrar_clientes),
             ("Agenda", self.mostrar_agenda),
-            ("Resumenes", self.mostrar_resumenes),
+            ("Resúmenes", self.mostrar_resumenes),
             ("Cobros", self.mostrar_cobros),
             ("Renovaciones", self.mostrar_renovaciones),
             ("Informes", self.mostrar_informes),
-            ("Configuracion", self.mostrar_configuracion),
+            ("Usuarios", self.mostrar_usuarios),
+            ("Oportunidades", self.mostrar_oportunidades),
+            ("Estadísticas", self.mostrar_estadisticas),
+            ("Notificaciones", self.mostrar_notificaciones),
+            ("Ayuda", self.mostrar_ayuda),
+            ("Configuración", self.mostrar_configuracion),
+            ("Cierre del Mes", self.mostrar_cierre_mensual),
         ]
 
         for fila, (texto, comando) in enumerate(botones):
@@ -142,6 +157,30 @@ class FMMasterApp(ctk.CTk):
             )
             boton.grid(row=fila, column=0, sticky="ew", padx=10, pady=(10 if fila == 0 else 6, 0))
             self.botones_menu[texto] = boton
+
+    def aplicar_permisos(self):
+        # Ajusta los botones del menú según el rol del usuario actual
+        user = getattr(self, "current_user", None)
+        if not user:
+            return
+        rol = user.get("rol")
+        # por defecto habilitados
+        for boton in self.botones_menu.values():
+            boton.configure(state="normal")
+        if rol == "Administrador":
+            return
+        if rol == "Operador":
+            permitidos = {"Clientes", "Resúmenes", "Cobros", "Renovaciones", "Agenda", "Inicio"}
+            for nombre, boton in self.botones_menu.items():
+                if nombre not in permitidos and nombre != "Ayuda":
+                    boton.configure(state="disabled")
+            return
+        if rol == "Consulta":
+            permitidos = {"Inicio", "Informes", "Estadísticas", "Ayuda"}
+            for nombre, boton in self.botones_menu.items():
+                if nombre not in permitidos:
+                    boton.configure(state="disabled")
+            return
 
     def crear_panel_principal(self):
         self.panel = ctk.CTkFrame(self.main, fg_color="white", corner_radius=0)
@@ -183,6 +222,12 @@ class FMMasterApp(ctk.CTk):
         configuracion = ConfiguracionFrame(self.panel)
         configuracion.grid(row=0, column=0, sticky="nsew")
 
+    def mostrar_usuarios(self):
+        self.limpiar_panel()
+
+        usuarios = UsuariosFrame(self.panel)
+        usuarios.grid(row=0, column=0, sticky="nsew")
+
     def mostrar_renovaciones(self):
         self.limpiar_panel()
 
@@ -205,9 +250,52 @@ class FMMasterApp(ctk.CTk):
         informes = InformesFrame(self.panel)
         informes.grid(row=0, column=0, sticky="nsew")
 
+    def mostrar_oportunidades(self):
+        self.limpiar_panel()
+        oportunidades = OportunidadesFrame(self.panel)
+        oportunidades.grid(row=0, column=0, sticky="nsew")
 
-if __name__ == "__main__":
-    crear_base()
+    def mostrar_estadisticas(self):
+        self.limpiar_panel()
+        estadisticas = EstadisticasFrame(self.panel)
+        estadisticas.grid(row=0, column=0, sticky="nsew")
+
+    def mostrar_notificaciones(self):
+        self.limpiar_panel()
+        notificaciones = NotificacionesFrame(self.panel)
+        notificaciones.grid(row=0, column=0, sticky="nsew")
+
+    def mostrar_ayuda(self):
+        self.limpiar_panel()
+        ayuda = AyudaFrame(self.panel)
+        ayuda.grid(row=0, column=0, sticky="nsew")
+
+    def mostrar_cierre_mensual(self):
+        self.limpiar_panel()
+        cierre = CierreMensualFrame(self.panel)
+        cierre.grid(row=0, column=0, sticky="nsew")
+
+
+def iniciar_sesion(app):
+    login = LoginWindow(app)
+    app.wait_window(login)
+    if not getattr(login, "usuario", None):
+        try:
+            app.destroy()
+        except Exception:
+            pass
+        return False
+
+    app.current_user = login.usuario
+    app.aplicar_permisos()
+    app.deiconify()
+    app.lift()
+    app.focus_force()
+    app.update_idletasks()
+    return True
+
+
+def iniciar_servicios_post_login(app):
     backup_automatico = None
     error_backup = None
     try:
@@ -215,7 +303,12 @@ if __name__ == "__main__":
     except Exception as error:
         error_backup = str(error)
 
-    app = FMMasterApp()
+    error_notificaciones = None
+    try:
+        NotificacionService.generar_automaticas()
+    except Exception as error:
+        error_notificaciones = str(error)
+
     if backup_automatico:
         app.after(
             250,
@@ -234,4 +327,42 @@ if __name__ == "__main__":
                 parent=app,
             ),
         )
+    if error_notificaciones:
+        app.after(
+            350,
+            lambda detalle=error_notificaciones: messagebox.showwarning(
+                "Notificaciones",
+                f"No se pudieron generar las notificaciones automáticas.\n{detalle}",
+                parent=app,
+            ),
+        )
+
+
+if __name__ == "__main__":
+    crear_base()
+    # Asegurar existencia de usuario administrador por defecto
+    UsuarioService.init_admin_if_missing()
+
+    login_root = ctk.CTk()
+    login_root.withdraw()
+
+    login = LoginWindow(login_root)
+    login_root.wait_window(login)
+    if not getattr(login, "usuario", None):
+        try:
+            login_root.destroy()
+        except Exception:
+            pass
+        raise SystemExit(0)
+
+    app = FMMasterApp()
+    app.current_user = login.usuario
+    app.aplicar_permisos()
+    iniciar_servicios_post_login(app)
+
+    try:
+        login_root.destroy()
+    except Exception:
+        pass
+
     app.mainloop()

@@ -2,6 +2,9 @@ from datetime import date, timedelta
 
 from database import conectar
 from services.backup_service import BackupService
+from services.contacto_service import ContactoService
+from services.oportunidad_service import OportunidadService
+from services.notificacion_service import NotificacionService
 from services.resumen_service import ResumenService
 from services.servicio_service import ServicioService
 from services.tarea_service import TareaService
@@ -25,6 +28,9 @@ class DashboardService:
         ServicioService.actualizar_estados_periodo(hoy)
         resumenes_pendientes = ResumenService.contar_clientes_pendientes(hoy)
         agenda = TareaService.resumen_dashboard()
+        seguimientos = ContactoService.resumen_dashboard()
+        oportunidades = OportunidadService.resumen_dashboard()
+        alertas = NotificacionService.resumen_dashboard()
 
         conn = conectar()
         cur = conn.cursor()
@@ -135,6 +141,9 @@ class DashboardService:
             "renovaciones_vencidas": renovaciones_vencidas,
             "renovados_hoy": renovados_hoy,
             "agenda": agenda,
+            "seguimientos": seguimientos,
+            "oportunidades": oportunidades,
+            "alertas": alertas,
         }
 
     @staticmethod

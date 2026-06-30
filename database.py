@@ -39,6 +39,7 @@ def crear_base():
     CREATE TABLE IF NOT EXISTS clientes(
 
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL DEFAULT '',
         codigo TEXT,
         razon_social TEXT,
         nombre_comercial TEXT,
@@ -60,6 +61,7 @@ def crear_base():
     """)
 
     columnas_clientes = {
+        "nombre": "TEXT NOT NULL DEFAULT ''",
         "codigo": "TEXT",
         "razon_social": "TEXT",
         "nombre_comercial": "TEXT",
@@ -345,6 +347,138 @@ def crear_base():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tareas_fecha ON tareas(fecha, hora)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tareas_cliente ON tareas(cliente_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tareas_estado ON tareas(estado)")
+
+    # ==========================
+    # TABLA CONTACTOS CRM
+    # ==========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS contactos(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER NOT NULL,
+        fecha TEXT NOT NULL,
+        hora TEXT NOT NULL,
+        tipo TEXT NOT NULL,
+        resultado TEXT NOT NULL DEFAULT 'Pendiente',
+        observaciones TEXT,
+        proximo_contacto TEXT,
+        vendedor TEXT,
+        creado TEXT,
+        FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+    )
+    """)
+    columnas_contactos = {
+        "cliente_id": "INTEGER", "fecha": "TEXT", "hora": "TEXT",
+        "tipo": "TEXT", "resultado": "TEXT DEFAULT 'Pendiente'",
+        "observaciones": "TEXT", "proximo_contacto": "TEXT",
+        "vendedor": "TEXT", "creado": "TEXT",
+    }
+    for columna, definicion in columnas_contactos.items():
+        agregar_columna_si_falta(cur, "contactos", columna, definicion)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_contactos_cliente ON contactos(cliente_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_contactos_fecha ON contactos(fecha)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_contactos_proximo ON contactos(proximo_contacto)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_contactos_tipo ON contactos(tipo)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_contactos_resultado ON contactos(resultado)")
+
+    # ==========================
+    # TABLA OPORTUNIDADES
+    # ==========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS oportunidades(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER,
+        nombre_potencial TEXT,
+        telefono TEXT,
+        whatsapp TEXT,
+        email TEXT,
+        fecha TEXT NOT NULL,
+        origen TEXT,
+        servicio_interes TEXT,
+        importe_estimado REAL DEFAULT 0,
+        probabilidad REAL DEFAULT 0,
+        estado TEXT NOT NULL DEFAULT 'Nueva',
+        proximo_contacto TEXT,
+        observaciones TEXT,
+        creado TEXT,
+        FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+    )
+    """)
+    columnas_oportunidades = {
+        "cliente_id": "INTEGER", "nombre_potencial": "TEXT",
+        "telefono": "TEXT", "whatsapp": "TEXT", "email": "TEXT",
+        "fecha": "TEXT", "origen": "TEXT", "servicio_interes": "TEXT",
+        "importe_estimado": "REAL DEFAULT 0", "probabilidad": "REAL DEFAULT 0",
+        "estado": "TEXT DEFAULT 'Nueva'", "proximo_contacto": "TEXT",
+        "observaciones": "TEXT", "creado": "TEXT",
+    }
+    for columna, definicion in columnas_oportunidades.items():
+        agregar_columna_si_falta(cur, "oportunidades", columna, definicion)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_oportunidades_cliente ON oportunidades(cliente_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_oportunidades_estado ON oportunidades(estado)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_oportunidades_fecha ON oportunidades(fecha)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_oportunidades_proximo ON oportunidades(proximo_contacto)")
+
+    # ==========================
+    # TABLA NOTIFICACIONES
+    # ==========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS notificaciones(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tipo TEXT NOT NULL,
+        titulo TEXT NOT NULL,
+        mensaje TEXT,
+        prioridad TEXT NOT NULL DEFAULT 'Media',
+        estado TEXT NOT NULL DEFAULT 'Pendiente',
+        fecha TEXT NOT NULL,
+        vencimiento TEXT,
+        referencia_tipo TEXT,
+        referencia_id INTEGER,
+        clave TEXT,
+        automatica INTEGER DEFAULT 0,
+        creado TEXT,
+        actualizado TEXT
+    )
+    """)
+    columnas_notificaciones = {
+        "tipo": "TEXT", "titulo": "TEXT", "mensaje": "TEXT",
+        "prioridad": "TEXT DEFAULT 'Media'", "estado": "TEXT DEFAULT 'Pendiente'",
+        "fecha": "TEXT", "vencimiento": "TEXT", "referencia_tipo": "TEXT",
+        "referencia_id": "INTEGER", "clave": "TEXT", "automatica": "INTEGER DEFAULT 0",
+        "creado": "TEXT", "actualizado": "TEXT",
+    }
+    for columna, definicion in columnas_notificaciones.items():
+        agregar_columna_si_falta(cur, "notificaciones", columna, definicion)
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_clave ON notificaciones(clave)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_notificaciones_estado ON notificaciones(estado)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_notificaciones_tipo ON notificaciones(tipo)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_notificaciones_prioridad ON notificaciones(prioridad)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_notificaciones_vencimiento ON notificaciones(vencimiento)")
+    # ==========================
+    # TABLA USUARIOS
+    # ==========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS usuarios(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT,
+        usuario TEXT NOT NULL UNIQUE,
+        clave TEXT NOT NULL,
+        rol TEXT NOT NULL DEFAULT 'Consulta',
+        activo INTEGER DEFAULT 1,
+        fecha_creacion TEXT
+    )
+    """)
+    columnas_usuarios = {
+        "nombre": "TEXT", "usuario": "TEXT", "clave": "TEXT",
+        "rol": "TEXT DEFAULT 'Consulta'", "activo": "INTEGER DEFAULT 1",
+        "fecha_creacion": "TEXT",
+    }
+    for columna, definicion in columnas_usuarios.items():
+        agregar_columna_si_falta(cur, "usuarios", columna, definicion)
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_usuario ON usuarios(usuario)")
 
     conn.commit()
     conn.close()
