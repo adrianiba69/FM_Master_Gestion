@@ -460,7 +460,7 @@ class ResumenService:
             SELECT c.id, c.codigo,
                    COALESCE(NULLIF(c.razon_social, ''), c.nombre),
                    c.nombre_comercial, c.responsable, c.direccion,
-                   c.localidad, c.telefono, c.email, c.cuit, c.iva
+                   c.localidad, c.telefono, c.email, c.cuit, c.iva, c.emisor_id
             FROM resumenes r
             JOIN clientes c ON c.id=r.cliente_id
             WHERE r.id=?
@@ -468,6 +468,21 @@ class ResumenService:
         cliente = cur.fetchone()
         conn.close()
         return cliente
+
+    @staticmethod
+    def obtener_emisor_de_cliente(resumen_id):
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute("SELECT c.emisor_id FROM resumenes r JOIN clientes c ON c.id=r.cliente_id WHERE r.id=?", (resumen_id,))
+        fila = cur.fetchone()
+        if not fila or not fila[0]:
+            conn.close()
+            return None
+        emisor_id = fila[0]
+        cur.execute("SELECT id, nombre, cuit, condicion_iva, direccion, localidad, telefono, email, activo FROM emisores_facturacion WHERE id=?", (emisor_id,))
+        emisor = cur.fetchone()
+        conn.close()
+        return emisor
 
     @staticmethod
     def actualizar_pdf_path(resumen_id, ruta):

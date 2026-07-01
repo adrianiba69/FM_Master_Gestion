@@ -217,6 +217,7 @@ imports:
  &#8226;   <a href="#reprlib">reprlib</a>
  &#8226;   <a href="#services.backup_service">services.backup_service</a>
  &#8226;   <a href="#services.notificacion_service">services.notificacion_service</a>
+ &#8226;   <a href="#services.usuario_service">services.usuario_service</a>
  &#8226;   <a href="#sre_compile">sre_compile</a>
  &#8226;   <a href="#sre_constants">sre_constants</a>
  &#8226;   <a href="#sre_parse">sre_parse</a>
@@ -233,12 +234,14 @@ imports:
  &#8226;   <a href="#views.cobros">views.cobros</a>
  &#8226;   <a href="#views.configuracion">views.configuracion</a>
  &#8226;   <a href="#views.estadisticas">views.estadisticas</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.informes">views.informes</a>
  &#8226;   <a href="#views.inicio">views.inicio</a>
  &#8226;   <a href="#views.notificaciones">views.notificaciones</a>
  &#8226;   <a href="#views.oportunidades">views.oportunidades</a>
  &#8226;   <a href="#views.renovaciones">views.renovaciones</a>
  &#8226;   <a href="#views.resumenes">views.resumenes</a>
+ &#8226;   <a href="#views.usuarios">views.usuarios</a>
  &#8226;   <a href="#warnings">warnings</a>
  &#8226;   <a href="#weakref">weakref</a>
 
@@ -7283,12 +7286,17 @@ imported by:
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#views.agenda">views.agenda</a>
  &#8226;   <a href="#views.ayuda">views.ayuda</a>
+ &#8226;   <a href="#views.catalogo_editor">views.catalogo_editor</a>
+ &#8226;   <a href="#views.catalogo_servicios">views.catalogo_servicios</a>
  &#8226;   <a href="#views.cierre_mensual">views.cierre_mensual</a>
  &#8226;   <a href="#views.clientes">views.clientes</a>
  &#8226;   <a href="#views.cobros">views.cobros</a>
  &#8226;   <a href="#views.configuracion">views.configuracion</a>
  &#8226;   <a href="#views.crm">views.crm</a>
+ &#8226;   <a href="#views.emisor_editor">views.emisor_editor</a>
+ &#8226;   <a href="#views.emisores">views.emisores</a>
  &#8226;   <a href="#views.estadisticas">views.estadisticas</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.informes">views.informes</a>
  &#8226;   <a href="#views.inicio">views.inicio</a>
  &#8226;   <a href="#views.notificaciones">views.notificaciones</a>
@@ -7296,6 +7304,7 @@ imported by:
  &#8226;   <a href="#views.renovaciones">views.renovaciones</a>
  &#8226;   <a href="#views.resumenes">views.resumenes</a>
  &#8226;   <a href="#views.servicios">views.servicios</a>
+ &#8226;   <a href="#views.usuarios">views.usuarios</a>
 
   </div>
 
@@ -8553,18 +8562,22 @@ imports:
   <div class="import">
 imported by:
     <a href="#main.py">main.py</a>
+ &#8226;   <a href="#services.catalogo_service">services.catalogo_service</a>
  &#8226;   <a href="#services.cierre_mensual_service">services.cierre_mensual_service</a>
  &#8226;   <a href="#services.cliente_service">services.cliente_service</a>
  &#8226;   <a href="#services.cobro_service">services.cobro_service</a>
  &#8226;   <a href="#services.contacto_service">services.contacto_service</a>
  &#8226;   <a href="#services.dashboard_service">services.dashboard_service</a>
+ &#8226;   <a href="#services.emisor_service">services.emisor_service</a>
  &#8226;   <a href="#services.estadisticas_service">services.estadisticas_service</a>
+ &#8226;   <a href="#services.factura_arca_service">services.factura_arca_service</a>
  &#8226;   <a href="#services.informes_service">services.informes_service</a>
  &#8226;   <a href="#services.notificacion_service">services.notificacion_service</a>
  &#8226;   <a href="#services.oportunidad_service">services.oportunidad_service</a>
  &#8226;   <a href="#services.resumen_service">services.resumen_service</a>
  &#8226;   <a href="#services.servicio_service">services.servicio_service</a>
  &#8226;   <a href="#services.tarea_service">services.tarea_service</a>
+ &#8226;   <a href="#services.usuario_service">services.usuario_service</a>
  &#8226;   <a href="#services.whatsapp_service">services.whatsapp_service</a>
 
   </div>
@@ -8599,6 +8612,7 @@ imported by:
  &#8226;   <a href="#models.cliente">models.cliente</a>
  &#8226;   <a href="#models.cobro">models.cobro</a>
  &#8226;   <a href="#models.contacto">models.contacto</a>
+ &#8226;   <a href="#models.factura_arca">models.factura_arca</a>
  &#8226;   <a href="#models.oportunidad">models.oportunidad</a>
  &#8226;   <a href="#models.resumen">models.resumen</a>
  &#8226;   <a href="#models.servicio">models.servicio</a>
@@ -8660,12 +8674,14 @@ imported by:
  &#8226;   <a href="#services.contacto_service">services.contacto_service</a>
  &#8226;   <a href="#services.dashboard_service">services.dashboard_service</a>
  &#8226;   <a href="#services.estadisticas_service">services.estadisticas_service</a>
+ &#8226;   <a href="#services.factura_arca_service">services.factura_arca_service</a>
  &#8226;   <a href="#services.informes_service">services.informes_service</a>
  &#8226;   <a href="#services.notificacion_service">services.notificacion_service</a>
  &#8226;   <a href="#services.oportunidad_service">services.oportunidad_service</a>
  &#8226;   <a href="#services.resumen_service">services.resumen_service</a>
  &#8226;   <a href="#services.servicio_service">services.servicio_service</a>
  &#8226;   <a href="#services.tarea_service">services.tarea_service</a>
+ &#8226;   <a href="#services.usuario_service">services.usuario_service</a>
  &#8226;   <a href="#sqlite3.dbapi2">sqlite3.dbapi2</a>
  &#8226;   <a href="#views.agenda">views.agenda</a>
  &#8226;   <a href="#views.cierre_mensual">views.cierre_mensual</a>
@@ -8674,6 +8690,7 @@ imported by:
  &#8226;   <a href="#views.configuracion">views.configuracion</a>
  &#8226;   <a href="#views.crm">views.crm</a>
  &#8226;   <a href="#views.estadisticas">views.estadisticas</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.informes">views.informes</a>
  &#8226;   <a href="#views.inicio">views.inicio</a>
  &#8226;   <a href="#views.notificaciones">views.notificaciones</a>
@@ -12931,6 +12948,7 @@ imported by:
  &#8226;   <a href="#reportlab.lib.utils">reportlab.lib.utils</a>
  &#8226;   <a href="#reportlab.pdfbase.pdfdoc">reportlab.pdfbase.pdfdoc</a>
  &#8226;   <a href="#reportlab.pdfgen.canvas">reportlab.pdfgen.canvas</a>
+ &#8226;   <a href="#services.usuario_service">services.usuario_service</a>
  &#8226;   <a href="#urllib.request">urllib.request</a>
  &#8226;   <a href="#uuid">uuid</a>
 
@@ -18003,6 +18021,7 @@ imported by:
     <a href="#models.cliente">models.cliente</a>
  &#8226;   <a href="#models.cobro">models.cobro</a>
  &#8226;   <a href="#models.contacto">models.contacto</a>
+ &#8226;   <a href="#models.factura_arca">models.factura_arca</a>
  &#8226;   <a href="#models.oportunidad">models.oportunidad</a>
  &#8226;   <a href="#models.resumen">models.resumen</a>
  &#8226;   <a href="#models.servicio">models.servicio</a>
@@ -18059,6 +18078,24 @@ imports:
   <div class="import">
 imported by:
     <a href="#views.crm">views.crm</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="models.factura_arca"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/models/factura_arca.py" type="text/plain"><tt>models.factura_arca</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#dataclasses">dataclasses</a>
+ &#8226;   <a href="#models">models</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#services.factura_arca_service">services.factura_arca_service</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
 
   </div>
 
@@ -30862,6 +30899,7 @@ imported by:
  &#8226;   <a href="#reportlab.rl_config">reportlab.rl_config</a>
  &#8226;   <a href="#reportlab.rl_settings">reportlab.rl_settings</a>
  &#8226;   <a href="#runpy">runpy</a>
+ &#8226;   <a href="#services.arca_ws_service">services.arca_ws_service</a>
  &#8226;   <a href="#services.backup_service">services.backup_service</a>
  &#8226;   <a href="#services.pdf_service">services.pdf_service</a>
  &#8226;   <a href="#services.whatsapp_service">services.whatsapp_service</a>
@@ -30881,6 +30919,7 @@ imported by:
  &#8226;   <a href="#unittest.main">unittest.main</a>
  &#8226;   <a href="#urllib.request">urllib.request</a>
  &#8226;   <a href="#uuid">uuid</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.resumenes">views.resumenes</a>
  &#8226;   <a href="#webbrowser">webbrowser</a>
  &#8226;   <a href="#xml.dom.domreg">xml.dom.domreg</a>
@@ -31034,11 +31073,13 @@ imported by:
  &#8226;   <a href="#pdf.resumen_pdf">pdf.resumen_pdf</a>
  &#8226;   <a href="#pyparsing.core">pyparsing.core</a>
  &#8226;   <a href="#runtime_paths">runtime_paths</a>
+ &#8226;   <a href="#services.arca_ws_service">services.arca_ws_service</a>
  &#8226;   <a href="#services.backup_service">services.backup_service</a>
  &#8226;   <a href="#services.cierre_mensual_service">services.cierre_mensual_service</a>
  &#8226;   <a href="#services.informes_service">services.informes_service</a>
  &#8226;   <a href="#services.pdf_service">services.pdf_service</a>
  &#8226;   <a href="#services.whatsapp_service">services.whatsapp_service</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.renovaciones">views.renovaciones</a>
  &#8226;   <a href="#views.resumenes">views.resumenes</a>
  &#8226;   <a href="#zipfile._path">zipfile._path</a>
@@ -35214,13 +35255,17 @@ imported by:
   <a target="code" href="-" type="text/plain"><tt>services</tt></a>
 <span class="moduletype">NamespacePackage</span>  <div class="import">
 imported by:
-    <a href="#services.backup_service">services.backup_service</a>
+    <a href="#services.arca_ws_service">services.arca_ws_service</a>
+ &#8226;   <a href="#services.backup_service">services.backup_service</a>
+ &#8226;   <a href="#services.catalogo_service">services.catalogo_service</a>
  &#8226;   <a href="#services.cierre_mensual_service">services.cierre_mensual_service</a>
  &#8226;   <a href="#services.cliente_service">services.cliente_service</a>
  &#8226;   <a href="#services.cobro_service">services.cobro_service</a>
  &#8226;   <a href="#services.contacto_service">services.contacto_service</a>
  &#8226;   <a href="#services.dashboard_service">services.dashboard_service</a>
+ &#8226;   <a href="#services.emisor_service">services.emisor_service</a>
  &#8226;   <a href="#services.estadisticas_service">services.estadisticas_service</a>
+ &#8226;   <a href="#services.factura_arca_service">services.factura_arca_service</a>
  &#8226;   <a href="#services.informes_service">services.informes_service</a>
  &#8226;   <a href="#services.notificacion_service">services.notificacion_service</a>
  &#8226;   <a href="#services.oportunidad_service">services.oportunidad_service</a>
@@ -35228,7 +35273,26 @@ imported by:
  &#8226;   <a href="#services.resumen_service">services.resumen_service</a>
  &#8226;   <a href="#services.servicio_service">services.servicio_service</a>
  &#8226;   <a href="#services.tarea_service">services.tarea_service</a>
+ &#8226;   <a href="#services.usuario_service">services.usuario_service</a>
  &#8226;   <a href="#services.whatsapp_service">services.whatsapp_service</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="services.arca_ws_service"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/services/arca_ws_service.py" type="text/plain"><tt>services.arca_ws_service</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#os">os</a>
+ &#8226;   <a href="#pathlib">pathlib</a>
+ &#8226;   <a href="#services">services</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#views.configuracion">views.configuracion</a>
 
   </div>
 
@@ -35254,6 +35318,25 @@ imported by:
  &#8226;   <a href="#services.dashboard_service">services.dashboard_service</a>
  &#8226;   <a href="#services.notificacion_service">services.notificacion_service</a>
  &#8226;   <a href="#views.configuracion">views.configuracion</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="services.catalogo_service"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/services/catalogo_service.py" type="text/plain"><tt>services.catalogo_service</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#database">database</a>
+ &#8226;   <a href="#services">services</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#views.catalogo_editor">views.catalogo_editor</a>
+ &#8226;   <a href="#views.catalogo_servicios">views.catalogo_servicios</a>
+ &#8226;   <a href="#views.servicios">views.servicios</a>
 
   </div>
 
@@ -35308,6 +35391,7 @@ imported by:
  &#8226;   <a href="#views.clientes">views.clientes</a>
  &#8226;   <a href="#views.cobros">views.cobros</a>
  &#8226;   <a href="#views.crm">views.crm</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.informes">views.informes</a>
  &#8226;   <a href="#views.inicio">views.inicio</a>
  &#8226;   <a href="#views.oportunidades">views.oportunidades</a>
@@ -35380,6 +35464,26 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="services.emisor_service"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/services/emisor_service.py" type="text/plain"><tt>services.emisor_service</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#database">database</a>
+ &#8226;   <a href="#services">services</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#views.configuracion">views.configuracion</a>
+ &#8226;   <a href="#views.emisor_editor">views.emisor_editor</a>
+ &#8226;   <a href="#views.emisores">views.emisores</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="services.estadisticas_service"></a>
   <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/services/estadisticas_service.py" type="text/plain"><tt>services.estadisticas_service</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
@@ -35406,6 +35510,25 @@ imports:
   <div class="import">
 imported by:
     <a href="#views.estadisticas">views.estadisticas</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="services.factura_arca_service"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/services/factura_arca_service.py" type="text/plain"><tt>services.factura_arca_service</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#database">database</a>
+ &#8226;   <a href="#datetime">datetime</a>
+ &#8226;   <a href="#models.factura_arca">models.factura_arca</a>
+ &#8226;   <a href="#services">services</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#views.facturacion_arca">views.facturacion_arca</a>
 
   </div>
 
@@ -35524,6 +35647,7 @@ imported by:
     <a href="#pdf.resumen_pdf">pdf.resumen_pdf</a>
  &#8226;   <a href="#services.cierre_mensual_service">services.cierre_mensual_service</a>
  &#8226;   <a href="#services.dashboard_service">services.dashboard_service</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.renovaciones">views.renovaciones</a>
  &#8226;   <a href="#views.resumenes">views.resumenes</a>
 
@@ -35567,6 +35691,27 @@ imports:
 imported by:
     <a href="#services.dashboard_service">services.dashboard_service</a>
  &#8226;   <a href="#views.agenda">views.agenda</a>
+ &#8226;   <a href="#views.inicio">views.inicio</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="services.usuario_service"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/services/usuario_service.py" type="text/plain"><tt>services.usuario_service</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#database">database</a>
+ &#8226;   <a href="#datetime">datetime</a>
+ &#8226;   <a href="#hashlib">hashlib</a>
+ &#8226;   <a href="#services">services</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
+ &#8226;   <a href="#views.usuarios">views.usuarios</a>
 
   </div>
 
@@ -36970,12 +37115,17 @@ imported by:
  &#8226;   <a href="#tkinter.ttk">tkinter.ttk</a>
  &#8226;   <a href="#views.agenda">views.agenda</a>
  &#8226;   <a href="#views.ayuda">views.ayuda</a>
+ &#8226;   <a href="#views.catalogo_editor">views.catalogo_editor</a>
+ &#8226;   <a href="#views.catalogo_servicios">views.catalogo_servicios</a>
  &#8226;   <a href="#views.cierre_mensual">views.cierre_mensual</a>
  &#8226;   <a href="#views.clientes">views.clientes</a>
  &#8226;   <a href="#views.cobros">views.cobros</a>
  &#8226;   <a href="#views.configuracion">views.configuracion</a>
  &#8226;   <a href="#views.crm">views.crm</a>
+ &#8226;   <a href="#views.emisor_editor">views.emisor_editor</a>
+ &#8226;   <a href="#views.emisores">views.emisores</a>
  &#8226;   <a href="#views.estadisticas">views.estadisticas</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.informes">views.informes</a>
  &#8226;   <a href="#views.inicio">views.inicio</a>
  &#8226;   <a href="#views.notificaciones">views.notificaciones</a>
@@ -36983,6 +37133,7 @@ imported by:
  &#8226;   <a href="#views.renovaciones">views.renovaciones</a>
  &#8226;   <a href="#views.resumenes">views.resumenes</a>
  &#8226;   <a href="#views.servicios">views.servicios</a>
+ &#8226;   <a href="#views.usuarios">views.usuarios</a>
 
   </div>
 
@@ -37057,6 +37208,7 @@ imports:
 imported by:
     <a href="#customtkinter">customtkinter</a>
  &#8226;   <a href="#matplotlib.backends._backend_tk">matplotlib.backends._backend_tk</a>
+ &#8226;   <a href="#views.configuracion">views.configuracion</a>
 
   </div>
 
@@ -37097,12 +37249,17 @@ imported by:
  &#8226;   <a href="#tkinter.simpledialog">tkinter.simpledialog</a>
  &#8226;   <a href="#views.agenda">views.agenda</a>
  &#8226;   <a href="#views.ayuda">views.ayuda</a>
+ &#8226;   <a href="#views.catalogo_editor">views.catalogo_editor</a>
+ &#8226;   <a href="#views.catalogo_servicios">views.catalogo_servicios</a>
  &#8226;   <a href="#views.cierre_mensual">views.cierre_mensual</a>
  &#8226;   <a href="#views.clientes">views.clientes</a>
  &#8226;   <a href="#views.cobros">views.cobros</a>
  &#8226;   <a href="#views.configuracion">views.configuracion</a>
  &#8226;   <a href="#views.crm">views.crm</a>
+ &#8226;   <a href="#views.emisor_editor">views.emisor_editor</a>
+ &#8226;   <a href="#views.emisores">views.emisores</a>
  &#8226;   <a href="#views.estadisticas">views.estadisticas</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.informes">views.informes</a>
  &#8226;   <a href="#views.inicio">views.inicio</a>
  &#8226;   <a href="#views.notificaciones">views.notificaciones</a>
@@ -37110,6 +37267,7 @@ imported by:
  &#8226;   <a href="#views.renovaciones">views.renovaciones</a>
  &#8226;   <a href="#views.resumenes">views.resumenes</a>
  &#8226;   <a href="#views.servicios">views.servicios</a>
+ &#8226;   <a href="#views.usuarios">views.usuarios</a>
 
   </div>
 
@@ -37128,6 +37286,7 @@ imports:
 imported by:
     <a href="#matplotlib.backends._backend_tk">matplotlib.backends._backend_tk</a>
  &#8226;   <a href="#tkinter.filedialog">tkinter.filedialog</a>
+ &#8226;   <a href="#views.usuarios">views.usuarios</a>
 
   </div>
 
@@ -37146,10 +37305,13 @@ imported by:
     <a href="#customtkinter.windows.widgets.core_widget_classes.ctk_base_class">customtkinter.windows.widgets.core_widget_classes.ctk_base_class</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#views.agenda">views.agenda</a>
+ &#8226;   <a href="#views.catalogo_servicios">views.catalogo_servicios</a>
  &#8226;   <a href="#views.cierre_mensual">views.cierre_mensual</a>
  &#8226;   <a href="#views.clientes">views.clientes</a>
  &#8226;   <a href="#views.cobros">views.cobros</a>
  &#8226;   <a href="#views.crm">views.crm</a>
+ &#8226;   <a href="#views.emisores">views.emisores</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.informes">views.informes</a>
  &#8226;   <a href="#views.inicio">views.inicio</a>
  &#8226;   <a href="#views.notificaciones">views.notificaciones</a>
@@ -37157,6 +37319,7 @@ imported by:
  &#8226;   <a href="#views.renovaciones">views.renovaciones</a>
  &#8226;   <a href="#views.resumenes">views.resumenes</a>
  &#8226;   <a href="#views.servicios">views.servicios</a>
+ &#8226;   <a href="#views.usuarios">views.usuarios</a>
 
   </div>
 
@@ -38101,12 +38264,17 @@ imported by:
 imported by:
     <a href="#views.agenda">views.agenda</a>
  &#8226;   <a href="#views.ayuda">views.ayuda</a>
+ &#8226;   <a href="#views.catalogo_editor">views.catalogo_editor</a>
+ &#8226;   <a href="#views.catalogo_servicios">views.catalogo_servicios</a>
  &#8226;   <a href="#views.cierre_mensual">views.cierre_mensual</a>
  &#8226;   <a href="#views.clientes">views.clientes</a>
  &#8226;   <a href="#views.cobros">views.cobros</a>
  &#8226;   <a href="#views.configuracion">views.configuracion</a>
  &#8226;   <a href="#views.crm">views.crm</a>
+ &#8226;   <a href="#views.emisor_editor">views.emisor_editor</a>
+ &#8226;   <a href="#views.emisores">views.emisores</a>
  &#8226;   <a href="#views.estadisticas">views.estadisticas</a>
+ &#8226;   <a href="#views.facturacion_arca">views.facturacion_arca</a>
  &#8226;   <a href="#views.informes">views.informes</a>
  &#8226;   <a href="#views.inicio">views.inicio</a>
  &#8226;   <a href="#views.notificaciones">views.notificaciones</a>
@@ -38114,6 +38282,7 @@ imported by:
  &#8226;   <a href="#views.renovaciones">views.renovaciones</a>
  &#8226;   <a href="#views.resumenes">views.resumenes</a>
  &#8226;   <a href="#views.servicios">views.servicios</a>
+ &#8226;   <a href="#views.usuarios">views.usuarios</a>
 
   </div>
 
@@ -38158,6 +38327,48 @@ imports:
   <div class="import">
 imported by:
     <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="views.catalogo_editor"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/views/catalogo_editor.py" type="text/plain"><tt>views.catalogo_editor</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#customtkinter">customtkinter</a>
+ &#8226;   <a href="#services.catalogo_service">services.catalogo_service</a>
+ &#8226;   <a href="#tkinter">tkinter</a>
+ &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
+ &#8226;   <a href="#views">views</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#views.catalogo_servicios">views.catalogo_servicios</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="views.catalogo_servicios"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/views/catalogo_servicios.py" type="text/plain"><tt>views.catalogo_servicios</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#customtkinter">customtkinter</a>
+ &#8226;   <a href="#services.catalogo_service">services.catalogo_service</a>
+ &#8226;   <a href="#tkinter">tkinter</a>
+ &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
+ &#8226;   <a href="#tkinter.ttk">tkinter.ttk</a>
+ &#8226;   <a href="#views">views</a>
+ &#8226;   <a href="#views.catalogo_editor">views.catalogo_editor</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#views.configuracion">views.configuracion</a>
 
   </div>
 
@@ -38242,10 +38453,16 @@ imported by:
 imports:
     <a href="#customtkinter">customtkinter</a>
  &#8226;   <a href="#datetime">datetime</a>
+ &#8226;   <a href="#services.arca_ws_service">services.arca_ws_service</a>
  &#8226;   <a href="#services.backup_service">services.backup_service</a>
+ &#8226;   <a href="#services.emisor_service">services.emisor_service</a>
  &#8226;   <a href="#tkinter">tkinter</a>
+ &#8226;   <a href="#tkinter.filedialog">tkinter.filedialog</a>
  &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
  &#8226;   <a href="#views">views</a>
+ &#8226;   <a href="#views.catalogo_servicios">views.catalogo_servicios</a>
+ &#8226;   <a href="#views.emisores">views.emisores</a>
+ &#8226;   <a href="#views.usuarios">views.usuarios</a>
 
   </div>
   <div class="import">
@@ -38283,6 +38500,48 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="views.emisor_editor"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/views/emisor_editor.py" type="text/plain"><tt>views.emisor_editor</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#customtkinter">customtkinter</a>
+ &#8226;   <a href="#services.emisor_service">services.emisor_service</a>
+ &#8226;   <a href="#tkinter">tkinter</a>
+ &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
+ &#8226;   <a href="#views">views</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#views.emisores">views.emisores</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="views.emisores"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/views/emisores.py" type="text/plain"><tt>views.emisores</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#customtkinter">customtkinter</a>
+ &#8226;   <a href="#services.emisor_service">services.emisor_service</a>
+ &#8226;   <a href="#tkinter">tkinter</a>
+ &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
+ &#8226;   <a href="#tkinter.ttk">tkinter.ttk</a>
+ &#8226;   <a href="#views">views</a>
+ &#8226;   <a href="#views.emisor_editor">views.emisor_editor</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#views.configuracion">views.configuracion</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="views.estadisticas"></a>
   <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/views/estadisticas.py" type="text/plain"><tt>views.estadisticas</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
@@ -38295,6 +38554,34 @@ imports:
  &#8226;   <a href="#services.oportunidad_service">services.oportunidad_service</a>
  &#8226;   <a href="#tkinter">tkinter</a>
  &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
+ &#8226;   <a href="#views">views</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="views.facturacion_arca"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/views/facturacion_arca.py" type="text/plain"><tt>views.facturacion_arca</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#customtkinter">customtkinter</a>
+ &#8226;   <a href="#datetime">datetime</a>
+ &#8226;   <a href="#models.factura_arca">models.factura_arca</a>
+ &#8226;   <a href="#os">os</a>
+ &#8226;   <a href="#pathlib">pathlib</a>
+ &#8226;   <a href="#services.cliente_service">services.cliente_service</a>
+ &#8226;   <a href="#services.emisor_service">services.emisor_service</a>
+ &#8226;   <a href="#services.factura_arca_service">services.factura_arca_service</a>
+ &#8226;   <a href="#services.resumen_service">services.resumen_service</a>
+ &#8226;   <a href="#tkinter">tkinter</a>
+ &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
+ &#8226;   <a href="#tkinter.ttk">tkinter.ttk</a>
  &#8226;   <a href="#views">views</a>
 
   </div>
@@ -38338,6 +38625,7 @@ imports:
  &#8226;   <a href="#datetime">datetime</a>
  &#8226;   <a href="#services.cliente_service">services.cliente_service</a>
  &#8226;   <a href="#services.dashboard_service">services.dashboard_service</a>
+ &#8226;   <a href="#services.tarea_service">services.tarea_service</a>
  &#8226;   <a href="#tkinter">tkinter</a>
  &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
  &#8226;   <a href="#tkinter.ttk">tkinter.ttk</a>
@@ -38464,6 +38752,7 @@ imports:
     <a href="#customtkinter">customtkinter</a>
  &#8226;   <a href="#datetime">datetime</a>
  &#8226;   <a href="#models.servicio">models.servicio</a>
+ &#8226;   <a href="#services.catalogo_service">services.catalogo_service</a>
  &#8226;   <a href="#services.servicio_service">services.servicio_service</a>
  &#8226;   <a href="#tkinter">tkinter</a>
  &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
@@ -38477,6 +38766,29 @@ imported by:
  &#8226;   <a href="#views.crm">views.crm</a>
  &#8226;   <a href="#views.inicio">views.inicio</a>
  &#8226;   <a href="#views.oportunidades">views.oportunidades</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="views.usuarios"></a>
+  <a target="code" href="///C:/Users/Usuario/Desktop/FM_Master_Gestion/views/usuarios.py" type="text/plain"><tt>views.usuarios</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#customtkinter">customtkinter</a>
+ &#8226;   <a href="#services.usuario_service">services.usuario_service</a>
+ &#8226;   <a href="#tkinter">tkinter</a>
+ &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
+ &#8226;   <a href="#tkinter.simpledialog">tkinter.simpledialog</a>
+ &#8226;   <a href="#tkinter.ttk">tkinter.ttk</a>
+ &#8226;   <a href="#views">views</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
+ &#8226;   <a href="#views.configuracion">views.configuracion</a>
 
   </div>
 

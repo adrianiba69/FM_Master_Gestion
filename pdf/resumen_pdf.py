@@ -38,6 +38,7 @@ class ResumenPDF:
     def generar(cls, resumen_id, ruta=None):
         resumen = ResumenService.obtener(resumen_id)
         cliente = ResumenService.obtener_cliente(resumen_id)
+        emisor = ResumenService.obtener_emisor_de_cliente(resumen_id)
         if resumen is None or cliente is None:
             raise ValueError("No se encontro la informacion del resumen.")
 
@@ -48,7 +49,7 @@ class ResumenPDF:
 
         documento = canvas.Canvas(str(destino), pagesize=A4, pageCompression=1)
         documento.setTitle(f"Resumen {resumen.numero:06d} - {cliente[2]}")
-        documento.setAuthor(EMPRESA)
+        documento.setAuthor(emisor[1] if emisor else EMPRESA)
         documento.setSubject("Resumen de servicios")
 
         conceptos = resumen.conceptos or []
@@ -59,7 +60,7 @@ class ResumenPDF:
         ] or [[]]
 
         for indice, conceptos_pagina in enumerate(paginas):
-            cls._encabezado(documento, resumen, cliente)
+            cls._encabezado(documento, resumen, cliente, emisor)
             cls._dibujar_conceptos(documento, conceptos_pagina)
 
             if indice == len(paginas) - 1:
@@ -102,7 +103,7 @@ class ResumenPDF:
             return False
 
     @classmethod
-    def _encabezado(cls, documento, resumen, cliente):
+    def _encabezado(cls, documento, resumen, cliente, emisor=None):
         if not cls._dibujar_logo(documento):
             documento.setFillColor(cls.ROJO)
             documento.rect(cls.LOGO_X, 752, cls.LOGO_WIDTH, 55, stroke=0, fill=1)
@@ -123,11 +124,16 @@ class ResumenPDF:
 
         documento.setFillColor(cls.NEGRO)
         documento.setFont("Helvetica-Bold", 11)
-        documento.drawString(38, 715, EMPRESA)
+        empresa_nombre = emisor[1] if emisor else EMPRESA
+        empresa_cuit = emisor[2] if emisor else CUIT
+        empresa_direccion = emisor[4] if emisor else DIRECCION
+        empresa_telefono = emisor[6] if emisor else TELEFONO
+        empresa_email = emisor[7] if emisor else EMAIL
+        documento.drawString(38, 715, empresa_nombre)
         documento.setFont("Helvetica", 9)
-        documento.drawString(38, 698, f"CUIT: {CUIT}")
-        documento.drawString(38, 683, f"Direccion: {DIRECCION}")
-        documento.drawString(38, 668, f"Telefono: {TELEFONO}  |  {EMAIL}")
+        documento.drawString(38, 698, f"CUIT: {empresa_cuit}")
+        documento.drawString(38, 683, f"Direccion: {empresa_direccion}")
+        documento.drawString(38, 668, f"Telefono: {empresa_telefono}  |  {empresa_email}")
 
         documento.setFillColor(cls.GRIS)
         documento.setStrokeColor(cls.GRIS_BORDE)

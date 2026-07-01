@@ -15,6 +15,8 @@ class Cliente:
     email: str = ""
     cuit: str = ""
     iva: str = ""
+    emisor_id: int = None
+    emisor_recomendado_id: int = None
     servicio: str = ""
     importe: float = 0
     descuento: float = 0

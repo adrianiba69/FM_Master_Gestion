@@ -47,13 +47,15 @@ class ClienteService:
                 email,
                 cuit,
                 iva,
+                emisor_id,
+                emisor_recomendado_id,
                 vencimiento,
                 estado,
                 observaciones,
                 fecha_alta,
                 fecha_modificacion
             )
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             cliente.razon_social,
             cliente.codigo,
@@ -67,6 +69,8 @@ class ClienteService:
             cliente.email,
             cliente.cuit,
             cliente.iva,
+            cliente.emisor_id,
+            cliente.emisor_recomendado_id,
             cliente.vencimiento,
             cliente.estado,
             cliente.observaciones,
@@ -99,6 +103,8 @@ class ClienteService:
                 email,
                 cuit,
                 iva,
+                emisor_id,
+                emisor_recomendado_id,
                 vencimiento,
                 estado,
                 observaciones,
@@ -134,6 +140,8 @@ class ClienteService:
                 email=?,
                 cuit=?,
                 iva=?,
+                emisor_id=?,
+                emisor_recomendado_id=?,
                 vencimiento=?,
                 estado=?,
                 observaciones=?,
@@ -152,6 +160,8 @@ class ClienteService:
             cliente.email,
             cliente.cuit,
             cliente.iva,
+            cliente.emisor_id,
+            cliente.emisor_recomendado_id,
             cliente.vencimiento,
             cliente.estado,
             cliente.observaciones,

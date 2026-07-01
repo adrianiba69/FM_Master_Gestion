@@ -51,6 +51,8 @@ def crear_base():
         email TEXT,
         cuit TEXT,
         iva TEXT,
+        emisor_id INTEGER,
+        emisor_recomendado_id INTEGER,
         vencimiento INTEGER,
         estado TEXT,
         observaciones TEXT,
@@ -82,6 +84,9 @@ def crear_base():
 
     for columna, definicion in columnas_clientes.items():
         agregar_columna_si_falta(cur, "clientes", columna, definicion)
+    # Añadir columnas para emisores en clientes si no existen
+    agregar_columna_si_falta(cur, "clientes", "emisor_id", "INTEGER")
+    agregar_columna_si_falta(cur, "clientes", "emisor_recomendado_id", "INTEGER")
 
     # ==========================
     # TABLA SERVICIOS
@@ -125,6 +130,86 @@ def crear_base():
 
     for columna, definicion in columnas_servicios.items():
         agregar_columna_si_falta(cur, "servicios", columna, definicion)
+
+    # ==========================
+    # CATALOGO DE SERVICIOS
+    # ==========================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS catalogo_servicios(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL,
+        descripcion TEXT,
+        precio REAL NOT NULL DEFAULT 0,
+        activo INTEGER DEFAULT 1
+    )
+    """)
+
+    columnas_catalogo = {
+        "nombre": "TEXT",
+        "descripcion": "TEXT",
+        "precio": "REAL DEFAULT 0",
+        "activo": "INTEGER DEFAULT 1",
+    }
+    for columna, definicion in columnas_catalogo.items():
+        agregar_columna_si_falta(cur, "catalogo_servicios", columna, definicion)
+
+    # ==========================
+    # EMISORES DE FACTURACION
+    # ==========================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS emisores_facturacion(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        alias TEXT NOT NULL,
+        titular TEXT,
+        nombre TEXT,
+        cuit TEXT,
+        condicion_iva TEXT,
+        punto_venta TEXT,
+        tipo_comprobante_default TEXT,
+        orden_prioridad INTEGER DEFAULT 0,
+        direccion TEXT,
+        localidad TEXT,
+        telefono TEXT,
+        email TEXT,
+        activo INTEGER DEFAULT 1,
+        observaciones TEXT,
+        certificado_path TEXT,
+        clave_privada_path TEXT,
+        arca_modo TEXT DEFAULT 'Homologación',
+        arca_estado TEXT DEFAULT 'Desconocido'
+    )
+    """)
+
+    columnas_emisores = {
+        "alias": "TEXT",
+        "titular": "TEXT",
+        "nombre": "TEXT",
+        "cuit": "TEXT",
+        "condicion_iva": "TEXT",
+        "punto_venta": "TEXT",
+        "tipo_comprobante_default": "TEXT",
+        "orden_prioridad": "INTEGER DEFAULT 0",
+        "direccion": "TEXT",
+        "localidad": "TEXT",
+        "telefono": "TEXT",
+        "email": "TEXT",
+        "activo": "INTEGER DEFAULT 1",
+        "observaciones": "TEXT",
+        "certificado_path": "TEXT",
+        "clave_privada_path": "TEXT",
+        "arca_modo": "TEXT DEFAULT 'Homologación'",
+        "arca_estado": "TEXT DEFAULT 'Desconocido'",
+    }
+    for columna, definicion in columnas_emisores.items():
+        agregar_columna_si_falta(cur, "emisores_facturacion", columna, definicion)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS arca_config(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        modo_trabajo TEXT NOT NULL DEFAULT 'Manual'
+    )
+    """)
+    cur.execute("INSERT INTO arca_config(modo_trabajo) SELECT 'Manual' WHERE NOT EXISTS(SELECT 1 FROM arca_config)")
 
     hoy = date.today()
     cur.execute("SELECT id, fecha_inicio, fecha_fin, renovable FROM servicios")
@@ -380,6 +465,66 @@ def crear_base():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_contactos_proximo ON contactos(proximo_contacto)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_contactos_tipo ON contactos(tipo)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_contactos_resultado ON contactos(resultado)")
+
+    # ==========================
+    # TABLA FACTURA ARCA
+    # ==========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS factura_arca(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER NOT NULL,
+        emisor_id INTEGER NOT NULL,
+        resumen_id INTEGER NOT NULL,
+        fecha TEXT NOT NULL,
+        punto_venta TEXT,
+        tipo_comprobante TEXT,
+        importe_total REAL NOT NULL DEFAULT 0,
+        estado TEXT NOT NULL DEFAULT 'Pendiente',
+        numero_factura TEXT,
+        cae TEXT,
+        vencimiento_cae TEXT,
+        observaciones TEXT,
+        fecha_creacion TEXT,
+
+        FOREIGN KEY(cliente_id) REFERENCES clientes(id),
+        FOREIGN KEY(emisor_id) REFERENCES emisores_facturacion(id),
+        FOREIGN KEY(resumen_id) REFERENCES resumenes(id)
+    )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_cliente ON factura_arca(cliente_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_emisor ON factura_arca(emisor_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_resumen ON factura_arca(resumen_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_estado ON factura_arca(estado)")
+
+    # ==========================
+    # MIGRACIÓN TABLA FACTURA ARCA
+    # ==========================
+    cur.execute("PRAGMA table_info(factura_arca)")
+    if not cur.fetchall():
+        cur.execute("CREATE TABLE IF NOT EXISTS factura_arca(\n"
+                    "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+                    "    cliente_id INTEGER NOT NULL,\n"
+                    "    emisor_id INTEGER NOT NULL,\n"
+                    "    resumen_id INTEGER NOT NULL,\n"
+                    "    fecha TEXT NOT NULL,\n"
+                    "    punto_venta TEXT,\n"
+                    "    tipo_comprobante TEXT,\n"
+                    "    importe_total REAL NOT NULL DEFAULT 0,\n"
+                    "    estado TEXT NOT NULL DEFAULT 'Pendiente',\n"
+                    "    numero_factura TEXT,\n"
+                    "    cae TEXT,\n"
+                    "    vencimiento_cae TEXT,\n"
+                    "    observaciones TEXT,\n"
+                    "    fecha_creacion TEXT,\n"
+                    "    FOREIGN KEY(cliente_id) REFERENCES clientes(id),\n"
+                    "    FOREIGN KEY(emisor_id) REFERENCES emisores_facturacion(id),\n"
+                    "    FOREIGN KEY(resumen_id) REFERENCES resumenes(id)\n"
+                    ")")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_cliente ON factura_arca(cliente_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_emisor ON factura_arca(emisor_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_resumen ON factura_arca(resumen_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_estado ON factura_arca(estado)")
 
     # ==========================
     # TABLA OPORTUNIDADES

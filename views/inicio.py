@@ -5,6 +5,7 @@ import customtkinter as ctk
 
 from services.cliente_service import ClienteService
 from services.dashboard_service import DashboardService
+from services.tarea_service import TareaService
 from views.crm import ContactoFormWindow
 from views.servicios import ServiciosWindow
 
@@ -23,10 +24,19 @@ class InicioFrame(ctk.CTkFrame):
         self.actualizar_dashboard()
 
     def crear_interfaz(self):
-        self.grid_rowconfigure(4, weight=1)
+        self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        encabezado = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
+        contenedor = ctk.CTkScrollableFrame(self, fg_color="white")
+        contenedor.grid(row=0, column=0, sticky="nsew")
+        contenedor.grid_columnconfigure(0, weight=1)
+        contenedor.grid_rowconfigure(0, weight=1)
+
+        contenido = ctk.CTkFrame(contenedor, fg_color="white", corner_radius=0)
+        contenido.grid(row=0, column=0, sticky="nsew")
+        contenido.grid_columnconfigure(0, weight=1)
+
+        encabezado = ctk.CTkFrame(contenido, fg_color="white", corner_radius=0)
         encabezado.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 10))
         encabezado.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
@@ -42,7 +52,7 @@ class InicioFrame(ctk.CTkFrame):
             text_color="#555555",
         ).grid(row=0, column=1, sticky="e")
 
-        metricas = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
+        metricas = ctk.CTkFrame(contenido, fg_color="white", corner_radius=0)
         metricas.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
         for columna in range(4):
             metricas.grid_columnconfigure(columna, weight=1, uniform="metricas")
@@ -68,11 +78,7 @@ class InicioFrame(ctk.CTkFrame):
                 clave,
                 titulo,
                 es_moneda,
-                alerta=clave in (
-                    "saldo_pendiente",
-                    "resumenes_vencidos",
-                    "servicios_vencidos",
-                ),
+                alerta=clave in ("saldo_pendiente", "resumenes_vencidos"),
             )
 
         self.indicadores_renovacion = self.crear_tarjeta_renovaciones(
@@ -86,28 +92,33 @@ class InicioFrame(ctk.CTkFrame):
             len(configuracion) % 4 + 1,
         )
         self.indicadores_seguimientos = self.crear_tarjeta_seguimientos(
-            metricas, len(configuracion) // 4 + 1, 0,
+            metricas,
+            len(configuracion) // 4 + 1,
+            0,
         )
         self.indicadores_oportunidades = self.crear_tarjeta_oportunidades(
-            metricas, len(configuracion) // 4 + 1, 2,
+            metricas,
+            len(configuracion) // 4 + 1,
+            2,
         )
         self.indicadores_alertas = self.crear_tarjeta_alertas(
-            metricas, len(configuracion) // 4 + 2, 0,
+            metricas,
+            len(configuracion) // 4 + 2,
+            0,
         )
 
-        accesos = ctk.CTkFrame(self, fg_color=self.NEGRO, corner_radius=4)
+        accesos = ctk.CTkFrame(contenido, fg_color=self.NEGRO, corner_radius=4)
         accesos.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
-        for columna in range(7):
+        for columna in range(6):
             accesos.grid_columnconfigure(columna, weight=1, uniform="accesos")
 
         acciones = (
             ("Clientes", self.ir_clientes),
             ("Servicios", self.abrir_selector_servicios),
-            ("Resumenes", self.ir_resumenes),
+            ("Resúmenes", self.ir_resumenes),
             ("Cobros", self.ir_cobros),
             ("Cuenta Corriente", self.ir_cuenta_corriente),
             ("Backup", self.crear_backup),
-            ("Registrar contacto", self.registrar_contacto),
         )
         for columna, (texto, comando) in enumerate(acciones):
             boton = ctk.CTkButton(
@@ -130,10 +141,48 @@ class InicioFrame(ctk.CTkFrame):
             hover_color="#990000",
             corner_radius=4,
             command=self.ir_cierre_mensual,
-        ).grid(row=1, column=0, columnspan=7, sticky="ew", padx=5, pady=(0, 9))
+        ).grid(row=1, column=0, columnspan=6, sticky="ew", padx=5, pady=(0, 9))
 
-        titulo_vencimientos = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        titulo_vencimientos.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 4))
+        titulo_agenda = ctk.CTkFrame(contenido, fg_color="white", corner_radius=0)
+        titulo_agenda.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 4))
+        titulo_agenda.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            titulo_agenda,
+            text="AGENDA DEL DÍA",
+            font=("Arial", 14, "bold"),
+            text_color="#222222",
+        ).grid(row=0, column=0, sticky="w")
+
+        tabla_agenda_frame = ctk.CTkFrame(contenido, fg_color="white", corner_radius=0)
+        tabla_agenda_frame.grid(row=4, column=0, sticky="nsew", padx=20, pady=(0, 12))
+        tabla_agenda_frame.grid_rowconfigure(0, weight=1)
+        tabla_agenda_frame.grid_columnconfigure(0, weight=1)
+        self.tabla_agenda = ttk.Treeview(
+            tabla_agenda_frame,
+            columns=("hora", "tipo", "titulo", "estado"),
+            show="headings",
+            height=5,
+        )
+        for columna, (texto, ancho) in {
+            "hora": ("Hora", 90),
+            "tipo": ("Tipo", 140),
+            "titulo": ("Título", 320),
+            "estado": ("Estado", 110),
+        }.items():
+            self.tabla_agenda.heading(columna, text=texto)
+            self.tabla_agenda.column(
+                columna,
+                width=ancho,
+                anchor="w",
+                stretch=columna == "titulo",
+            )
+        scroll_agenda = ttk.Scrollbar(tabla_agenda_frame, orient="vertical", command=self.tabla_agenda.yview)
+        self.tabla_agenda.configure(yscrollcommand=scroll_agenda.set)
+        self.tabla_agenda.grid(row=0, column=0, sticky="nsew")
+        scroll_agenda.grid(row=0, column=1, sticky="ns")
+
+        titulo_vencimientos = ctk.CTkFrame(contenido, fg_color="white", corner_radius=0)
+        titulo_vencimientos.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 4))
         titulo_vencimientos.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             titulo_vencimientos,
@@ -148,30 +197,25 @@ class InicioFrame(ctk.CTkFrame):
             text_color="#666666",
         ).grid(row=0, column=1, sticky="e")
 
-        tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        tabla_frame.grid(row=4, column=0, sticky="nsew", padx=20, pady=(0, 16))
+        tabla_frame = ctk.CTkFrame(contenido, fg_color="white", corner_radius=0)
+        tabla_frame.grid(row=6, column=0, sticky="nsew", padx=20, pady=(0, 16))
         tabla_frame.grid_rowconfigure(0, weight=1)
         tabla_frame.grid_columnconfigure(0, weight=1)
-        columnas = ("numero", "vencimiento", "cliente", "total", "saldo", "estado")
         self.tabla_vencimientos = ttk.Treeview(
             tabla_frame,
-            columns=columnas,
+            columns=("numero", "vencimiento", "cliente", "total", "saldo", "estado"),
             show="headings",
             height=7,
         )
-        self.tabla_vencimientos.bind(
-            "<Double-1>",
-            lambda _evento: self.ir_resumenes(),
-        )
-        encabezados = {
+        self.tabla_vencimientos.bind("<Double-1>", lambda _evento: self.ir_resumenes())
+        for columna, (texto, ancho) in {
             "numero": ("Resumen", 90),
             "vencimiento": ("Vencimiento", 105),
             "cliente": ("Cliente", 260),
             "total": ("Total", 110),
             "saldo": ("Saldo", 110),
             "estado": ("Estado", 90),
-        }
-        for columna, (texto, ancho) in encabezados.items():
+        }.items():
             self.tabla_vencimientos.heading(columna, text=texto)
             self.tabla_vencimientos.column(
                 columna,
@@ -406,85 +450,90 @@ class InicioFrame(ctk.CTkFrame):
         return etiquetas
 
     def actualizar_dashboard(self):
-        datos = DashboardService.obtener_indicadores()
+        try:
+            datos = DashboardService.obtener_indicadores()
+        except Exception:
+            datos = {
+                "clientes_activos": 0,
+                "total_clientes": 0,
+                "resumenes_mes": 0,
+                "facturado_mes": 0,
+                "cobrado_mes": 0,
+                "saldo_pendiente": 0,
+                "resumenes_vencidos": 0,
+                "proximos_vencimientos": 0,
+                "resumenes_pendientes": 0,
+                "renovaciones_hoy": 0,
+                "renovaciones_semana": 0,
+                "renovaciones_vencidas": 0,
+                "renovados_hoy": 0,
+                "agenda": {
+                    "pendientes_hoy": 0,
+                    "vencidas": 0,
+                    "completadas_hoy": 0,
+                    "proxima": "Sin tareas",
+                },
+                "seguimientos": {"hoy": 0, "atrasados": 0, "semana": 0},
+                "oportunidades": {"nuevas": 0, "negociacion": 0, "ganadas_mes": 0, "importe_estimado": 0},
+                "alertas": {"urgentes": 0, "pendientes": 0, "vencidas": 0},
+            }
+
         claves_moneda = {"facturado_mes", "cobrado_mes", "saldo_pendiente"}
         for clave, etiqueta in self.indicadores.items():
-            valor = datos[clave]
+            valor = datos.get(clave, 0)
             if clave in claves_moneda:
                 importe_formateado = self.formatear_moneda(valor)
                 self.importes_reales[clave] = importe_formateado
                 etiqueta.configure(
-                    text=importe_formateado if self.importes_visibles[clave] else "********"
+                    text=importe_formateado if self.importes_visibles.get(clave, True) else "********"
                 )
             else:
                 etiqueta.configure(text=str(valor))
 
-        self.indicadores_renovacion["hoy"].configure(
-            text=f"Hoy: {datos['renovaciones_hoy']}"
-        )
-        self.indicadores_renovacion["semana"].configure(
-            text=f"Semana: {datos['renovaciones_semana']}"
-        )
-        self.indicadores_renovacion["vencidos"].configure(
-            text=f"Vencidos: {datos['renovaciones_vencidas']}"
-        )
-        self.indicadores_renovacion["renovados"].configure(
-            text=f"Renov.: {datos['renovados_hoy']}"
-        )
-        agenda = datos["agenda"]
-        self.indicadores_agenda["pendientes"].configure(
-            text=f"Pendientes: {agenda['pendientes_hoy']}"
-        )
-        self.indicadores_agenda["vencidas"].configure(
-            text=f"Vencidas: {agenda['vencidas']}"
-        )
-        self.indicadores_agenda["completadas"].configure(
-            text=f"Completadas: {agenda['completadas_hoy']}"
-        )
-        self.indicadores_agenda["proxima"].configure(
-            text=f"Próxima: {agenda['proxima']}"
-        )
+        self.indicadores_renovacion["hoy"].configure(text=f"Hoy: {datos.get('renovaciones_hoy', 0)}")
+        self.indicadores_renovacion["semana"].configure(text=f"Semana: {datos.get('renovaciones_semana', 0)}")
+        self.indicadores_renovacion["vencidos"].configure(text=f"Vencidos: {datos.get('renovaciones_vencidas', 0)}")
+        self.indicadores_renovacion["renovados"].configure(text=f"Renov.: {datos.get('renovados_hoy', 0)}")
 
-        seguimientos = datos["seguimientos"]
-        self.indicadores_seguimientos["hoy"].configure(
-            text=f"Contactos para hoy: {seguimientos['hoy']}"
-        )
-        self.indicadores_seguimientos["atrasados"].configure(
-            text=f"Atrasados: {seguimientos['atrasados']}"
-        )
-        self.indicadores_seguimientos["semana"].configure(
-            text=f"Esta semana: {seguimientos['semana']}"
-        )
-        oportunidades = datos["oportunidades"]
-        self.indicadores_oportunidades["nuevas"].configure(
-            text=f"Nuevas: {oportunidades['nuevas']}"
-        )
-        self.indicadores_oportunidades["negociacion"].configure(
-            text=f"Negociación: {oportunidades['negociacion']}"
-        )
-        self.indicadores_oportunidades["ganadas_mes"].configure(
-            text=f"Ganadas mes: {oportunidades['ganadas_mes']}"
-        )
-        self.indicadores_oportunidades["importe_estimado"].configure(
-            text=self.formatear_moneda(oportunidades["importe_estimado"])
-        )
-        alertas = datos["alertas"]
-        self.indicadores_alertas["urgentes"].configure(
-            text=f"Urgentes: {alertas['urgentes']}"
-        )
-        self.indicadores_alertas["pendientes"].configure(
-            text=f"Pendientes: {alertas['pendientes']}"
-        )
-        self.indicadores_alertas["vencidas"].configure(
-            text=f"Vencidas: {alertas['vencidas']}"
-        )
-        self.tarjeta_alertas.configure(
-            fg_color=self.ROJO if alertas["urgentes"] else self.NEGRO
-        )
+        agenda = datos.get("agenda", {})
+        self.indicadores_agenda["pendientes"].configure(text=f"Pendientes: {agenda.get('pendientes_hoy', 0)}")
+        self.indicadores_agenda["vencidas"].configure(text=f"Vencidas: {agenda.get('vencidas', 0)}")
+        self.indicadores_agenda["completadas"].configure(text=f"Completadas: {agenda.get('completadas_hoy', 0)}")
+        self.indicadores_agenda["proxima"].configure(text=f"Próxima: {agenda.get('proxima', 'Sin tareas')}")
+
+        seguimientos = datos.get("seguimientos", {})
+        self.indicadores_seguimientos["hoy"].configure(text=f"Contactos para hoy: {seguimientos.get('hoy', 0)}")
+        self.indicadores_seguimientos["atrasados"].configure(text=f"Atrasados: {seguimientos.get('atrasados', 0)}")
+        self.indicadores_seguimientos["semana"].configure(text=f"Esta semana: {seguimientos.get('semana', 0)}")
+
+        oportunidades = datos.get("oportunidades", {})
+        self.indicadores_oportunidades["nuevas"].configure(text=f"Nuevas: {oportunidades.get('nuevas', 0)}")
+        self.indicadores_oportunidades["negociacion"].configure(text=f"Negociación: {oportunidades.get('negociacion', 0)}")
+        self.indicadores_oportunidades["ganadas_mes"].configure(text=f"Ganadas mes: {oportunidades.get('ganadas_mes', 0)}")
+        self.indicadores_oportunidades["importe_estimado"].configure(text=self.formatear_moneda(oportunidades.get('importe_estimado', 0)))
+
+        alertas = datos.get("alertas", {})
+        self.indicadores_alertas["urgentes"].configure(text=f"Urgentes: {alertas.get('urgentes', 0)}")
+        self.indicadores_alertas["pendientes"].configure(text=f"Pendientes: {alertas.get('pendientes', 0)}")
+        self.indicadores_alertas["vencidas"].configure(text=f"Vencidas: {alertas.get('vencidas', 0)}")
+        self.tarjeta_alertas.configure(fg_color=self.ROJO if alertas.get("urgentes", 0) else self.NEGRO)
+
+        for item in self.tabla_agenda.get_children():
+            self.tabla_agenda.delete(item)
+        try:
+            tareas = TareaService.listar("Hoy")
+        except Exception:
+            tareas = []
+        for tarea in tareas:
+            self.tabla_agenda.insert("", "end", values=(tarea[3], tarea[4], tarea[5], tarea[7]))
 
         for item in self.tabla_vencimientos.get_children():
             self.tabla_vencimientos.delete(item)
-        for resumen in DashboardService.listar_proximos_vencimientos():
+        try:
+            vencimientos = DashboardService.listar_proximos_vencimientos()
+        except Exception:
+            vencimientos = []
+        for resumen in vencimientos:
             self.tabla_vencimientos.insert("", "end", values=(
                 f"{resumen[1]:06d}",
                 self.formatear_fecha(resumen[2]),

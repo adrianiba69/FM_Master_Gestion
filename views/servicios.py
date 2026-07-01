@@ -1,10 +1,17 @@
+import sqlite3
 from datetime import date, datetime
 from tkinter import messagebox, ttk
 
 import customtkinter as ctk
 
 from models.servicio import Servicio
+from runtime_paths import DATABASE_PATH
 from services.servicio_service import ServicioService
+
+try:
+    from services.catalogo_service import CatalogoService
+except Exception:
+    CatalogoService = None
 
 
 class ServiciosWindow(ctk.CTkToplevel):
@@ -17,6 +24,8 @@ class ServiciosWindow(ctk.CTkToplevel):
         self.campos_formulario = {}
         self.activo_var = ctk.IntVar(value=1)
         self.renovable_var = ctk.IntVar(value=1)
+        self._catalogo_map = {}
+        self.catalogo_values = []
 
         self.title(f"Servicios - {cliente_nombre}")
         self.geometry("1180x700")
@@ -26,6 +35,10 @@ class ServiciosWindow(ctk.CTkToplevel):
         self.grab_set()
 
         self.crear_interfaz()
+        try:
+            self.cargar_catalogo_values()
+        except Exception:
+            pass
         self.cargar_servicios()
         self.limpiar_formulario()
 
@@ -76,6 +89,47 @@ class ServiciosWindow(ctk.CTkToplevel):
             text_color="#222222",
         ).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 8))
 
+        catalogo_frame = ctk.CTkFrame(formulario, fg_color="#FFFFFF", corner_radius=6)
+        catalogo_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(8, 10))
+        catalogo_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            catalogo_frame,
+            text="Seleccionar servicio del catálogo",
+            font=("Arial", 14, "bold"),
+            text_color="#222222",
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 4))
+
+        self.catalogo_cb = ctk.CTkComboBox(catalogo_frame, values=self.catalogo_values, width=260)
+        self.catalogo_cb.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+        self.catalogo_cb.set("")
+        self.catalogo_cb.bind("<<ComboboxSelected>>", lambda _e: self.aplicar_catalogo())
+
+        botones_catalogo = ctk.CTkFrame(catalogo_frame, fg_color="transparent")
+        botones_catalogo.grid(row=2, column=0, sticky="w", padx=12, pady=(0, 10))
+
+        self.boton_usar_catalogo = ctk.CTkButton(
+            botones_catalogo,
+            text="Usar servicio seleccionado",
+            width=220,
+            height=34,
+            fg_color="#C00000",
+            hover_color="#990000",
+            command=self.usar_servicio_catalogo,
+        )
+        self.boton_usar_catalogo.grid(row=0, column=0, padx=(0, 8))
+
+        self.boton_admin_catalogo = ctk.CTkButton(
+            botones_catalogo,
+            text="Administrar catálogo",
+            width=170,
+            height=34,
+            fg_color="#444444",
+            hover_color="#222222",
+            command=self.abrir_catalogo_informacion,
+        )
+        self.boton_admin_catalogo.grid(row=0, column=1)
+
         campos = (
             ("concepto", "Concepto *"),
             ("descripcion", "Descripcion"),
@@ -86,15 +140,17 @@ class ServiciosWindow(ctk.CTkToplevel):
             ("fecha_fin", "Fecha de fin"),
         )
         for fila, (clave, etiqueta) in enumerate(campos, start=1):
+            etiqueta_row = fila * 2 + 3
+            entrada_row = etiqueta_row + 1
             ctk.CTkLabel(formulario, text=etiqueta, anchor="w").grid(
-                row=fila * 2 - 1,
+                row=etiqueta_row,
                 column=0,
                 sticky="ew",
                 padx=16,
                 pady=(8, 0),
             )
             entrada = ctk.CTkEntry(formulario)
-            entrada.grid(row=fila * 2, column=0, sticky="ew", padx=16)
+            entrada.grid(row=entrada_row, column=0, sticky="ew", padx=16)
             self.campos_formulario[clave] = entrada
 
         self.campos_formulario["fecha_inicio"].bind(
@@ -114,7 +170,7 @@ class ServiciosWindow(ctk.CTkToplevel):
             fg_color="#C00000",
             hover_color="#990000",
         )
-        self.check_activo.grid(row=15, column=0, sticky="w", padx=16, pady=(18, 6))
+        self.check_activo.grid(row=25, column=0, sticky="w", padx=16, pady=(18, 6))
 
         self.check_renovable = ctk.CTkCheckBox(
             formulario,
@@ -125,7 +181,7 @@ class ServiciosWindow(ctk.CTkToplevel):
             fg_color="#C00000",
             hover_color="#990000",
         )
-        self.check_renovable.grid(row=16, column=0, sticky="w", padx=16, pady=(4, 14))
+        self.check_renovable.grid(row=26, column=0, sticky="w", padx=16, pady=(4, 14))
 
         tabla_frame = ctk.CTkFrame(contenido, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=0, column=1, sticky="nsew")
@@ -383,6 +439,97 @@ class ServiciosWindow(ctk.CTkToplevel):
         if limpiar_seleccion:
             self.tabla.selection_remove(self.tabla.selection())
         self.campos_formulario["concepto"].focus_set()
+
+    def _crear_tabla_catalogo_si_falta(self):
+        conn = sqlite3.connect(str(DATABASE_PATH))
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS catalogo_servicios(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                descripcion TEXT,
+                precio REAL NOT NULL DEFAULT 0,
+                activo INTEGER DEFAULT 1
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    def _seed_catalogo_inicial(self):
+        conn = sqlite3.connect(str(DATABASE_PATH))
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM catalogo_servicios")
+        if cur.fetchone()[0] > 0:
+            conn.close()
+            return
+        servicios = [
+            ("Publicidad rotativa", "Servicio de publicidad rotativa", 1500.0, 1),
+            ("Auspicio", "Auspicio de eventos o programas", 2500.0, 1),
+            ("Programa radial", "Publicidad en programa radial", 1800.0, 1),
+            ("Streaming", "Publicidad o contenido en streaming", 2200.0, 1),
+            ("Facebook", "Campaña publicitaria en Facebook", 1600.0, 1),
+            ("Instagram", "Campaña publicitaria en Instagram", 1700.0, 1),
+            ("Cobertura de eventos", "Cobertura y producción de eventos", 3000.0, 1),
+            ("Producción comercial", "Producción comercial y edición", 3500.0, 1),
+            ("Publicidad política", "Campaña política y difusión", 4000.0, 1),
+            ("Banner web", "Diseño y publicación de banner web", 1200.0, 1),
+            ("Publicidad especial", "Campaña publicitaria especial", 2800.0, 1),
+            ("Otro", "Otro tipo de servicio", 1000.0, 1),
+        ]
+        cur.executemany(
+            "INSERT INTO catalogo_servicios(nombre, descripcion, precio, activo) VALUES(?,?,?,?)",
+            servicios,
+        )
+        conn.commit()
+        conn.close()
+
+    def cargar_catalogo_values(self):
+        self._crear_tabla_catalogo_si_falta()
+        self._seed_catalogo_inicial()
+
+        conn = sqlite3.connect(str(DATABASE_PATH))
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, nombre, descripcion, precio, activo FROM catalogo_servicios WHERE activo=1 ORDER BY nombre"
+        )
+        filas = cur.fetchall()
+        conn.close()
+
+        self._catalogo_map = {}
+        valores = []
+        for fila in filas:
+            display = f"{fila[1]} - {self.formatear_moneda(fila[3])}"
+            valores.append(display)
+            self._catalogo_map[display] = fila
+
+        try:
+            self.catalogo_cb.configure(values=valores)
+            self.catalogo_cb.set("")
+        except Exception:
+            pass
+
+    def aplicar_catalogo(self):
+        seleccionado = self.catalogo_cb.get()
+        if not seleccionado:
+            return
+        info = getattr(self, '_catalogo_map', {}).get(seleccionado)
+        if not info:
+            return
+        self.establecer_campo('concepto', info[1] or '')
+        self.establecer_campo('descripcion', info[2] or '')
+        self.establecer_campo('importe', f"{float(info[3] or 0):.2f}")
+
+    def usar_servicio_catalogo(self):
+        self.aplicar_catalogo()
+        if self.campos_formulario['concepto'].get().strip():
+            self.campos_formulario['importe'].focus_set()
+
+    def abrir_catalogo_informacion(self):
+        messagebox.showinfo(
+            'Catálogo',
+            'Puede administrar los precios base desde Configuración > Catálogo de Servicios.',
+            parent=self,
+        )
 
     def obtener_servicio_formulario(self, id_servicio=None):
         concepto = self.campos_formulario["concepto"].get().strip()

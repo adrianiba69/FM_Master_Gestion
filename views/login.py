@@ -7,8 +7,9 @@ from services.usuario_service import UsuarioService
 class LoginWindow(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
-        self.transient(master)
+        self.transient(master.winfo_toplevel())
         self.grab_set()
+        self.lift()
         self.title("Login")
         self.geometry("360x200")
         self.resizable(False, False)
