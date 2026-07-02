@@ -1,0 +1,412 @@
+from copy import deepcopy
+from tkinter import ttk
+
+import customtkinter as ctk
+
+from config import COLOR_BLANCO, COLOR_NEGRO, COLOR_PRINCIPAL
+
+
+class FichaClienteFrame(ctk.CTkFrame):
+    MOCK_DATA = {
+        "datos_generales": {
+            "codigo": "CLI-024",
+            "razon_social": "Comercial Delta SRL",
+            "nombre_comercial": "Delta Hogar",
+            "responsable": "Mariana Figueroa",
+            "telefono": "2921 402233",
+            "whatsapp": "2921 501122",
+            "email": "administracion@deltahogar.com",
+            "direccion": "Av. Colón 1450",
+            "localidad": "Bahía Blanca",
+            "estado": "Activo",
+        },
+        "servicios_activos": [
+            ("Publicidad Rotativa", "Activa", "Plan Mensual", "05/07/2026"),
+            ("Menciones en Vivo", "Activa", "Pack Comercial", "12/07/2026"),
+            ("Story WhatsApp", "Activa", "Semanal", "04/07/2026"),
+        ],
+        "ultimos_resumenes": [
+            ("R-000184", "25/06/2026", "$ 148.500", "Pendiente"),
+            ("R-000176", "25/05/2026", "$ 132.000", "Pagado"),
+            ("R-000169", "25/04/2026", "$ 118.400", "Pagado"),
+        ],
+        "ultimos_cobros": [
+            ("27/06/2026", "$ 80.000", "Transferencia", "Aplicado"),
+            ("14/06/2026", "$ 52.000", "Efectivo", "Aplicado"),
+            ("29/05/2026", "$ 132.000", "Transferencia", "Aplicado"),
+        ],
+        "proximo_vencimiento": {
+            "fecha": "05/07/2026",
+            "concepto": "Publicidad Rotativa - Julio",
+            "importe": "$ 68.500",
+            "estado": "Vence en 3 días",
+        },
+        "observaciones": (
+            "Cliente con buena respuesta en campañas de rotación. "
+            "Solicita recordatorios por WhatsApp antes del vencimiento."
+        ),
+    }
+
+    def __init__(self, master, cliente_data=None, callbacks=None):
+        super().__init__(master, fg_color=COLOR_BLANCO, corner_radius=0)
+        self.callbacks = callbacks or {}
+        self.cliente_data = self._normalizar_cliente_data(cliente_data)
+        self._crear_estilo_tablas()
+        self._crear_interfaz()
+        self.cargar_cliente(self.cliente_data)
+
+    def _normalizar_cliente_data(self, cliente_data):
+        datos = deepcopy(self.MOCK_DATA)
+        if not cliente_data:
+            return datos
+
+        for clave, valor in cliente_data.items():
+            if isinstance(valor, dict) and isinstance(datos.get(clave), dict):
+                datos[clave].update(valor)
+            elif valor is not None:
+                datos[clave] = valor
+
+        return datos
+
+    def _crear_estilo_tablas(self):
+        estilo = ttk.Style()
+        try:
+            estilo.theme_use("clam")
+        except Exception:
+            pass
+
+        estilo.configure(
+            "FichaCliente.Treeview",
+            background=COLOR_BLANCO,
+            fieldbackground=COLOR_BLANCO,
+            foreground="#202020",
+            rowheight=30,
+            borderwidth=0,
+            font=("Arial", 11),
+        )
+        estilo.configure(
+            "FichaCliente.Treeview.Heading",
+            background=COLOR_NEGRO,
+            foreground=COLOR_BLANCO,
+            relief="flat",
+            font=("Arial", 11, "bold"),
+        )
+        estilo.map(
+            "FichaCliente.Treeview",
+            background=[("selected", COLOR_PRINCIPAL)],
+            foreground=[("selected", COLOR_BLANCO)],
+        )
+        estilo.map(
+            "FichaCliente.Treeview.Heading",
+            background=[("active", COLOR_PRINCIPAL)],
+        )
+
+    def _crear_interfaz(self):
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        self._crear_encabezado()
+
+        contenedor = ctk.CTkScrollableFrame(
+            self,
+            fg_color=COLOR_BLANCO,
+            scrollbar_button_color=COLOR_PRINCIPAL,
+            scrollbar_button_hover_color="#990000",
+        )
+        contenedor.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
+        contenedor.grid_columnconfigure(0, weight=3)
+        contenedor.grid_columnconfigure(1, weight=2)
+
+        self._crear_panel_izquierdo(contenedor)
+        self._crear_panel_derecho(contenedor)
+
+    def _crear_encabezado(self):
+        encabezado = ctk.CTkFrame(self, fg_color=COLOR_NEGRO, corner_radius=0, height=88)
+        encabezado.grid(row=0, column=0, sticky="ew")
+        encabezado.grid_columnconfigure(0, weight=1)
+
+        textos = ctk.CTkFrame(encabezado, fg_color="transparent")
+        textos.grid(row=0, column=0, sticky="w", padx=24, pady=16)
+
+        self.titulo_label = ctk.CTkLabel(
+            textos,
+            text="FICHA ÚNICA DEL CLIENTE",
+            font=("Arial", 26, "bold"),
+            text_color=COLOR_BLANCO,
+        )
+        self.titulo_label.pack(anchor="w")
+
+        self.subtitulo_label = ctk.CTkLabel(
+            textos,
+            text="Vista preliminar",
+            font=("Arial", 12, "bold"),
+            text_color="#D9D9D9",
+        )
+        self.subtitulo_label.pack(anchor="w", pady=(4, 0))
+
+        botones = ctk.CTkFrame(encabezado, fg_color="transparent")
+        botones.grid(row=0, column=1, sticky="e", padx=24, pady=16)
+
+        acciones = [
+            ("Nuevo Resumen", "nuevo_resumen", COLOR_PRINCIPAL),
+            ("Registrar Cobro", "registrar_cobro", "#333333"),
+            ("Nueva Tarea", "nueva_tarea", "#333333"),
+            ("Editar Cliente", "editar_cliente", "#333333"),
+            ("WhatsApp", "whatsapp", "#0E6E3A"),
+            ("Cerrar", "cerrar", "#6B6B6B"),
+        ]
+
+        for indice, (texto, accion, color) in enumerate(acciones):
+            boton = ctk.CTkButton(
+                botones,
+                text=texto,
+                width=124,
+                height=34,
+                fg_color=color,
+                hover_color=COLOR_PRINCIPAL if accion != "cerrar" else "#444444",
+                command=lambda nombre=accion: self._ejecutar_accion(nombre),
+            )
+            boton.grid(row=indice // 3, column=indice % 3, padx=4, pady=4)
+
+    def _crear_panel_izquierdo(self, parent):
+        panel = ctk.CTkFrame(parent, fg_color="transparent")
+        panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=(6, 0))
+        panel.grid_columnconfigure(0, weight=1)
+
+        self._crear_tarjeta_datos_generales(panel).grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        self._crear_tarjeta_tabla(
+            panel,
+            titulo="SERVICIOS ACTIVOS",
+            columnas=("servicio", "estado", "plan", "vencimiento"),
+            encabezados={
+                "servicio": ("Servicio", 210),
+                "estado": ("Estado", 90),
+                "plan": ("Plan", 120),
+                "vencimiento": ("Vencimiento", 110),
+            },
+            atributo_tabla="tabla_servicios",
+            altura=5,
+        ).grid(row=1, column=0, sticky="nsew", pady=(0, 12))
+        self._crear_tarjeta_tabla(
+            panel,
+            titulo="ÚLTIMOS RESÚMENES",
+            columnas=("numero", "fecha", "importe", "estado"),
+            encabezados={
+                "numero": ("Resumen", 110),
+                "fecha": ("Fecha", 100),
+                "importe": ("Importe", 110),
+                "estado": ("Estado", 110),
+            },
+            atributo_tabla="tabla_resumenes",
+            altura=5,
+        ).grid(row=2, column=0, sticky="nsew")
+
+    def _crear_panel_derecho(self, parent):
+        panel = ctk.CTkFrame(parent, fg_color="transparent")
+        panel.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=(6, 0))
+        panel.grid_columnconfigure(0, weight=1)
+
+        self._crear_tarjeta_proximo_vencimiento(panel).grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        self._crear_tarjeta_tabla(
+            panel,
+            titulo="ÚLTIMOS COBROS",
+            columnas=("fecha", "importe", "medio", "estado"),
+            encabezados={
+                "fecha": ("Fecha", 95),
+                "importe": ("Importe", 100),
+                "medio": ("Medio", 110),
+                "estado": ("Estado", 95),
+            },
+            atributo_tabla="tabla_cobros",
+            altura=5,
+        ).grid(row=1, column=0, sticky="nsew", pady=(0, 12))
+        self._crear_tarjeta_observaciones(panel).grid(row=2, column=0, sticky="nsew")
+
+    def _crear_tarjeta_datos_generales(self, parent):
+        tarjeta = self._crear_tarjeta_base(parent, "DATOS GENERALES")
+        contenido = ctk.CTkFrame(tarjeta, fg_color="transparent")
+        contenido.pack(fill="both", expand=True, padx=18, pady=(0, 16))
+        for columna in range(2):
+            contenido.grid_columnconfigure(columna, weight=1)
+
+        campos = [
+            ("codigo", "Código"),
+            ("razon_social", "Razón Social"),
+            ("nombre_comercial", "Nombre Comercial"),
+            ("responsable", "Responsable"),
+            ("telefono", "Teléfono"),
+            ("whatsapp", "WhatsApp"),
+            ("email", "Email"),
+            ("direccion", "Dirección"),
+            ("localidad", "Localidad"),
+            ("estado", "Estado"),
+        ]
+
+        self.labels_datos = {}
+        for indice, (clave, titulo) in enumerate(campos):
+            fila = indice // 2
+            columna = indice % 2
+            bloque = ctk.CTkFrame(contenido, fg_color="#F6F6F6", corner_radius=6)
+            bloque.grid(row=fila, column=columna, sticky="ew", padx=6, pady=6)
+            ctk.CTkLabel(
+                bloque,
+                text=titulo,
+                font=("Arial", 11, "bold"),
+                text_color=COLOR_PRINCIPAL,
+            ).pack(anchor="w", padx=12, pady=(10, 2))
+            valor = ctk.CTkLabel(
+                bloque,
+                text="-",
+                font=("Arial", 12),
+                text_color="#1F1F1F",
+                justify="left",
+                wraplength=240,
+            )
+            valor.pack(anchor="w", padx=12, pady=(0, 10))
+            self.labels_datos[clave] = valor
+
+        return tarjeta
+
+    def _crear_tarjeta_proximo_vencimiento(self, parent):
+        tarjeta = self._crear_tarjeta_base(parent, "PRÓXIMO VENCIMIENTO")
+        cuerpo = ctk.CTkFrame(tarjeta, fg_color=COLOR_PRINCIPAL, corner_radius=8)
+        cuerpo.pack(fill="x", padx=18, pady=(0, 18))
+
+        self.label_vencimiento_fecha = ctk.CTkLabel(
+            cuerpo,
+            text="-",
+            font=("Arial", 22, "bold"),
+            text_color=COLOR_BLANCO,
+        )
+        self.label_vencimiento_fecha.pack(anchor="w", padx=16, pady=(16, 4))
+
+        self.label_vencimiento_concepto = ctk.CTkLabel(
+            cuerpo,
+            text="-",
+            font=("Arial", 13, "bold"),
+            text_color=COLOR_BLANCO,
+            justify="left",
+            wraplength=320,
+        )
+        self.label_vencimiento_concepto.pack(anchor="w", padx=16)
+
+        self.label_vencimiento_importe = ctk.CTkLabel(
+            cuerpo,
+            text="-",
+            font=("Arial", 18, "bold"),
+            text_color="#FFE7E7",
+        )
+        self.label_vencimiento_importe.pack(anchor="w", padx=16, pady=(10, 0))
+
+        self.label_vencimiento_estado = ctk.CTkLabel(
+            cuerpo,
+            text="-",
+            font=("Arial", 12),
+            text_color="#FFF2F2",
+        )
+        self.label_vencimiento_estado.pack(anchor="w", padx=16, pady=(4, 16))
+
+        return tarjeta
+
+    def _crear_tarjeta_observaciones(self, parent):
+        tarjeta = self._crear_tarjeta_base(parent, "OBSERVACIONES")
+        self.observaciones_box = ctk.CTkTextbox(
+            tarjeta,
+            height=210,
+            fg_color="#F7F7F7",
+            border_width=1,
+            border_color="#D6D6D6",
+            text_color="#202020",
+            wrap="word",
+        )
+        self.observaciones_box.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        self.observaciones_box.configure(state="disabled")
+        return tarjeta
+
+    def _crear_tarjeta_tabla(self, parent, titulo, columnas, encabezados, atributo_tabla, altura):
+        tarjeta = self._crear_tarjeta_base(parent, titulo)
+        contenedor_tabla = ctk.CTkFrame(tarjeta, fg_color="transparent")
+        contenedor_tabla.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        contenedor_tabla.grid_rowconfigure(0, weight=1)
+        contenedor_tabla.grid_columnconfigure(0, weight=1)
+
+        tabla = ttk.Treeview(
+            contenedor_tabla,
+            columns=columnas,
+            show="headings",
+            height=altura,
+            style="FichaCliente.Treeview",
+        )
+        for columna in columnas:
+            texto, ancho = encabezados[columna]
+            tabla.heading(columna, text=texto)
+            tabla.column(columna, width=ancho, anchor="w", stretch=columna == columnas[0])
+
+        scroll = ttk.Scrollbar(contenedor_tabla, orient="vertical", command=tabla.yview)
+        tabla.configure(yscrollcommand=scroll.set)
+        tabla.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+
+        setattr(self, atributo_tabla, tabla)
+        return tarjeta
+
+    def _crear_tarjeta_base(self, parent, titulo):
+        tarjeta = ctk.CTkFrame(parent, fg_color=COLOR_BLANCO, corner_radius=10, border_width=1, border_color="#DADADA")
+        ctk.CTkLabel(
+            tarjeta,
+            text=titulo,
+            font=("Arial", 15, "bold"),
+            text_color=COLOR_NEGRO,
+        ).pack(anchor="w", padx=18, pady=(16, 12))
+        return tarjeta
+
+    def cargar_cliente(self, cliente_data):
+        self.cliente_data = self._normalizar_cliente_data(cliente_data)
+
+        datos_generales = self.cliente_data.get("datos_generales", {})
+        razon_social = datos_generales.get("razon_social") or "Cliente sin nombre"
+        codigo = datos_generales.get("codigo") or "S/C"
+        self.titulo_label.configure(text=f"FICHA ÚNICA DEL CLIENTE · {razon_social}")
+        self.subtitulo_label.configure(text=f"Código {codigo} · Estado {datos_generales.get('estado', 'Sin definir')}")
+
+        for clave, label in self.labels_datos.items():
+            label.configure(text=datos_generales.get(clave) or "-")
+
+        self._cargar_tabla(self.tabla_servicios, self.cliente_data.get("servicios_activos", []))
+        self._cargar_tabla(self.tabla_resumenes, self.cliente_data.get("ultimos_resumenes", []))
+        self._cargar_tabla(self.tabla_cobros, self.cliente_data.get("ultimos_cobros", []))
+
+        proximo_vencimiento = self.cliente_data.get("proximo_vencimiento", {})
+        self.label_vencimiento_fecha.configure(text=proximo_vencimiento.get("fecha") or "-")
+        self.label_vencimiento_concepto.configure(text=proximo_vencimiento.get("concepto") or "-")
+        self.label_vencimiento_importe.configure(text=proximo_vencimiento.get("importe") or "-")
+        self.label_vencimiento_estado.configure(text=proximo_vencimiento.get("estado") or "-")
+
+        self.observaciones_box.configure(state="normal")
+        self.observaciones_box.delete("1.0", "end")
+        self.observaciones_box.insert("1.0", self.cliente_data.get("observaciones") or "Sin observaciones registradas.")
+        self.observaciones_box.configure(state="disabled")
+
+    def _cargar_tabla(self, tabla, filas):
+        for item in tabla.get_children():
+            tabla.delete(item)
+
+        if filas:
+            for fila in filas:
+                tabla.insert("", "end", values=fila)
+            return
+
+        tabla.insert("", "end", values=("Sin registros", "-", "-", "-"))
+
+    def _ejecutar_accion(self, nombre_accion):
+        callback = self.callbacks.get(nombre_accion)
+        if callable(callback):
+            callback(self.cliente_data)
+            return
+
+        if nombre_accion == "cerrar":
+            contenedor = self.winfo_toplevel()
+            if contenedor is self:
+                self.destroy()
+            elif hasattr(contenedor, "destroy"):
+                contenedor.destroy()
