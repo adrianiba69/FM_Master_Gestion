@@ -4,47 +4,35 @@ from tkinter import ttk
 import customtkinter as ctk
 
 from config import COLOR_BLANCO, COLOR_NEGRO, COLOR_PRINCIPAL
+from services.cliente_service import ClienteService
 
 
 class FichaClienteFrame(ctk.CTkFrame):
     MOCK_DATA = {
         "datos_generales": {
-            "codigo": "CLI-024",
-            "razon_social": "Comercial Delta SRL",
-            "nombre_comercial": "Delta Hogar",
-            "responsable": "Mariana Figueroa",
-            "telefono": "2921 402233",
-            "whatsapp": "2921 501122",
-            "email": "administracion@deltahogar.com",
-            "direccion": "Av. Colón 1450",
-            "localidad": "Bahía Blanca",
-            "estado": "Activo",
+            "codigo": "",
+            "razon_social": "",
+            "nombre_comercial": "",
+            "responsable": "",
+            "cuit": "",
+            "iva": "",
+            "telefono": "",
+            "whatsapp": "",
+            "email": "",
+            "direccion": "",
+            "localidad": "",
+            "estado": "",
         },
-        "servicios_activos": [
-            ("Publicidad Rotativa", "Activa", "Plan Mensual", "05/07/2026"),
-            ("Menciones en Vivo", "Activa", "Pack Comercial", "12/07/2026"),
-            ("Story WhatsApp", "Activa", "Semanal", "04/07/2026"),
-        ],
-        "ultimos_resumenes": [
-            ("R-000184", "25/06/2026", "$ 148.500", "Pendiente"),
-            ("R-000176", "25/05/2026", "$ 132.000", "Pagado"),
-            ("R-000169", "25/04/2026", "$ 118.400", "Pagado"),
-        ],
-        "ultimos_cobros": [
-            ("27/06/2026", "$ 80.000", "Transferencia", "Aplicado"),
-            ("14/06/2026", "$ 52.000", "Efectivo", "Aplicado"),
-            ("29/05/2026", "$ 132.000", "Transferencia", "Aplicado"),
-        ],
+        "servicios_activos": [],
+        "ultimos_resumenes": [],
+        "ultimos_cobros": [],
         "proximo_vencimiento": {
-            "fecha": "05/07/2026",
-            "concepto": "Publicidad Rotativa - Julio",
-            "importe": "$ 68.500",
-            "estado": "Vence en 3 días",
+            "fecha": "",
+            "concepto": "",
+            "importe": "",
+            "estado": "",
         },
-        "observaciones": (
-            "Cliente con buena respuesta en campañas de rotación. "
-            "Solicita recordatorios por WhatsApp antes del vencimiento."
-        ),
+        "observaciones": "",
     }
 
     def __init__(self, master, cliente_data=None, callbacks=None):
@@ -57,14 +45,44 @@ class FichaClienteFrame(ctk.CTkFrame):
 
     def _normalizar_cliente_data(self, cliente_data):
         datos = deepcopy(self.MOCK_DATA)
+        cliente_id = None
+        if isinstance(cliente_data, int):
+            cliente_id = cliente_data
+        elif isinstance(cliente_data, dict):
+            cliente_id = cliente_data.get("cliente_id") or cliente_data.get("id")
+        elif isinstance(cliente_data, (list, tuple)) and cliente_data:
+            primer_valor = cliente_data[0]
+            if isinstance(primer_valor, int):
+                cliente_id = primer_valor
+
+        if cliente_id:
+            fila = ClienteService.obtener(cliente_id)
+            if fila:
+                datos["datos_generales"].update({
+                    "codigo": fila[1],
+                    "razon_social": fila[2],
+                    "nombre_comercial": fila[3],
+                    "responsable": fila[4],
+                    "direccion": fila[5],
+                    "localidad": fila[6],
+                    "telefono": fila[7],
+                    "whatsapp": fila[8],
+                    "email": fila[9],
+                    "cuit": fila[10],
+                    "iva": fila[11],
+                    "estado": fila[15],
+                })
+                datos["observaciones"] = fila[16] or ""
+
         if not cliente_data:
             return datos
 
-        for clave, valor in cliente_data.items():
-            if isinstance(valor, dict) and isinstance(datos.get(clave), dict):
-                datos[clave].update(valor)
-            elif valor is not None:
-                datos[clave] = valor
+        if isinstance(cliente_data, dict):
+            for clave, valor in cliente_data.items():
+                if isinstance(valor, dict) and isinstance(datos.get(clave), dict):
+                    datos[clave].update(valor)
+                elif valor is not None:
+                    datos[clave] = valor
 
         return datos
 
@@ -234,6 +252,8 @@ class FichaClienteFrame(ctk.CTkFrame):
             ("razon_social", "Razón Social"),
             ("nombre_comercial", "Nombre Comercial"),
             ("responsable", "Responsable"),
+            ("cuit", "CUIT"),
+            ("iva", "IVA"),
             ("telefono", "Teléfono"),
             ("whatsapp", "WhatsApp"),
             ("email", "Email"),
