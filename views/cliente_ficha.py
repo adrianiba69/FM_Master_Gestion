@@ -285,6 +285,37 @@ class FichaClienteFrame(ctk.CTkFrame):
             valor.pack(anchor="w", padx=12, pady=(0, 10))
             self.labels_datos[clave] = valor
 
+        fila_servicios = (len(campos) + 1) // 2
+        bloque_servicio = ctk.CTkFrame(contenido, fg_color="#F6F6F6", corner_radius=8)
+        bloque_servicio.grid(row=fila_servicios, column=0, columnspan=2, sticky="ew", padx=6, pady=(8, 6))
+
+        ctk.CTkLabel(
+            bloque_servicio,
+            text="Servicios activos",
+            font=("Arial", 12, "bold"),
+            text_color=COLOR_PRINCIPAL,
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        self.label_servicio_activo = ctk.CTkLabel(
+            bloque_servicio,
+            text="Sin servicios activos registrados",
+            font=("Arial", 12),
+            text_color="#1F1F1F",
+            justify="left",
+            wraplength=520,
+        )
+        self.label_servicio_activo.pack(anchor="w", padx=12, pady=(0, 4))
+
+        self.label_importe_servicio = ctk.CTkLabel(
+            bloque_servicio,
+            text="",
+            font=("Arial", 12, "bold"),
+            text_color="#1F1F1F",
+        )
+        self.label_importe_servicio.pack(anchor="w", padx=12, pady=(0, 10))
+
+        contenido.grid_rowconfigure(fila_servicios, weight=0)
+
         return tarjeta
 
     def _crear_tarjeta_proximo_vencimiento(self, parent):
@@ -391,6 +422,28 @@ class FichaClienteFrame(ctk.CTkFrame):
 
         for clave, label in self.labels_datos.items():
             label.configure(text=datos_generales.get(clave) or "-")
+
+        servicio = self.cliente_data.get("servicio")
+        if not servicio:
+            servicio = datos_generales.get("servicio")
+        importe = self.cliente_data.get("importe")
+        if importe is None:
+            importe = datos_generales.get("importe")
+
+        if servicio:
+            self.label_servicio_activo.configure(text=str(servicio))
+            try:
+                importe_parse = importe
+                if isinstance(importe_parse, str):
+                    importe_parse = importe_parse.replace("$", "").replace(" ", "").replace(".", "").replace(",", ".")
+                importe_num = float(importe_parse)
+                importe_texto = f"$ {importe_num:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+                self.label_importe_servicio.configure(text=f"Importe: {importe_texto}")
+            except (TypeError, ValueError):
+                self.label_importe_servicio.configure(text="")
+        else:
+            self.label_servicio_activo.configure(text="Sin servicios activos registrados")
+            self.label_importe_servicio.configure(text="")
 
         self._cargar_tabla(self.tabla_servicios, self.cliente_data.get("servicios_activos", []))
         self._cargar_tabla(self.tabla_resumenes, self.cliente_data.get("ultimos_resumenes", []))

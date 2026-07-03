@@ -6,6 +6,7 @@ import customtkinter as ctk
 from models.cliente import Cliente
 from services.cliente_service import ClienteService
 from services.contacto_service import ContactoService
+from views.cliente_ficha import FichaClienteFrame
 from views.crm import CRMWindow
 from views.servicios import ServiciosWindow
 
@@ -186,7 +187,7 @@ class ClientesFrame(ctk.CTkFrame):
             self.tabla.heading(columna, text=texto)
             self.tabla.column(columna, width=ancho, anchor="w")
 
-        self.tabla.bind("<Double-1>", lambda _event: self.modificar_cliente_seleccionado())
+        self.tabla.bind("<Double-1>", lambda _event: self.abrir_ficha_cliente())
         self.tabla.tag_configure("verde", foreground="#16823A")
         self.tabla.tag_configure("amarillo", foreground="#B88600")
         self.tabla.tag_configure("rojo", foreground="#C00000")
@@ -231,6 +232,21 @@ class ClientesFrame(ctk.CTkFrame):
             return None
 
         return int(valores[0])
+
+    def abrir_ficha_cliente(self):
+        id_cliente = self.obtener_id_seleccionado()
+        if id_cliente is None:
+            messagebox.showwarning("Atencion", "Seleccione un cliente para abrir la ficha.")
+            return
+
+        ventana = ctk.CTkToplevel(self)
+        ventana.title("Ficha Única del Cliente")
+        ventana.geometry("1320x820")
+        ventana.minsize(1080, 700)
+        ventana.transient(self.winfo_toplevel())
+
+        ficha = FichaClienteFrame(ventana, cliente_data=id_cliente)
+        ficha.pack(fill="both", expand=True)
 
     def abrir_ventana_nuevo_cliente(self):
         self.abrir_formulario(titulo="Nuevo Cliente", cliente=None)
