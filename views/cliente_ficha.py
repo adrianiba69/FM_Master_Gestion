@@ -6,6 +6,7 @@ import customtkinter as ctk
 from config import COLOR_BLANCO, COLOR_NEGRO, COLOR_PRINCIPAL
 from services.cliente_service import ClienteService
 from services.cobro_service import CobroService
+from services.contacto_service import ContactoService
 from services.resumen_service import ResumenService
 from services.servicio_service import ServicioService
 
@@ -29,6 +30,7 @@ class FichaClienteFrame(ctk.CTkFrame):
         "servicios_activos": [],
         "ultimos_resumenes": [],
         "ultimos_cobros": [],
+        "historial_crm": [],
         "cuenta_corriente": {
             "saldo_pendiente": "",
             "total_cobrado": "",
@@ -113,6 +115,29 @@ class FichaClienteFrame(ctk.CTkFrame):
                         resumen[7] or "-",
                     )
                     for resumen in resumenes[:5]
+                ]
+
+            contactos = ContactoService.listar(cliente_id=cliente_id)
+            if contactos:
+                datos["historial_crm"] = [
+                    (
+                        contacto[2] or "-",
+                        contacto[3] or "-",
+                        contacto[4] or "-",
+                        contacto[5] or "-",
+                        contacto[6] or "-",
+                    )
+                    for contacto in contactos[:5]
+                ]
+
+                datos["ultimos_cobros"] = [
+                    (
+                        contacto[2] or "-",
+                        contacto[3] or "-",
+                        contacto[4] or "-",
+                        f"{contacto[5] or '-'} | {contacto[6] or '-'}",
+                    )
+                    for contacto in contactos[:5]
                 ]
 
         if not cliente_data:
@@ -289,7 +314,21 @@ class FichaClienteFrame(ctk.CTkFrame):
             atributo_tabla="tabla_cobros",
             altura=5,
         ).grid(row=1, column=0, sticky="nsew", pady=(0, 12))
-        self._crear_tarjeta_observaciones(panel).grid(row=2, column=0, sticky="nsew")
+        self._crear_tarjeta_tabla(
+            panel,
+            titulo="CRM / HISTORIAL",
+            columnas=("fecha", "hora", "tipo", "resultado", "observaciones"),
+            encabezados={
+                "fecha": ("Fecha", 90),
+                "hora": ("Hora", 70),
+                "tipo": ("Tipo", 95),
+                "resultado": ("Resultado", 100),
+                "observaciones": ("Observaciones", 150),
+            },
+            atributo_tabla="tabla_crm",
+            altura=5,
+        ).grid(row=2, column=0, sticky="nsew", pady=(0, 12))
+        self._crear_tarjeta_observaciones(panel).grid(row=3, column=0, sticky="nsew")
 
     def _crear_tarjeta_datos_generales(self, parent):
         tarjeta = self._crear_tarjeta_base(parent, "DATOS GENERALES")
@@ -497,6 +536,7 @@ class FichaClienteFrame(ctk.CTkFrame):
         self._cargar_tabla(self.tabla_servicios, servicios_activos)
         self._cargar_tabla(self.tabla_resumenes, self.cliente_data.get("ultimos_resumenes", []))
         self._cargar_tabla(self.tabla_cobros, self.cliente_data.get("ultimos_cobros", []))
+        self._cargar_tabla(self.tabla_crm, self.cliente_data.get("historial_crm", []))
 
         cuenta_corriente = self.cliente_data.get("cuenta_corriente", {})
         self.label_vencimiento_fecha.configure(
