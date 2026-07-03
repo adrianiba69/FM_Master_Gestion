@@ -1,4 +1,5 @@
 from datetime import datetime
+from types import MethodType
 from tkinter import messagebox, ttk
 
 import customtkinter as ctk
@@ -261,6 +262,11 @@ class ClientesFrame(ctk.CTkFrame):
             parent_toplevel=ficha.winfo_toplevel(),
             on_cambio=lambda: ficha.cargar_cliente(id_cliente),
         )
+        callbacks["nueva_tarea"] = lambda _cliente_data: self._abrir_nueva_tarea_desde_ficha(
+            id_cliente,
+            parent_toplevel=ficha.winfo_toplevel(),
+            on_guardado=lambda: ficha.cargar_cliente(id_cliente),
+        )
         ficha.pack(fill="both", expand=True)
 
     def _editar_cliente_desde_ficha(self, id_cliente, on_guardado=None):
@@ -285,6 +291,43 @@ class ClientesFrame(ctk.CTkFrame):
             aplicacion.focus_force()
         if parent_toplevel is not None and hasattr(parent_toplevel, "lift"):
             parent_toplevel.lower()
+
+    def _abrir_nueva_tarea_desde_ficha(self, id_cliente, parent_toplevel=None, on_guardado=None):
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_agenda"):
+            aplicacion.mostrar_agenda(cliente_id=id_cliente, nueva_tarea=True)
+            aplicacion.lift()
+            aplicacion.focus_force()
+
+            panel = getattr(aplicacion, "panel", None)
+            agenda_frame = None
+            if panel is not None and hasattr(panel, "winfo_children"):
+                for child in panel.winfo_children():
+                    if hasattr(child, "guardar_formulario") and hasattr(child, "abrir_nueva_tarea"):
+                        agenda_frame = child
+                        break
+
+            if agenda_frame is not None and callable(on_guardado):
+                self._instalar_hook_refresco_ficha_en_agenda(agenda_frame, on_guardado)
+
+        if parent_toplevel is not None and hasattr(parent_toplevel, "lift"):
+            parent_toplevel.lower()
+
+    @staticmethod
+    def _instalar_hook_refresco_ficha_en_agenda(agenda_frame, on_guardado):
+        agenda_frame._ficha_on_guardado = on_guardado
+        if getattr(agenda_frame, "_ficha_refresh_hook_instalado", False):
+            return
+
+        guardar_original = agenda_frame.guardar_formulario
+
+        def guardar_formulario_con_refresco(self, ventana, tarea_original=None):
+            guardar_original(ventana, tarea_original)
+            if callable(getattr(self, "_ficha_on_guardado", None)) and not ventana.winfo_exists():
+                self._ficha_on_guardado()
+
+        agenda_frame.guardar_formulario = MethodType(guardar_formulario_con_refresco, agenda_frame)
+        agenda_frame._ficha_refresh_hook_instalado = True
 
     def _abrir_cobros_desde_ficha(self, id_cliente, parent_toplevel=None, on_cambio=None):
         ventana = ctk.CTkToplevel(self)
