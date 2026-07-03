@@ -43,7 +43,7 @@ class FichaClienteFrame(ctk.CTkFrame):
 
     def __init__(self, master, cliente_data=None, callbacks=None):
         super().__init__(master, fg_color=COLOR_BLANCO, corner_radius=0)
-        self.callbacks = callbacks or {}
+        self.callbacks = callbacks if callbacks is not None else {}
         self.cliente_data = self._normalizar_cliente_data(cliente_data)
         self._crear_estilo_tablas()
         self._crear_interfaz()

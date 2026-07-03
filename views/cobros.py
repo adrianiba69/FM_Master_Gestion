@@ -11,9 +11,10 @@ from services.cobro_service import CobroService
 class CobrosFrame(ctk.CTkFrame):
     FORMAS_PAGO = ["Efectivo", "Transferencia", "Deposito", "Cheque", "Tarjeta", "Otro"]
 
-    def __init__(self, master, cliente_id=None):
+    def __init__(self, master, cliente_id=None, on_cambio=None):
         super().__init__(master, fg_color="white", corner_radius=0)
         self.cliente_inicial = cliente_id
+        self.on_cambio = on_cambio
         self.clientes_por_nombre = {}
         self.campos_formulario = {}
         self.crear_interfaz()
@@ -402,6 +403,8 @@ class CobrosFrame(ctk.CTkFrame):
             CobroService.guardar(cobro)
         ventana.destroy()
         self.actualizar_cuenta()
+        if callable(self.on_cambio):
+            self.on_cambio()
         self.pestanas.select(1)
         messagebox.showinfo(
             "Cobros",

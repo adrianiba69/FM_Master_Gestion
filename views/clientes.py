@@ -6,6 +6,7 @@ import customtkinter as ctk
 from models.cliente import Cliente
 from services.cliente_service import ClienteService
 from services.contacto_service import ContactoService
+from views.cobros import CobrosFrame
 from views.cliente_ficha import FichaClienteFrame
 from views.crm import CRMWindow
 from views.servicios import ServiciosWindow
@@ -245,16 +246,30 @@ class ClientesFrame(ctk.CTkFrame):
         ventana.minsize(1080, 700)
         ventana.transient(self.winfo_toplevel())
 
-        callbacks = {
-            "registrar_cobro": lambda _cliente_data: self._abrir_cobros_desde_ficha(id_cliente),
-        }
+        callbacks = {}
         ficha = FichaClienteFrame(ventana, cliente_data=id_cliente, callbacks=callbacks)
+        callbacks["registrar_cobro"] = lambda _cliente_data: self._abrir_cobros_desde_ficha(
+            id_cliente,
+            parent_toplevel=ficha.winfo_toplevel(),
+            on_cambio=lambda: ficha.cargar_cliente(id_cliente),
+        )
         ficha.pack(fill="both", expand=True)
 
-    def _abrir_cobros_desde_ficha(self, id_cliente):
-        aplicacion = self.winfo_toplevel()
-        if hasattr(aplicacion, "mostrar_cobros"):
-            aplicacion.mostrar_cobros(cliente_id=id_cliente)
+    def _abrir_cobros_desde_ficha(self, id_cliente, parent_toplevel=None, on_cambio=None):
+        ventana = ctk.CTkToplevel(self)
+        ventana.title("Cuenta Corriente y Cobros")
+        ventana.geometry("1280x820")
+        ventana.minsize(1080, 700)
+        if parent_toplevel is not None:
+            ventana.transient(parent_toplevel)
+        else:
+            ventana.transient(self.winfo_toplevel())
+        ventana.lift()
+        ventana.focus_force()
+        ventana.grab_set()
+
+        cobros = CobrosFrame(ventana, cliente_id=id_cliente, on_cambio=on_cambio)
+        cobros.pack(fill="both", expand=True)
 
     def abrir_ventana_nuevo_cliente(self):
         self.abrir_formulario(titulo="Nuevo Cliente", cliente=None)
