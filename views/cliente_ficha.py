@@ -5,6 +5,8 @@ import customtkinter as ctk
 
 from config import COLOR_BLANCO, COLOR_NEGRO, COLOR_PRINCIPAL
 from services.cliente_service import ClienteService
+from services.cobro_service import CobroService
+from services.servicio_service import ServicioService
 
 
 class FichaClienteFrame(ctk.CTkFrame):
@@ -26,11 +28,10 @@ class FichaClienteFrame(ctk.CTkFrame):
         "servicios_activos": [],
         "ultimos_resumenes": [],
         "ultimos_cobros": [],
-        "proximo_vencimiento": {
-            "fecha": "",
-            "concepto": "",
-            "importe": "",
-            "estado": "",
+        "cuenta_corriente": {
+            "saldo_pendiente": "",
+            "total_cobrado": "",
+            "ultimo_cobro": "",
         },
         "observaciones": "",
     }
@@ -70,9 +71,36 @@ class FichaClienteFrame(ctk.CTkFrame):
                     "email": fila[9],
                     "cuit": fila[10],
                     "iva": fila[11],
-                    "estado": fila[15],
+                    "estado": fila[16] if len(fila) > 16 else "",
                 })
-                datos["observaciones"] = fila[16] or ""
+                datos["observaciones"] = fila[17] or "" if len(fila) > 17 else ""
+
+            servicios = ServicioService.listar(cliente_id)
+            if servicios:
+                datos["servicios_activos"] = [
+                    {
+                        "servicio": str(servicio[2] or "-"),
+                        "estado": servicio[12] or "-",
+                        "plan": self._formatear_moneda(servicio[5]) or "-",
+                        "vencimiento": servicio[10] or "-",
+                    }
+                    for servicio in servicios
+                ]
+
+            totales = CobroService.totales(cliente_id)
+            cobros = CobroService.listar(cliente_id)
+            ultimo_cobro = "Sin cobros registrados"
+            if cobros:
+                ultimo = cobros[0]
+                fecha_ultimo = ultimo[2] or "-"
+                importe_ultimo = self._formatear_moneda(ultimo[3]) or "-"
+                ultimo_cobro = f"{fecha_ultimo} - {importe_ultimo}"
+
+            datos["cuenta_corriente"] = {
+                "saldo_pendiente": self._formatear_moneda(totales.get("saldo_pendiente")) or "$ 0,00",
+                "total_cobrado": self._formatear_moneda(totales.get("total_cobrado")) or "$ 0,00",
+                "ultimo_cobro": ultimo_cobro,
+            }
 
         if not cliente_data:
             return datos
@@ -85,6 +113,16 @@ class FichaClienteFrame(ctk.CTkFrame):
                     datos[clave] = valor
 
         return datos
+
+    def _formatear_moneda(self, valor):
+        try:
+            importe_parse = valor
+            if isinstance(importe_parse, str):
+                importe_parse = importe_parse.replace("$", "").replace(" ", "").replace(".", "").replace(",", ".")
+            importe_num = float(importe_parse)
+            return f"$ {importe_num:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+        except (TypeError, ValueError):
+            return ""
 
     def _crear_estilo_tablas(self):
         estilo = ttk.Style()
@@ -319,33 +357,37 @@ class FichaClienteFrame(ctk.CTkFrame):
         return tarjeta
 
     def _crear_tarjeta_proximo_vencimiento(self, parent):
-        tarjeta = self._crear_tarjeta_base(parent, "PRÓXIMO VENCIMIENTO")
+        tarjeta = self._crear_tarjeta_base(parent, "CUENTA CORRIENTE")
         cuerpo = ctk.CTkFrame(tarjeta, fg_color=COLOR_PRINCIPAL, corner_radius=8)
         cuerpo.pack(fill="x", padx=18, pady=(0, 18))
 
         self.label_vencimiento_fecha = ctk.CTkLabel(
             cuerpo,
             text="-",
-            font=("Arial", 22, "bold"),
+            font=("Arial", 20, "bold"),
             text_color=COLOR_BLANCO,
+            justify="left",
+            wraplength=320,
         )
         self.label_vencimiento_fecha.pack(anchor="w", padx=16, pady=(16, 4))
 
         self.label_vencimiento_concepto = ctk.CTkLabel(
             cuerpo,
             text="-",
-            font=("Arial", 13, "bold"),
+            font=("Arial", 16, "bold"),
             text_color=COLOR_BLANCO,
             justify="left",
             wraplength=320,
         )
-        self.label_vencimiento_concepto.pack(anchor="w", padx=16)
+        self.label_vencimiento_concepto.pack(anchor="w", padx=16, pady=(6, 0))
 
         self.label_vencimiento_importe = ctk.CTkLabel(
             cuerpo,
             text="-",
-            font=("Arial", 18, "bold"),
+            font=("Arial", 13, "bold"),
             text_color="#FFE7E7",
+            justify="left",
+            wraplength=320,
         )
         self.label_vencimiento_importe.pack(anchor="w", padx=16, pady=(10, 0))
 
@@ -354,6 +396,8 @@ class FichaClienteFrame(ctk.CTkFrame):
             text="-",
             font=("Arial", 12),
             text_color="#FFF2F2",
+            justify="left",
+            wraplength=320,
         )
         self.label_vencimiento_estado.pack(anchor="w", padx=16, pady=(4, 16))
 
@@ -423,53 +467,63 @@ class FichaClienteFrame(ctk.CTkFrame):
         for clave, label in self.labels_datos.items():
             label.configure(text=datos_generales.get(clave) or "-")
 
-        servicio = self.cliente_data.get("servicio")
-        if not servicio:
-            servicio = datos_generales.get("servicio")
-        importe = self.cliente_data.get("importe")
-        if importe is None:
-            importe = datos_generales.get("importe")
+        servicios_activos = self.cliente_data.get("servicios_activos", [])
 
-        if servicio:
-            self.label_servicio_activo.configure(text=str(servicio))
-            try:
-                importe_parse = importe
-                if isinstance(importe_parse, str):
-                    importe_parse = importe_parse.replace("$", "").replace(" ", "").replace(".", "").replace(",", ".")
-                importe_num = float(importe_parse)
-                importe_texto = f"$ {importe_num:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
-                self.label_importe_servicio.configure(text=f"Importe: {importe_texto}")
-            except (TypeError, ValueError):
+        if servicios_activos:
+            primer_servicio = servicios_activos[0]
+            self.label_servicio_activo.configure(text=primer_servicio.get("servicio") or "-")
+            plan = primer_servicio.get("plan") or ""
+            if plan and plan != "-":
+                self.label_importe_servicio.configure(text=f"Importe: {plan}")
+            else:
                 self.label_importe_servicio.configure(text="")
         else:
-            self.label_servicio_activo.configure(text="Sin servicios activos registrados")
+            self.label_servicio_activo.configure(text="Sin servicios activos.")
             self.label_importe_servicio.configure(text="")
 
-        self._cargar_tabla(self.tabla_servicios, self.cliente_data.get("servicios_activos", []))
+        self._cargar_tabla(self.tabla_servicios, servicios_activos)
         self._cargar_tabla(self.tabla_resumenes, self.cliente_data.get("ultimos_resumenes", []))
         self._cargar_tabla(self.tabla_cobros, self.cliente_data.get("ultimos_cobros", []))
 
-        proximo_vencimiento = self.cliente_data.get("proximo_vencimiento", {})
-        self.label_vencimiento_fecha.configure(text=proximo_vencimiento.get("fecha") or "-")
-        self.label_vencimiento_concepto.configure(text=proximo_vencimiento.get("concepto") or "-")
-        self.label_vencimiento_importe.configure(text=proximo_vencimiento.get("importe") or "-")
-        self.label_vencimiento_estado.configure(text=proximo_vencimiento.get("estado") or "-")
+        cuenta_corriente = self.cliente_data.get("cuenta_corriente", {})
+        self.label_vencimiento_fecha.configure(
+            text=f"Saldo pendiente: {cuenta_corriente.get('saldo_pendiente') or '$ 0,00'}"
+        )
+        self.label_vencimiento_concepto.configure(
+            text=f"Total cobrado: {cuenta_corriente.get('total_cobrado') or '$ 0,00'}"
+        )
+        self.label_vencimiento_importe.configure(
+            text=f"Último cobro: {cuenta_corriente.get('ultimo_cobro') or 'Sin cobros registrados'}"
+        )
+        self.label_vencimiento_estado.configure(text="")
 
         self.observaciones_box.configure(state="normal")
         self.observaciones_box.delete("1.0", "end")
         self.observaciones_box.insert("1.0", self.cliente_data.get("observaciones") or "Sin observaciones registradas.")
         self.observaciones_box.configure(state="disabled")
 
-    def _cargar_tabla(self, tabla, filas):
+    def _cargar_tabla(self, tabla, filas, fila_vacia=("Sin registros", "-", "-", "-")):
         for item in tabla.get_children():
             tabla.delete(item)
 
         if filas:
             for fila in filas:
-                tabla.insert("", "end", values=fila)
+                if isinstance(fila, dict):
+                    tabla.insert(
+                        "",
+                        "end",
+                        values=(
+                            fila.get("servicio", "-"),
+                            fila.get("estado", "-"),
+                            fila.get("plan", "-"),
+                            fila.get("vencimiento", "-"),
+                        ),
+                    )
+                else:
+                    tabla.insert("", "end", values=fila)
             return
 
-        tabla.insert("", "end", values=("Sin registros", "-", "-", "-"))
+        tabla.insert("", "end", values=fila_vacia)
 
     def _ejecutar_accion(self, nombre_accion):
         callback = self.callbacks.get(nombre_accion)
