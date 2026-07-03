@@ -245,8 +245,16 @@ class ClientesFrame(ctk.CTkFrame):
         ventana.minsize(1080, 700)
         ventana.transient(self.winfo_toplevel())
 
-        ficha = FichaClienteFrame(ventana, cliente_data=id_cliente)
+        callbacks = {
+            "registrar_cobro": lambda _cliente_data: self._abrir_cobros_desde_ficha(id_cliente),
+        }
+        ficha = FichaClienteFrame(ventana, cliente_data=id_cliente, callbacks=callbacks)
         ficha.pack(fill="both", expand=True)
+
+    def _abrir_cobros_desde_ficha(self, id_cliente):
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_cobros"):
+            aplicacion.mostrar_cobros(cliente_id=id_cliente)
 
     def abrir_ventana_nuevo_cliente(self):
         self.abrir_formulario(titulo="Nuevo Cliente", cliente=None)

@@ -9,6 +9,7 @@ from services.cobro_service import CobroService
 from services.contacto_service import ContactoService
 from services.resumen_service import ResumenService
 from services.servicio_service import ServicioService
+from services.tarea_service import TareaService
 
 
 class FichaClienteFrame(ctk.CTkFrame):
@@ -31,6 +32,7 @@ class FichaClienteFrame(ctk.CTkFrame):
         "ultimos_resumenes": [],
         "ultimos_cobros": [],
         "historial_crm": [],
+        "proximas_tareas": [],
         "cuenta_corriente": {
             "saldo_pendiente": "",
             "total_cobrado": "",
@@ -140,6 +142,19 @@ class FichaClienteFrame(ctk.CTkFrame):
                     for contacto in contactos[:5]
                 ]
 
+            tareas = TareaService.listar(cliente_id=cliente_id)
+            if tareas:
+                datos["proximas_tareas"] = [
+                    (
+                        tarea[2] or "-",
+                        tarea[3] or "-",
+                        tarea[4] or "-",
+                        tarea[5] or "-",
+                        tarea[7] or "-",
+                    )
+                    for tarea in tareas[:5]
+                ]
+
         if not cliente_data:
             return datos
 
@@ -211,6 +226,21 @@ class FichaClienteFrame(ctk.CTkFrame):
         contenedor.grid_columnconfigure(0, weight=3)
         contenedor.grid_columnconfigure(1, weight=2)
 
+        self._crear_tarjeta_resumen_ejecutivo(contenedor).grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(6, 12),
+        )
+        self._crear_barra_acciones_rapidas(contenedor).grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(0, 12),
+        )
+
         self._crear_panel_izquierdo(contenedor)
         self._crear_panel_derecho(contenedor)
 
@@ -264,7 +294,7 @@ class FichaClienteFrame(ctk.CTkFrame):
 
     def _crear_panel_izquierdo(self, parent):
         panel = ctk.CTkFrame(parent, fg_color="transparent")
-        panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=(6, 0))
+        panel.grid(row=2, column=0, sticky="nsew", padx=(0, 10), pady=(0, 0))
         panel.grid_columnconfigure(0, weight=1)
 
         self._crear_tarjeta_datos_generales(panel).grid(row=0, column=0, sticky="ew", pady=(0, 12))
@@ -297,7 +327,7 @@ class FichaClienteFrame(ctk.CTkFrame):
 
     def _crear_panel_derecho(self, parent):
         panel = ctk.CTkFrame(parent, fg_color="transparent")
-        panel.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=(6, 0))
+        panel.grid(row=2, column=1, sticky="nsew", padx=(10, 0), pady=(0, 0))
         panel.grid_columnconfigure(0, weight=1)
 
         self._crear_tarjeta_proximo_vencimiento(panel).grid(row=0, column=0, sticky="ew", pady=(0, 12))
@@ -328,7 +358,21 @@ class FichaClienteFrame(ctk.CTkFrame):
             atributo_tabla="tabla_crm",
             altura=5,
         ).grid(row=2, column=0, sticky="nsew", pady=(0, 12))
-        self._crear_tarjeta_observaciones(panel).grid(row=3, column=0, sticky="nsew")
+        self._crear_tarjeta_tabla(
+            panel,
+            titulo="PRÓXIMAS TAREAS",
+            columnas=("fecha", "hora", "tipo", "titulo", "estado"),
+            encabezados={
+                "fecha": ("Fecha", 85),
+                "hora": ("Hora", 65),
+                "tipo": ("Tipo", 95),
+                "titulo": ("Título", 150),
+                "estado": ("Estado", 90),
+            },
+            atributo_tabla="tabla_tareas",
+            altura=5,
+        ).grid(row=3, column=0, sticky="nsew", pady=(0, 12))
+        self._crear_tarjeta_observaciones(panel).grid(row=4, column=0, sticky="nsew")
 
     def _crear_tarjeta_datos_generales(self, parent):
         tarjeta = self._crear_tarjeta_base(parent, "DATOS GENERALES")
@@ -507,6 +551,63 @@ class FichaClienteFrame(ctk.CTkFrame):
         ).pack(anchor="w", padx=18, pady=(16, 12))
         return tarjeta
 
+    def _crear_tarjeta_resumen_ejecutivo(self, parent):
+        tarjeta = self._crear_tarjeta_base(parent, "RESUMEN EJECUTIVO")
+        contenido = ctk.CTkFrame(tarjeta, fg_color="transparent")
+        contenido.pack(fill="both", expand=True, padx=18, pady=(0, 16))
+        for columna in range(3):
+            contenido.grid_columnconfigure(columna, weight=1)
+
+        self._resumen_labels = {}
+        campos = [
+            ("nombre", "Cliente"),
+            ("estado", "Estado"),
+            ("servicios", "Servicios activos"),
+            ("saldo", "Saldo pendiente"),
+            ("cobrado", "Total cobrado"),
+            ("ultimo", "Último cobro"),
+        ]
+
+        for indice, (clave, titulo) in enumerate(campos):
+            fila = indice // 3
+            columna = indice % 3
+            bloque = ctk.CTkFrame(contenido, fg_color="#F6F6F6", corner_radius=6)
+            bloque.grid(row=fila, column=columna, sticky="ew", padx=6, pady=6)
+            ctk.CTkLabel(
+                bloque,
+                text=titulo,
+                font=("Arial", 11, "bold"),
+                text_color=COLOR_PRINCIPAL,
+            ).pack(anchor="w", padx=12, pady=(10, 2))
+            valor = ctk.CTkLabel(
+                bloque,
+                text="-",
+                font=("Arial", 12),
+                text_color="#1F1F1F",
+                justify="left",
+                wraplength=340,
+            )
+            valor.pack(anchor="w", padx=12, pady=(0, 10))
+            self._resumen_labels[clave] = valor
+
+        return tarjeta
+
+    def _crear_barra_acciones_rapidas(self, parent):
+        barra = ctk.CTkFrame(parent, fg_color="transparent")
+        barra.grid_columnconfigure(0, weight=0)
+
+        ctk.CTkButton(
+            barra,
+            text="Editar Cliente",
+            width=150,
+            height=34,
+            fg_color="#333333",
+            hover_color="#222222",
+            command=lambda: self._ejecutar_accion("editar_cliente"),
+        ).grid(row=0, column=0, sticky="w")
+
+        return barra
+
     def cargar_cliente(self, cliente_data):
         self.cliente_data = self._normalizar_cliente_data(cliente_data)
 
@@ -520,6 +621,20 @@ class FichaClienteFrame(ctk.CTkFrame):
             label.configure(text=datos_generales.get(clave) or "-")
 
         servicios_activos = self.cliente_data.get("servicios_activos", [])
+        cuenta_corriente = self.cliente_data.get("cuenta_corriente", {})
+
+        self._resumen_labels["nombre"].configure(text=razon_social)
+        self._resumen_labels["estado"].configure(text=datos_generales.get("estado") or "-")
+        self._resumen_labels["servicios"].configure(text=str(len(servicios_activos)))
+        self._resumen_labels["saldo"].configure(
+            text=cuenta_corriente.get("saldo_pendiente") or "$ 0,00"
+        )
+        self._resumen_labels["cobrado"].configure(
+            text=cuenta_corriente.get("total_cobrado") or "$ 0,00"
+        )
+        self._resumen_labels["ultimo"].configure(
+            text=cuenta_corriente.get("ultimo_cobro") or "Sin cobros registrados"
+        )
 
         if servicios_activos:
             primer_servicio = servicios_activos[0]
@@ -537,8 +652,12 @@ class FichaClienteFrame(ctk.CTkFrame):
         self._cargar_tabla(self.tabla_resumenes, self.cliente_data.get("ultimos_resumenes", []))
         self._cargar_tabla(self.tabla_cobros, self.cliente_data.get("ultimos_cobros", []))
         self._cargar_tabla(self.tabla_crm, self.cliente_data.get("historial_crm", []))
+        self._cargar_tabla(
+            self.tabla_tareas,
+            self.cliente_data.get("proximas_tareas", []),
+            fila_vacia=("Sin tareas programadas", "", "", "", ""),
+        )
 
-        cuenta_corriente = self.cliente_data.get("cuenta_corriente", {})
         self.label_vencimiento_fecha.configure(
             text=f"Saldo pendiente: {cuenta_corriente.get('saldo_pendiente') or '$ 0,00'}"
         )
