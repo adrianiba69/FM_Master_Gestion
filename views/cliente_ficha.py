@@ -99,6 +99,16 @@ class FichaClienteFrame(ctk.CTkFrame):
                 importe_ultimo = self._formatear_moneda(ultimo[3]) or "-"
                 ultimo_cobro = f"{fecha_ultimo} - {importe_ultimo}"
 
+                datos["ultimos_cobros"] = [
+                    (
+                        cobro[2] or "-",
+                        self._formatear_moneda(cobro[3]) or "-",
+                        cobro[4] or "-",
+                        cobro[6] or "-",
+                    )
+                    for cobro in cobros[:5]
+                ]
+
             datos["cuenta_corriente"] = {
                 "saldo_pendiente": self._formatear_moneda(totales.get("saldo_pendiente")) or "$ 0,00",
                 "total_cobrado": self._formatear_moneda(totales.get("total_cobrado")) or "$ 0,00",
@@ -126,16 +136,6 @@ class FichaClienteFrame(ctk.CTkFrame):
                         contacto[4] or "-",
                         contacto[5] or "-",
                         contacto[6] or "-",
-                    )
-                    for contacto in contactos[:5]
-                ]
-
-                datos["ultimos_cobros"] = [
-                    (
-                        contacto[2] or "-",
-                        contacto[3] or "-",
-                        contacto[4] or "-",
-                        f"{contacto[5] or '-'} | {contacto[6] or '-'}",
                     )
                     for contacto in contactos[:5]
                 ]
