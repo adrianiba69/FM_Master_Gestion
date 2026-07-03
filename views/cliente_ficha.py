@@ -1,5 +1,5 @@
 from copy import deepcopy
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 import customtkinter as ctk
 
@@ -709,3 +709,10 @@ class FichaClienteFrame(ctk.CTkFrame):
                 self.destroy()
             elif hasattr(contenedor, "destroy"):
                 contenedor.destroy()
+            return
+
+        messagebox.showinfo(
+            "Acción no disponible",
+            "Esta acción todavía no está disponible.",
+            parent=self.winfo_toplevel(),
+        )

@@ -248,12 +248,43 @@ class ClientesFrame(ctk.CTkFrame):
 
         callbacks = {}
         ficha = FichaClienteFrame(ventana, cliente_data=id_cliente, callbacks=callbacks)
+        callbacks["nuevo_resumen"] = lambda _cliente_data: self._abrir_resumenes_desde_ficha(
+            id_cliente,
+            parent_toplevel=ficha.winfo_toplevel(),
+        )
+        callbacks["editar_cliente"] = lambda _cliente_data: self._editar_cliente_desde_ficha(
+            id_cliente,
+            on_guardado=lambda: ficha.cargar_cliente(id_cliente),
+        )
         callbacks["registrar_cobro"] = lambda _cliente_data: self._abrir_cobros_desde_ficha(
             id_cliente,
             parent_toplevel=ficha.winfo_toplevel(),
             on_cambio=lambda: ficha.cargar_cliente(id_cliente),
         )
         ficha.pack(fill="both", expand=True)
+
+    def _editar_cliente_desde_ficha(self, id_cliente, on_guardado=None):
+        datos = ClienteService.obtener(id_cliente)
+        if datos is None:
+            messagebox.showerror("Error", "No se encontro el cliente seleccionado.")
+            self.cargar_clientes()
+            return
+
+        cliente = self.crear_cliente_desde_fila(datos)
+        self.abrir_formulario(
+            titulo="Modificar Cliente",
+            cliente=cliente,
+            on_guardado=on_guardado,
+        )
+
+    def _abrir_resumenes_desde_ficha(self, id_cliente, parent_toplevel=None):
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_resumenes"):
+            aplicacion.mostrar_resumenes(cliente_id=id_cliente)
+            aplicacion.lift()
+            aplicacion.focus_force()
+        if parent_toplevel is not None and hasattr(parent_toplevel, "lift"):
+            parent_toplevel.lower()
 
     def _abrir_cobros_desde_ficha(self, id_cliente, parent_toplevel=None, on_cambio=None):
         ventana = ctk.CTkToplevel(self)
@@ -355,7 +386,7 @@ class ClientesFrame(ctk.CTkFrame):
             return
         CRMWindow(self, cliente_id=id_cliente)
 
-    def abrir_formulario(self, titulo, cliente=None):
+    def abrir_formulario(self, titulo, cliente=None, on_guardado=None):
         ventana = ctk.CTkToplevel(self)
         ventana.title(titulo)
         ventana.geometry("650x720")
@@ -405,7 +436,7 @@ class ClientesFrame(ctk.CTkFrame):
             height=40,
             fg_color="#C00000",
             hover_color="#990000",
-            command=lambda: self.guardar_formulario(ventana, cliente),
+            command=lambda: self.guardar_formulario(ventana, cliente, on_guardado),
         )
         boton_guardar.grid(row=len(self.CAMPOS_FORMULARIO) * 2 + 1, column=0, sticky="ew", pady=20)
 
@@ -432,7 +463,7 @@ class ClientesFrame(ctk.CTkFrame):
         for clave, valor in valores.items():
             self.campos_formulario[clave].insert(0, valor or "")
 
-    def guardar_formulario(self, ventana, cliente_original=None):
+    def guardar_formulario(self, ventana, cliente_original=None, on_guardado=None):
         razon_social = self.obtener_campo("razon_social")
         if not razon_social:
             messagebox.showerror("Error", "La razon social es obligatoria.")
@@ -472,6 +503,8 @@ class ClientesFrame(ctk.CTkFrame):
 
         ventana.destroy()
         self.cargar_clientes()
+        if callable(on_guardado):
+            on_guardado()
         messagebox.showinfo(
             "Clientes",
             "Cliente modificado correctamente."
