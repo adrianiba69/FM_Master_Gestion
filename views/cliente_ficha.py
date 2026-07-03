@@ -6,6 +6,7 @@ import customtkinter as ctk
 from config import COLOR_BLANCO, COLOR_NEGRO, COLOR_PRINCIPAL
 from services.cliente_service import ClienteService
 from services.cobro_service import CobroService
+from services.resumen_service import ResumenService
 from services.servicio_service import ServicioService
 
 
@@ -101,6 +102,18 @@ class FichaClienteFrame(ctk.CTkFrame):
                 "total_cobrado": self._formatear_moneda(totales.get("total_cobrado")) or "$ 0,00",
                 "ultimo_cobro": ultimo_cobro,
             }
+
+            resumenes = ResumenService.listar(cliente_id)
+            if resumenes:
+                datos["ultimos_resumenes"] = [
+                    (
+                        resumen[1],
+                        resumen[2],
+                        self._formatear_moneda(resumen[5]) or "-",
+                        resumen[7] or "-",
+                    )
+                    for resumen in resumenes[:5]
+                ]
 
         if not cliente_data:
             return datos
