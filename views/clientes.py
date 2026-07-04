@@ -255,6 +255,7 @@ class ClientesFrame(ctk.CTkFrame):
         callbacks["nuevo_resumen"] = lambda _cliente_data: self._abrir_resumenes_desde_ficha(
             id_cliente,
             parent_toplevel=ficha.winfo_toplevel(),
+            on_cambio=lambda: ficha.cargar_cliente(id_cliente),
         )
         callbacks["editar_cliente"] = lambda _cliente_data: self._editar_cliente_desde_ficha(
             id_cliente,
@@ -287,10 +288,10 @@ class ClientesFrame(ctk.CTkFrame):
             on_guardado=on_guardado,
         )
 
-    def _abrir_resumenes_desde_ficha(self, id_cliente, parent_toplevel=None):
+    def _abrir_resumenes_desde_ficha(self, id_cliente, parent_toplevel=None, on_cambio=None):
         aplicacion = self.winfo_toplevel()
         if hasattr(aplicacion, "mostrar_resumenes"):
-            aplicacion.mostrar_resumenes(cliente_id=id_cliente)
+            aplicacion.mostrar_resumenes(cliente_id=id_cliente, on_cambio=on_cambio)
             aplicacion.lift()
             aplicacion.focus_force()
         if parent_toplevel is not None and hasattr(parent_toplevel, "lift"):

@@ -229,10 +229,14 @@ class FMMasterApp(ctk.CTk):
             )
             error_label.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
 
-    def mostrar_resumenes(self, cliente_id=None):
+    def mostrar_resumenes(self, cliente_id=None, on_cambio=None):
         self.limpiar_panel()
         try:
-            resumenes = ResumenesFrame(self.panel, cliente_id=cliente_id)
+            resumenes = ResumenesFrame(
+                self.panel,
+                cliente_id=cliente_id,
+                on_cambio=on_cambio,
+            )
             resumenes.grid(row=0, column=0, sticky="nsew")
         except Exception as error:
             messagebox.showerror("Error", f"No se pudo cargar Resúmenes.\n{error}", parent=self)

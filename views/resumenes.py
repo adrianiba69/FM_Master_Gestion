@@ -14,10 +14,11 @@ from services.whatsapp_service import WhatsAppService
 
 class ResumenesFrame(ctk.CTkFrame):
 
-    def __init__(self, master, cliente_id=None):
+    def __init__(self, master, cliente_id=None, on_cambio=None):
         super().__init__(master, fg_color="white", corner_radius=0)
         self.clientes_por_nombre = {}
         self.cliente_inicial = cliente_id
+        self.on_cambio = on_cambio
         self.crear_interfaz()
         self.cargar_clientes()
         self.cargar_resumenes()
@@ -240,6 +241,8 @@ class ResumenesFrame(ctk.CTkFrame):
             return
 
         self.cargar_resumenes()
+        if callable(self.on_cambio):
+            self.on_cambio()
         messagebox.showinfo(
             "Resumen generado",
             f"Resumen Nro. {resumen.numero:06d} generado correctamente.\n{ruta}",

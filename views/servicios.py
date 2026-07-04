@@ -78,7 +78,7 @@ class ServiciosWindow(ctk.CTkToplevel):
         contenido.grid_columnconfigure(0, weight=0, minsize=300)
         contenido.grid_columnconfigure(1, weight=1)
 
-        formulario = ctk.CTkFrame(contenido, fg_color="#F3F3F3", corner_radius=4)
+        formulario = ctk.CTkScrollableFrame(contenido, fg_color="#F3F3F3", corner_radius=4)
         formulario.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
         formulario.grid_columnconfigure(0, weight=1)
 
@@ -100,10 +100,14 @@ class ServiciosWindow(ctk.CTkToplevel):
             text_color="#222222",
         ).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 4))
 
-        self.catalogo_cb = ctk.CTkComboBox(catalogo_frame, values=self.catalogo_values, width=260)
+        self.catalogo_cb = ctk.CTkComboBox(
+            catalogo_frame,
+            values=self.catalogo_values,
+            width=260,
+            command=self.aplicar_catalogo,
+        )
         self.catalogo_cb.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
         self.catalogo_cb.set("")
-        self.catalogo_cb.bind("<<ComboboxSelected>>", lambda _e: self.aplicar_catalogo())
 
         botones_catalogo = ctk.CTkFrame(catalogo_frame, fg_color="transparent")
         botones_catalogo.grid(row=2, column=0, sticky="w", padx=12, pady=(0, 10))
@@ -508,7 +512,7 @@ class ServiciosWindow(ctk.CTkToplevel):
         except Exception:
             pass
 
-    def aplicar_catalogo(self):
+    def aplicar_catalogo(self, _valor=None):
         seleccionado = self.catalogo_cb.get()
         if not seleccionado:
             return
