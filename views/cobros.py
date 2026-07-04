@@ -50,7 +50,7 @@ class CobrosFrame(ctk.CTkFrame):
         )
         self.selector_cliente.grid(row=0, column=1, sticky="w", pady=14)
 
-        self.boton_registrar = ctk.CTkButton(
+        boton_registrar = ctk.CTkButton(
             selector,
             text="Nuevo",
             width=145,
@@ -59,7 +59,7 @@ class CobrosFrame(ctk.CTkFrame):
             hover_color="#990000",
             command=self.abrir_nuevo_cobro,
         )
-        self.boton_registrar.grid(row=0, column=2, padx=(12, 14), pady=14)
+        boton_registrar.grid(row=0, column=2, padx=(12, 14), pady=14)
 
         totales = ctk.CTkFrame(self, fg_color="#222222", corner_radius=4)
         totales.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
@@ -87,7 +87,7 @@ class CobrosFrame(ctk.CTkFrame):
             text_color="#222222",
         ).grid(row=0, column=0, sticky="w")
 
-        self.boton_modificar = ctk.CTkButton(
+        boton_modificar = ctk.CTkButton(
             acciones,
             text="Modificar",
             width=135,
@@ -96,9 +96,9 @@ class CobrosFrame(ctk.CTkFrame):
             hover_color="#222222",
             command=self.modificar_cobro_seleccionado,
         )
-        self.boton_modificar.grid(row=0, column=1, padx=(10, 0))
+        boton_modificar.grid(row=0, column=1, padx=(10, 0))
 
-        self.boton_eliminar = ctk.CTkButton(
+        boton_eliminar = ctk.CTkButton(
             acciones,
             text="Eliminar",
             width=125,
@@ -107,7 +107,7 @@ class CobrosFrame(ctk.CTkFrame):
             hover_color="#550000",
             command=self.eliminar_cobro_seleccionado,
         )
-        self.boton_eliminar.grid(row=0, column=2, padx=(10, 0))
+        boton_eliminar.grid(row=0, column=2, padx=(10, 0))
 
         self.pestanas = ttk.Notebook(self)
         self.pestanas.grid(row=4, column=0, sticky="nsew", padx=20, pady=(0, 20))

@@ -78,7 +78,8 @@ class FichaClienteFrame(ctk.CTkFrame):
                     "iva": fila[11],
                     "estado": fila[16] if len(fila) > 16 else "",
                 })
-                datos["observaciones"] = fila[17] or "" if len(fila) > 17 else ""
+                observaciones = fila[17] if len(fila) > 17 else ""
+                datos["observaciones"] = observaciones or ""
 
             servicios = ServicioService.listar(cliente_id)
             if servicios:

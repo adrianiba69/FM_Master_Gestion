@@ -1,4 +1,7 @@
 from datetime import datetime
+import os
+import re
+import webbrowser
 from types import MethodType
 from tkinter import messagebox, ttk
 
@@ -267,6 +270,7 @@ class ClientesFrame(ctk.CTkFrame):
             parent_toplevel=ficha.winfo_toplevel(),
             on_guardado=lambda: ficha.cargar_cliente(id_cliente),
         )
+        callbacks["whatsapp"] = lambda _cliente_data: self._abrir_whatsapp_desde_ficha(id_cliente)
         ficha.pack(fill="both", expand=True)
 
     def _editar_cliente_desde_ficha(self, id_cliente, on_guardado=None):
@@ -328,6 +332,38 @@ class ClientesFrame(ctk.CTkFrame):
 
         agenda_frame.guardar_formulario = MethodType(guardar_formulario_con_refresco, agenda_frame)
         agenda_frame._ficha_refresh_hook_instalado = True
+
+    def _abrir_whatsapp_desde_ficha(self, id_cliente):
+        datos = ClienteService.obtener(id_cliente)
+        if datos is None:
+            messagebox.showerror("Error", "No se encontro el cliente seleccionado.")
+            self.cargar_clientes()
+            return
+
+        numero_limpio = self._limpiar_numero_whatsapp(datos[8] or "")
+        if not numero_limpio:
+            messagebox.showwarning("WhatsApp", "El cliente no tiene WhatsApp cargado.")
+            return
+
+        url_desktop = f"whatsapp://send?phone={numero_limpio}"
+        url_web = f"https://wa.me/{numero_limpio}"
+
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(url_desktop)
+                return
+
+            abierto_desktop = webbrowser.open(url_desktop, new=0, autoraise=True)
+            if abierto_desktop:
+                return
+        except (webbrowser.Error, OSError):
+            pass
+
+        webbrowser.open(url_web, new=0, autoraise=True)
+
+    @staticmethod
+    def _limpiar_numero_whatsapp(numero):
+        return re.sub(r"\D", "", (numero or "").strip())
 
     def _abrir_cobros_desde_ficha(self, id_cliente, parent_toplevel=None, on_cambio=None):
         ventana = ctk.CTkToplevel(self)
