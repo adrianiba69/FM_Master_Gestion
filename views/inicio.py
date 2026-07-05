@@ -5,6 +5,7 @@ import customtkinter as ctk
 
 from services.cliente_service import ClienteService
 from services.dashboard_service import DashboardService
+from services.prioridad_service import PrioridadService
 from services.tarea_service import TareaService
 from views.crm import ContactoFormWindow
 from views.servicios import ServiciosWindow
@@ -118,6 +119,11 @@ class InicioFrame(ctk.CTkFrame):
         self.alertas_prioritarias = self.crear_bloque_alertas_prioritarias(
             metricas,
             len(configuracion) // 4 + 3,
+            0,
+        )
+        self.bloque_prioridad = self.crear_bloque_prioridad(
+            metricas,
+            len(configuracion) // 4 + 4,
             0,
         )
 
@@ -533,6 +539,67 @@ class InicioFrame(ctk.CTkFrame):
 
         return etiquetas
 
+    def crear_bloque_prioridad(self, master, fila, columna):
+        tarjeta = ctk.CTkFrame(master, fg_color=self.NEGRO, corner_radius=6)
+        tarjeta.grid(row=fila, column=columna, columnspan=4, sticky="nsew", padx=6, pady=(5, 8))
+        tarjeta.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            tarjeta,
+            text="🧠 ¿Qué hago ahora?",
+            font=("Arial", 11, "bold"),
+            text_color="white",
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 2))
+
+        titulo = ctk.CTkLabel(
+            tarjeta,
+            text="",
+            font=("Arial", 10, "bold"),
+            text_color="#F4C542",
+            anchor="w",
+            justify="left",
+        )
+        titulo.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 2))
+
+        mensaje = ctk.CTkLabel(
+            tarjeta,
+            text="",
+            font=("Arial", 10),
+            text_color="#E0E0E0",
+            anchor="w",
+            justify="left",
+            wraplength=980,
+        )
+        mensaje.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 4))
+
+        prioridad = ctk.CTkLabel(
+            tarjeta,
+            text="",
+            font=("Arial", 10, "bold"),
+            text_color="#E0E0E0",
+            anchor="w",
+            justify="left",
+        )
+        prioridad.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 4))
+
+        motivos = ctk.CTkLabel(
+            tarjeta,
+            text="",
+            font=("Arial", 9),
+            text_color="#E0E0E0",
+            anchor="w",
+            justify="left",
+            wraplength=980,
+        )
+        motivos.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 10))
+
+        return {
+            "titulo": titulo,
+            "mensaje": mensaje,
+            "prioridad": prioridad,
+            "motivos": motivos,
+        }
+
     def actualizar_dashboard(self):
         try:
             datos = DashboardService.obtener_indicadores()
@@ -618,6 +685,30 @@ class InicioFrame(ctk.CTkFrame):
                 text=str(valor),
                 text_color=self.ROJO if valor > 0 else "#E0E0E0",
             )
+
+        try:
+            recomendacion = PrioridadService.obtener_recomendacion()
+        except Exception:
+            recomendacion = {
+                "titulo": "Sistema al día",
+                "mensaje": "No se detectaron prioridades operativas.",
+                "prioridad": "Baja",
+                "motivos": [],
+            }
+
+        titulo = recomendacion.get("titulo") or ""
+        mensaje = recomendacion.get("mensaje") or ""
+        prioridad = recomendacion.get("prioridad") or "-"
+        motivos = recomendacion.get("motivos") or []
+
+        self.bloque_prioridad["titulo"].configure(text=titulo)
+        self.bloque_prioridad["mensaje"].configure(text=mensaje)
+        self.bloque_prioridad["prioridad"].configure(text=f"Prioridad: {prioridad}")
+        if motivos:
+            texto_motivos = "\n".join(f"• {motivo}" for motivo in motivos)
+        else:
+            texto_motivos = ""
+        self.bloque_prioridad["motivos"].configure(text=texto_motivos)
 
         for item in self.tabla_agenda.get_children():
             self.tabla_agenda.delete(item)
