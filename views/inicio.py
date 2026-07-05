@@ -67,6 +67,9 @@ class InicioFrame(ctk.CTkFrame):
             ("resumenes_vencidos", "RESUMENES VENCIDOS", False),
             ("proximos_vencimientos", "PROX. VENCIMIENTOS", False),
             ("resumenes_pendientes", "CLIENTES POR RESUMIR", False),
+            ("clientes_con_deuda", "CLIENTES CON DEUDA", False),
+            ("total_cobrado_hoy", "COBRADO HOY", True),
+            ("tareas_hoy", "TAREAS HOY", False),
         )
         for indice, (clave, titulo, es_moneda) in enumerate(configuracion):
             fila = indice // 4
@@ -463,6 +466,9 @@ class InicioFrame(ctk.CTkFrame):
                 "resumenes_vencidos": 0,
                 "proximos_vencimientos": 0,
                 "resumenes_pendientes": 0,
+                "clientes_con_deuda": 0,
+                "total_cobrado_hoy": 0,
+                "tareas_hoy": 0,
                 "renovaciones_hoy": 0,
                 "renovaciones_semana": 0,
                 "renovaciones_vencidas": 0,
@@ -478,7 +484,7 @@ class InicioFrame(ctk.CTkFrame):
                 "alertas": {"urgentes": 0, "pendientes": 0, "vencidas": 0},
             }
 
-        claves_moneda = {"facturado_mes", "cobrado_mes", "saldo_pendiente"}
+        claves_moneda = {"facturado_mes", "cobrado_mes", "saldo_pendiente", "total_cobrado_hoy"}
         for clave, etiqueta in self.indicadores.items():
             valor = datos.get(clave, 0)
             if clave in claves_moneda:

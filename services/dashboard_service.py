@@ -56,6 +56,28 @@ class DashboardService:
         """, (inicio_mes.isoformat(), inicio_mes_siguiente.isoformat()))
         cobrado_mes = float(cur.fetchone()[0] or 0)
 
+        cur.execute("""
+            SELECT COUNT(DISTINCT cliente_id)
+            FROM resumenes
+            WHERE saldo>0
+              AND LOWER(COALESCE(estado, ''))!='pagado'
+        """)
+        clientes_con_deuda = cur.fetchone()[0]
+
+        cur.execute("""
+            SELECT COALESCE(SUM(importe), 0)
+            FROM cobros
+            WHERE fecha=?
+        """, (hoy.isoformat(),))
+        total_cobrado_hoy = float(cur.fetchone()[0] or 0)
+
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM tareas
+            WHERE fecha=?
+        """, (hoy.isoformat(),))
+        tareas_hoy = cur.fetchone()[0]
+
         cur.execute("SELECT COALESCE(SUM(total), 0) FROM resumenes")
         total_facturado = float(cur.fetchone()[0] or 0)
         cur.execute("SELECT COALESCE(SUM(importe), 0) FROM cobros")
@@ -129,6 +151,9 @@ class DashboardService:
             "resumenes_mes": resumenes_mes,
             "facturado_mes": float(facturado_mes or 0),
             "cobrado_mes": cobrado_mes,
+            "clientes_con_deuda": clientes_con_deuda,
+            "total_cobrado_hoy": total_cobrado_hoy,
+            "tareas_hoy": tareas_hoy,
             "saldo_pendiente": total_facturado - total_cobrado,
             "resumenes_vencidos": resumenes_vencidos,
             "proximos_vencimientos": proximos_vencimientos,

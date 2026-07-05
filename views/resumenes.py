@@ -243,10 +243,7 @@ class ResumenesFrame(ctk.CTkFrame):
         self.cargar_resumenes()
         if callable(self.on_cambio):
             self.on_cambio()
-        messagebox.showinfo(
-            "Resumen generado",
-            f"Resumen Nro. {resumen.numero:06d} generado correctamente.\n{ruta}",
-        )
+        self.mostrar_modal_resumen_generado(ruta)
 
     def abrir_resumenes_pendientes(self):
         pendientes = ResumenService.listar_pendientes()
@@ -453,6 +450,66 @@ class ResumenesFrame(ctk.CTkFrame):
             "WhatsApp Web",
             "WhatsApp se abrió con el mensaje preparado. "
             "Adjuntá manualmente el PDF que se abrió en la carpeta.",
+            parent=self,
+        )
+
+    def mostrar_modal_resumen_generado(self, ruta_pdf):
+        modal = ctk.CTkToplevel(self)
+        modal.title("Resumen generado")
+        modal.geometry("440x220")
+        modal.resizable(False, False)
+        modal.transient(self.winfo_toplevel())
+        modal.grab_set()
+        modal.configure(fg_color="white")
+
+        contenedor = ctk.CTkFrame(modal, fg_color="white", corner_radius=0)
+        contenedor.pack(fill="both", expand=True, padx=20, pady=20)
+        contenedor.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            contenedor,
+            text="Resumen generado correctamente",
+            font=("Arial", 18, "bold"),
+            text_color="#C00000",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 18))
+
+        ctk.CTkButton(
+            contenedor,
+            text="Ver PDF",
+            height=36,
+            fg_color="#C00000",
+            hover_color="#990000",
+            command=lambda: self.abrir_pdf_generado(ruta_pdf),
+        ).grid(row=1, column=0, sticky="ew", pady=(0, 8))
+
+        ctk.CTkButton(
+            contenedor,
+            text="Enviar por WhatsApp",
+            height=36,
+            fg_color="#333333",
+            hover_color="#111111",
+            command=self.mostrar_aviso_whatsapp_pendiente,
+        ).grid(row=2, column=0, sticky="ew", pady=(0, 8))
+
+        ctk.CTkButton(
+            contenedor,
+            text="Cerrar",
+            height=36,
+            fg_color="#666666",
+            hover_color="#444444",
+            command=modal.destroy,
+        ).grid(row=3, column=0, sticky="ew")
+
+    def abrir_pdf_generado(self, ruta_pdf):
+        try:
+            os.startfile(str(Path(ruta_pdf).resolve()))
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Error", f"No se pudo abrir el PDF: {error}", parent=self)
+
+    def mostrar_aviso_whatsapp_pendiente(self):
+        messagebox.showinfo(
+            "WhatsApp",
+            "La integración de envío por WhatsApp se agregará en el próximo paso.",
             parent=self,
         )
 

@@ -1,3 +1,4 @@
+import os
 from copy import deepcopy
 from tkinter import messagebox, ttk
 
@@ -126,6 +127,7 @@ class FichaClienteFrame(ctk.CTkFrame):
                         resumen[2],
                         self._formatear_moneda(resumen[5]) or "-",
                         resumen[7] or "-",
+                        resumen[8] or "",
                     )
                     for resumen in resumenes[:5]
                 ]
@@ -315,12 +317,13 @@ class FichaClienteFrame(ctk.CTkFrame):
         self._crear_tarjeta_tabla(
             panel,
             titulo="ÚLTIMOS RESÚMENES",
-            columnas=("numero", "fecha", "importe", "estado"),
+            columnas=("numero", "fecha", "importe", "estado", "pdf_path"),
             encabezados={
                 "numero": ("Resumen", 110),
                 "fecha": ("Fecha", 100),
                 "importe": ("Importe", 110),
                 "estado": ("Estado", 110),
+                "pdf_path": ("", 0),
             },
             atributo_tabla="tabla_resumenes",
             altura=5,
@@ -532,7 +535,16 @@ class FichaClienteFrame(ctk.CTkFrame):
         for columna in columnas:
             texto, ancho = encabezados[columna]
             tabla.heading(columna, text=texto)
-            tabla.column(columna, width=ancho, anchor="w", stretch=columna == columnas[0])
+            tabla.column(
+                columna,
+                width=ancho,
+                minwidth=0 if columna == "pdf_path" else 20,
+                anchor="w",
+                stretch=columna == columnas[0],
+            )
+
+        if atributo_tabla == "tabla_resumenes":
+            tabla.bind("<Double-1>", lambda _evento: self._abrir_pdf_resumen_seleccionado())
 
         scroll = ttk.Scrollbar(contenedor_tabla, orient="vertical", command=tabla.yview)
         tabla.configure(yscrollcommand=scroll.set)
@@ -697,6 +709,30 @@ class FichaClienteFrame(ctk.CTkFrame):
             return
 
         tabla.insert("", "end", values=fila_vacia)
+
+    def _abrir_pdf_resumen_seleccionado(self):
+        seleccion = self.tabla_resumenes.selection()
+        if not seleccion:
+            return
+
+        valores = self.tabla_resumenes.item(seleccion[0], "values")
+        pdf_path = valores[4] if len(valores) > 4 else ""
+        if not pdf_path:
+            messagebox.showinfo(
+                "Resumen sin PDF",
+                "El resumen no tiene PDF asociado.",
+                parent=self.winfo_toplevel(),
+            )
+            return
+
+        try:
+            os.startfile(pdf_path)
+        except OSError as error:
+            messagebox.showerror(
+                "Error",
+                f"No se pudo abrir el PDF: {error}",
+                parent=self.winfo_toplevel(),
+            )
 
     def _ejecutar_accion(self, nombre_accion):
         callback = self.callbacks.get(nombre_accion)
