@@ -115,6 +115,11 @@ class InicioFrame(ctk.CTkFrame):
             len(configuracion) // 4 + 2,
             0,
         )
+        self.alertas_prioritarias = self.crear_bloque_alertas_prioritarias(
+            metricas,
+            len(configuracion) // 4 + 3,
+            0,
+        )
 
         accesos = ctk.CTkFrame(contenido, fg_color=self.NEGRO, corner_radius=4)
         accesos.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
@@ -468,6 +473,48 @@ class InicioFrame(ctk.CTkFrame):
             etiquetas[clave] = etiqueta
         return etiquetas
 
+    def crear_bloque_alertas_prioritarias(self, master, fila, columna):
+        tarjeta = ctk.CTkFrame(master, fg_color=self.NEGRO, corner_radius=6)
+        tarjeta.grid(row=fila, column=columna, columnspan=4, sticky="nsew", padx=6, pady=5)
+        tarjeta.grid_columnconfigure(0, weight=1)
+        tarjeta.grid_columnconfigure(1, weight=0)
+
+        ctk.CTkLabel(
+            tarjeta,
+            text="ALERTAS PRIORITARIAS",
+            font=("Arial", 11, "bold"),
+            text_color="white",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 4))
+
+        etiquetas = {}
+        filas = (
+            ("resumenes_vencidos", "Resúmenes vencidos"),
+            ("servicios_vencidos", "Servicios vencidos"),
+            ("tareas_vencidas", "Tareas vencidas"),
+            ("seguimientos_atrasados", "Seguimientos atrasados"),
+            ("clientes_con_deuda", "Clientes con deuda"),
+        )
+        for indice, (clave, texto) in enumerate(filas, start=1):
+            ctk.CTkLabel(
+                tarjeta,
+                text=texto,
+                font=("Arial", 10),
+                text_color="#E0E0E0",
+                anchor="w",
+            ).grid(row=indice, column=0, sticky="w", padx=12, pady=2)
+
+            valor = ctk.CTkLabel(
+                tarjeta,
+                text="0",
+                font=("Arial", 10, "bold"),
+                text_color="#E0E0E0",
+                anchor="e",
+            )
+            valor.grid(row=indice, column=1, sticky="e", padx=12, pady=2)
+            etiquetas[clave] = valor
+
+        return etiquetas
+
     def actualizar_dashboard(self):
         try:
             datos = DashboardService.obtener_indicadores()
@@ -480,6 +527,7 @@ class InicioFrame(ctk.CTkFrame):
                 "cobrado_mes": 0,
                 "saldo_pendiente": 0,
                 "resumenes_vencidos": 0,
+                "servicios_vencidos": 0,
                 "proximos_vencimientos": 0,
                 "resumenes_pendientes": 0,
                 "clientes_con_deuda": 0,
@@ -539,6 +587,19 @@ class InicioFrame(ctk.CTkFrame):
         self.indicadores_alertas["pendientes"].configure(text=f"Pendientes: {alertas.get('pendientes', 0)}")
         self.indicadores_alertas["vencidas"].configure(text=f"Vencidas: {alertas.get('vencidas', 0)}")
         self.tarjeta_alertas.configure(fg_color=self.ROJO if alertas.get("urgentes", 0) else self.NEGRO)
+
+        alertas_prioritarias_valores = {
+            "resumenes_vencidos": int(datos.get("resumenes_vencidos", 0) or 0),
+            "servicios_vencidos": int(datos.get("servicios_vencidos", 0) or 0),
+            "tareas_vencidas": int(agenda.get("vencidas", 0) or 0),
+            "seguimientos_atrasados": int(seguimientos.get("atrasados", 0) or 0),
+            "clientes_con_deuda": int(datos.get("clientes_con_deuda", 0) or 0),
+        }
+        for clave, valor in alertas_prioritarias_valores.items():
+            self.alertas_prioritarias[clave].configure(
+                text=str(valor),
+                text_color=self.ROJO if valor > 0 else "#E0E0E0",
+            )
 
         for item in self.tabla_agenda.get_children():
             self.tabla_agenda.delete(item)
