@@ -71,6 +71,11 @@ class InicioFrame(ctk.CTkFrame):
             ("total_cobrado_hoy", "COBRADO HOY", True),
             ("tareas_hoy", "TAREAS HOY", False),
         )
+        click_handlers = {
+            "clientes_con_deuda": self.ir_cuenta_corriente,
+            "total_cobrado_hoy": self.ir_cobros,
+            "tareas_hoy": self.ir_agenda,
+        }
         for indice, (clave, titulo, es_moneda) in enumerate(configuracion):
             fila = indice // 4
             columna = indice % 4
@@ -82,6 +87,7 @@ class InicioFrame(ctk.CTkFrame):
                 titulo,
                 es_moneda,
                 alerta=clave in ("saldo_pendiente", "resumenes_vencidos"),
+                on_click=click_handlers.get(clave),
             )
 
         self.indicadores_renovacion = self.crear_tarjeta_renovaciones(
@@ -231,7 +237,7 @@ class InicioFrame(ctk.CTkFrame):
         self.tabla_vencimientos.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
 
-    def crear_tarjeta(self, master, fila, columna, clave, titulo, es_moneda, alerta=False):
+    def crear_tarjeta(self, master, fila, columna, clave, titulo, es_moneda, alerta=False, on_click=None):
         tarjeta = ctk.CTkFrame(
             master,
             height=82,
@@ -242,13 +248,14 @@ class InicioFrame(ctk.CTkFrame):
         tarjeta.grid_propagate(False)
         tarjeta.grid_columnconfigure(0, weight=1)
         tarjeta.grid_columnconfigure(1, weight=0)
-        ctk.CTkLabel(
+        titulo_label = ctk.CTkLabel(
             tarjeta,
             text=titulo,
             font=("Arial", 10, "bold"),
             text_color="#E0E0E0",
             anchor="w",
-        ).grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 0))
+        )
+        titulo_label.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 0))
 
         if es_moneda:
             self.importes_visibles[clave] = True
@@ -274,6 +281,15 @@ class InicioFrame(ctk.CTkFrame):
             anchor="w",
         )
         valor.grid(row=1, column=0, columnspan=2, sticky="ew", padx=14, pady=(2, 8))
+
+        if callable(on_click):
+            for widget in (tarjeta, titulo_label, valor):
+                widget.bind("<Button-1>", lambda _evento, accion=on_click: accion())
+                try:
+                    widget.configure(cursor="hand2")
+                except Exception:
+                    pass
+
         return valor
 
     def crear_tarjeta_renovaciones(self, master, fila, columna):
