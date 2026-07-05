@@ -593,11 +593,26 @@ class InicioFrame(ctk.CTkFrame):
         )
         motivos.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 10))
 
+        boton_abrir_ficha = ctk.CTkButton(
+            tarjeta,
+            text="Abrir ficha",
+            width=110,
+            height=28,
+            font=("Arial", 10, "bold"),
+            fg_color=self.ROJO,
+            hover_color="#990000",
+            corner_radius=4,
+            command=lambda: None,
+        )
+        boton_abrir_ficha.grid(row=5, column=0, sticky="w", padx=12, pady=(0, 10))
+        boton_abrir_ficha.grid_remove()
+
         return {
             "titulo": titulo,
             "mensaje": mensaje,
             "prioridad": prioridad,
             "motivos": motivos,
+            "boton_abrir_ficha": boton_abrir_ficha,
         }
 
     def actualizar_dashboard(self):
@@ -699,16 +714,40 @@ class InicioFrame(ctk.CTkFrame):
         titulo = recomendacion.get("titulo") or ""
         mensaje = recomendacion.get("mensaje") or ""
         prioridad = recomendacion.get("prioridad") or "-"
+        cliente_id = recomendacion.get("cliente_id")
+        cliente_nombre = str(recomendacion.get("cliente_nombre") or "").strip()
+        puntaje = recomendacion.get("puntaje")
         motivos = recomendacion.get("motivos") or []
 
-        self.bloque_prioridad["titulo"].configure(text=titulo)
-        self.bloque_prioridad["mensaje"].configure(text=mensaje)
-        self.bloque_prioridad["prioridad"].configure(text=f"Prioridad: {prioridad}")
-        if motivos:
-            texto_motivos = "\n".join(f"• {motivo}" for motivo in motivos)
+        if cliente_nombre:
+            self.bloque_prioridad["titulo"].configure(text="Te recomiendo comenzar por:")
+            self.bloque_prioridad["mensaje"].configure(text=cliente_nombre.upper())
+            texto_prioridad = f"Prioridad: {str(prioridad).upper()}"
+            if puntaje not in (None, ""):
+                texto_prioridad += f"   Puntaje: {puntaje}"
+            self.bloque_prioridad["prioridad"].configure(text=texto_prioridad)
+            if motivos:
+                texto_motivos = "Motivos:\n" + "\n".join(f"• {motivo}" for motivo in motivos)
+            else:
+                texto_motivos = ""
+            self.bloque_prioridad["motivos"].configure(text=texto_motivos)
         else:
-            texto_motivos = ""
-        self.bloque_prioridad["motivos"].configure(text=texto_motivos)
+            self.bloque_prioridad["titulo"].configure(text=titulo)
+            self.bloque_prioridad["mensaje"].configure(text=mensaje)
+            self.bloque_prioridad["prioridad"].configure(text=f"Prioridad: {prioridad}")
+            if motivos:
+                texto_motivos = "\n".join(f"• {motivo}" for motivo in motivos)
+            else:
+                texto_motivos = ""
+            self.bloque_prioridad["motivos"].configure(text=texto_motivos)
+
+        boton_ficha = self.bloque_prioridad.get("boton_abrir_ficha")
+        if boton_ficha is not None:
+            if cliente_id not in (None, ""):
+                boton_ficha.configure(command=lambda cid=cliente_id: self.abrir_ficha_cliente_desde_dashboard(cid))
+                boton_ficha.grid()
+            else:
+                boton_ficha.grid_remove()
 
         for item in self.tabla_agenda.get_children():
             self.tabla_agenda.delete(item)
@@ -746,6 +785,51 @@ class InicioFrame(ctk.CTkFrame):
     def ir_clientes(self):
         aplicacion = self.winfo_toplevel()
         aplicacion.mostrar_clientes()
+
+    def abrir_ficha_cliente_desde_dashboard(self, cliente_id):
+        try:
+            id_cliente = int(cliente_id)
+        except (TypeError, ValueError):
+            return
+
+        aplicacion = self.winfo_toplevel()
+        if not hasattr(aplicacion, "mostrar_clientes"):
+            return
+
+        aplicacion.mostrar_clientes()
+
+        panel = getattr(aplicacion, "panel", None)
+        if panel is None or not hasattr(panel, "winfo_children"):
+            return
+
+        clientes_frame = None
+        for child in panel.winfo_children():
+            if hasattr(child, "abrir_ficha_cliente") and hasattr(child, "tabla"):
+                clientes_frame = child
+                break
+
+        if clientes_frame is None:
+            return
+
+        item_objetivo = None
+        for item in clientes_frame.tabla.get_children():
+            valores = clientes_frame.tabla.item(item, "values")
+            if not valores:
+                continue
+            try:
+                fila_id = int(valores[0])
+            except (TypeError, ValueError):
+                continue
+            if fila_id == id_cliente:
+                item_objetivo = item
+                break
+
+        if item_objetivo is None:
+            return
+
+        clientes_frame.tabla.selection_set(item_objetivo)
+        clientes_frame.tabla.focus(item_objetivo)
+        clientes_frame.abrir_ficha_cliente()
 
     def ir_resumenes(self):
         aplicacion = self.winfo_toplevel()
