@@ -487,6 +487,13 @@ class InicioFrame(ctk.CTkFrame):
         ).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(8, 4))
 
         etiquetas = {}
+        acciones = {
+            "resumenes_vencidos": self.ir_resumenes,
+            "servicios_vencidos": self.abrir_selector_servicios,
+            "tareas_vencidas": self.ir_agenda,
+            "seguimientos_atrasados": self.ir_crm,
+            "clientes_con_deuda": self.ir_cuenta_corriente,
+        }
         filas = (
             ("resumenes_vencidos", "Resúmenes vencidos"),
             ("servicios_vencidos", "Servicios vencidos"),
@@ -495,13 +502,14 @@ class InicioFrame(ctk.CTkFrame):
             ("clientes_con_deuda", "Clientes con deuda"),
         )
         for indice, (clave, texto) in enumerate(filas, start=1):
-            ctk.CTkLabel(
+            etiqueta_texto = ctk.CTkLabel(
                 tarjeta,
                 text=texto,
                 font=("Arial", 10),
                 text_color="#E0E0E0",
                 anchor="w",
-            ).grid(row=indice, column=0, sticky="w", padx=12, pady=2)
+            )
+            etiqueta_texto.grid(row=indice, column=0, sticky="w", padx=12, pady=2)
 
             valor = ctk.CTkLabel(
                 tarjeta,
@@ -511,6 +519,16 @@ class InicioFrame(ctk.CTkFrame):
                 anchor="e",
             )
             valor.grid(row=indice, column=1, sticky="e", padx=12, pady=2)
+
+            accion = acciones.get(clave)
+            if callable(accion):
+                for widget in (etiqueta_texto, valor):
+                    widget.bind("<Button-1>", lambda _evento, callback=accion: callback())
+                    try:
+                        widget.configure(cursor="hand2")
+                    except Exception:
+                        pass
+
             etiquetas[clave] = valor
 
         return etiquetas
@@ -657,6 +675,13 @@ class InicioFrame(ctk.CTkFrame):
     def ir_agenda(self):
         aplicacion = self.winfo_toplevel()
         aplicacion.mostrar_agenda()
+
+    def ir_crm(self):
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_crm"):
+            aplicacion.mostrar_crm()
+            return
+        self.registrar_contacto()
 
     def registrar_contacto(self):
         ContactoFormWindow(self, al_guardar=self.actualizar_dashboard)
