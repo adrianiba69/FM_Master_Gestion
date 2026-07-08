@@ -12,6 +12,11 @@ from services.tarea_service import TareaService
 class PrioridadService:
 
     @staticmethod
+    def _formatear_monto(valor):
+        numero = f"{float(valor or 0):,.2f}"
+        return "$ " + numero.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    @staticmethod
     def obtener_recomendacion():
         prioridad_cliente = PrioridadService._obtener_cliente_prioritario()
         if prioridad_cliente is not None:
@@ -91,7 +96,9 @@ class PrioridadService:
             saldo_pendiente = float(totales.get("saldo_pendiente") or 0)
             if saldo_pendiente > 0:
                 puntaje += 3
-                motivos.append("Saldo pendiente de cobro")
+                motivos.append(
+                    f"Saldo pendiente de {PrioridadService._formatear_monto(saldo_pendiente)}"
+                )
 
             resumenes = ResumenService.listar(cliente_id)
             resumenes_vencidos = sum(
@@ -103,12 +110,18 @@ class PrioridadService:
             )
             if resumenes_vencidos > 0:
                 puntaje += 4 + resumenes_vencidos
-                motivos.append(f"Resumenes vencidos: {resumenes_vencidos}")
+                if resumenes_vencidos == 1:
+                    motivos.append("Tiene 1 resumen vencido")
+                else:
+                    motivos.append(f"Tiene {resumenes_vencidos} resumenes vencidos")
 
             tareas_vencidas = len(TareaService.listar("Vencidas", cliente_id=cliente_id))
             if tareas_vencidas > 0:
                 puntaje += 2 + tareas_vencidas
-                motivos.append(f"Tareas vencidas: {tareas_vencidas}")
+                if tareas_vencidas == 1:
+                    motivos.append("Tiene 1 tarea vencida")
+                else:
+                    motivos.append(f"Tiene {tareas_vencidas} tareas vencidas")
 
             contactos = ContactoService.listar(cliente_id=cliente_id)
             seguimientos_atrasados = sum(
@@ -116,7 +129,10 @@ class PrioridadService:
             )
             if seguimientos_atrasados > 0:
                 puntaje += 2 + seguimientos_atrasados
-                motivos.append(f"Seguimientos atrasados: {seguimientos_atrasados}")
+                if seguimientos_atrasados == 1:
+                    motivos.append("Tiene 1 seguimiento atrasado")
+                else:
+                    motivos.append(f"Tiene {seguimientos_atrasados} seguimientos atrasados")
 
             servicios = ServicioService.listar(cliente_id)
             servicios_vencidos = sum(
@@ -127,7 +143,10 @@ class PrioridadService:
             )
             if servicios_vencidos > 0:
                 puntaje += 3 + servicios_vencidos
-                motivos.append(f"Servicios vencidos: {servicios_vencidos}")
+                if servicios_vencidos == 1:
+                    motivos.append("Tiene 1 servicio vencido")
+                else:
+                    motivos.append(f"Tiene {servicios_vencidos} servicios vencidos")
 
             if puntaje <= 0:
                 continue
