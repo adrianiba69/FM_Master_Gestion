@@ -1,4 +1,5 @@
 from datetime import datetime
+from types import MethodType
 from tkinter import messagebox, ttk
 
 import customtkinter as ctk
@@ -750,71 +751,7 @@ class InicioFrame(ctk.CTkFrame):
                 text_color=self.ROJO if valor > 0 else "#E0E0E0",
             )
 
-        try:
-            recomendacion = PrioridadService.obtener_recomendacion()
-        except Exception:
-            recomendacion = {
-                "titulo": "Sistema al día",
-                "mensaje": "No se detectaron prioridades operativas.",
-                "prioridad": "Baja",
-                "motivos": [],
-            }
-
-        titulo = recomendacion.get("titulo") or ""
-        mensaje = recomendacion.get("mensaje") or ""
-        prioridad = recomendacion.get("prioridad") or "-"
-        cliente_id = recomendacion.get("cliente_id")
-        cliente_nombre = str(recomendacion.get("cliente_nombre") or "").strip()
-        puntaje = recomendacion.get("puntaje")
-        motivos = recomendacion.get("motivos") or []
-
-        if cliente_nombre:
-            self.bloque_prioridad["titulo"].configure(text="Te recomiendo comenzar por:")
-            self.bloque_prioridad["mensaje"].configure(text=cliente_nombre.upper())
-            texto_prioridad = f"Prioridad: {str(prioridad).upper()}"
-            if puntaje not in (None, ""):
-                texto_prioridad += f"   Puntaje: {puntaje}"
-            self.bloque_prioridad["prioridad"].configure(text=texto_prioridad)
-            if motivos:
-                texto_motivos = "Motivos:\n" + "\n".join(f"• {motivo}" for motivo in motivos)
-            else:
-                texto_motivos = ""
-            self.bloque_prioridad["motivos"].configure(text=texto_motivos)
-        else:
-            self.bloque_prioridad["titulo"].configure(text=titulo)
-            self.bloque_prioridad["mensaje"].configure(text=mensaje)
-            self.bloque_prioridad["prioridad"].configure(text=f"Prioridad: {prioridad}")
-            if motivos:
-                texto_motivos = "\n".join(f"• {motivo}" for motivo in motivos)
-            else:
-                texto_motivos = ""
-            self.bloque_prioridad["motivos"].configure(text=texto_motivos)
-
-        contenedor_acciones = self.bloque_prioridad.get("contenedor_acciones")
-        boton_ficha = self.bloque_prioridad.get("boton_abrir_ficha")
-        boton_registrar_cobro = self.bloque_prioridad.get("boton_registrar_cobro")
-        boton_nuevo_resumen = self.bloque_prioridad.get("boton_nuevo_resumen")
-        boton_nueva_tarea = self.bloque_prioridad.get("boton_nueva_tarea")
-
-        if contenedor_acciones is not None:
-            if cliente_id not in (None, ""):
-                if boton_ficha is not None:
-                    boton_ficha.configure(command=lambda cid=cliente_id: self.abrir_ficha_cliente_desde_dashboard(cid))
-                if boton_registrar_cobro is not None:
-                    boton_registrar_cobro.configure(
-                        command=lambda cid=cliente_id: self.abrir_cobros_cliente_desde_dashboard(cid)
-                    )
-                if boton_nuevo_resumen is not None:
-                    boton_nuevo_resumen.configure(
-                        command=lambda cid=cliente_id: self.abrir_resumenes_cliente_desde_dashboard(cid)
-                    )
-                if boton_nueva_tarea is not None:
-                    boton_nueva_tarea.configure(
-                        command=lambda cid=cliente_id: self.abrir_nueva_tarea_cliente_desde_dashboard(cid)
-                    )
-                contenedor_acciones.grid()
-            else:
-                contenedor_acciones.grid_remove()
+        self.actualizar_recomendacion()
 
         for item in self.tabla_agenda.get_children():
             self.tabla_agenda.delete(item)
@@ -898,6 +835,73 @@ class InicioFrame(ctk.CTkFrame):
         clientes_frame.tabla.focus(item_objetivo)
         clientes_frame.abrir_ficha_cliente()
 
+    def actualizar_recomendacion(self):
+        try:
+            recomendacion = PrioridadService.obtener_recomendacion()
+        except Exception:
+            recomendacion = {
+                "titulo": "Sistema al día",
+                "mensaje": "No se detectaron prioridades operativas.",
+                "prioridad": "Baja",
+                "motivos": [],
+            }
+
+        titulo = recomendacion.get("titulo") or ""
+        mensaje = recomendacion.get("mensaje") or ""
+        prioridad = recomendacion.get("prioridad") or "-"
+        cliente_id = recomendacion.get("cliente_id")
+        cliente_nombre = str(recomendacion.get("cliente_nombre") or "").strip()
+        puntaje = recomendacion.get("puntaje")
+        motivos = recomendacion.get("motivos") or []
+
+        if cliente_nombre:
+            self.bloque_prioridad["titulo"].configure(text="Te recomiendo comenzar por:")
+            self.bloque_prioridad["mensaje"].configure(text=cliente_nombre.upper())
+            texto_prioridad = f"Prioridad: {str(prioridad).upper()}"
+            if puntaje not in (None, ""):
+                texto_prioridad += f"   Puntaje: {puntaje}"
+            self.bloque_prioridad["prioridad"].configure(text=texto_prioridad)
+            if motivos:
+                texto_motivos = "Motivos:\n" + "\n".join(f"• {motivo}" for motivo in motivos)
+            else:
+                texto_motivos = ""
+            self.bloque_prioridad["motivos"].configure(text=texto_motivos)
+        else:
+            self.bloque_prioridad["titulo"].configure(text=titulo)
+            self.bloque_prioridad["mensaje"].configure(text=mensaje)
+            self.bloque_prioridad["prioridad"].configure(text=f"Prioridad: {prioridad}")
+            if motivos:
+                texto_motivos = "\n".join(f"• {motivo}" for motivo in motivos)
+            else:
+                texto_motivos = ""
+            self.bloque_prioridad["motivos"].configure(text=texto_motivos)
+
+        contenedor_acciones = self.bloque_prioridad.get("contenedor_acciones")
+        boton_ficha = self.bloque_prioridad.get("boton_abrir_ficha")
+        boton_registrar_cobro = self.bloque_prioridad.get("boton_registrar_cobro")
+        boton_nuevo_resumen = self.bloque_prioridad.get("boton_nuevo_resumen")
+        boton_nueva_tarea = self.bloque_prioridad.get("boton_nueva_tarea")
+
+        if contenedor_acciones is not None:
+            if cliente_id not in (None, ""):
+                if boton_ficha is not None:
+                    boton_ficha.configure(command=lambda cid=cliente_id: self.abrir_ficha_cliente_desde_dashboard(cid))
+                if boton_registrar_cobro is not None:
+                    boton_registrar_cobro.configure(
+                        command=lambda cid=cliente_id: self.abrir_cobros_cliente_desde_dashboard(cid)
+                    )
+                if boton_nuevo_resumen is not None:
+                    boton_nuevo_resumen.configure(
+                        command=lambda cid=cliente_id: self.abrir_resumenes_cliente_desde_dashboard(cid)
+                    )
+                if boton_nueva_tarea is not None:
+                    boton_nueva_tarea.configure(
+                        command=lambda cid=cliente_id: self.abrir_nueva_tarea_cliente_desde_dashboard(cid)
+                    )
+                contenedor_acciones.grid()
+            else:
+                contenedor_acciones.grid_remove()
+
     def abrir_resumenes_cliente_desde_dashboard(self, cliente_id):
         try:
             id_cliente = int(cliente_id)
@@ -906,7 +910,7 @@ class InicioFrame(ctk.CTkFrame):
 
         aplicacion = self.winfo_toplevel()
         if hasattr(aplicacion, "mostrar_resumenes"):
-            aplicacion.mostrar_resumenes(cliente_id=id_cliente)
+            aplicacion.mostrar_resumenes(cliente_id=id_cliente, on_cambio=self.actualizar_recomendacion)
 
     def abrir_cobros_cliente_desde_dashboard(self, cliente_id):
         try:
@@ -917,6 +921,12 @@ class InicioFrame(ctk.CTkFrame):
         aplicacion = self.winfo_toplevel()
         if hasattr(aplicacion, "mostrar_cobros"):
             aplicacion.mostrar_cobros(cliente_id=id_cliente)
+            panel = getattr(aplicacion, "panel", None)
+            if panel is not None and hasattr(panel, "winfo_children"):
+                for child in panel.winfo_children():
+                    if hasattr(child, "on_cambio") and hasattr(child, "guardar_formulario"):
+                        child.on_cambio = self.actualizar_recomendacion
+                        break
 
     def abrir_nueva_tarea_cliente_desde_dashboard(self, cliente_id):
         try:
@@ -927,6 +937,27 @@ class InicioFrame(ctk.CTkFrame):
         aplicacion = self.winfo_toplevel()
         if hasattr(aplicacion, "mostrar_agenda"):
             aplicacion.mostrar_agenda(cliente_id=id_cliente, nueva_tarea=True)
+            panel = getattr(aplicacion, "panel", None)
+            if panel is not None and hasattr(panel, "winfo_children"):
+                for child in panel.winfo_children():
+                    if hasattr(child, "guardar_formulario") and hasattr(child, "abrir_nueva_tarea"):
+                        self._instalar_hook_recomendacion_en_agenda(child)
+                        break
+
+    def _instalar_hook_recomendacion_en_agenda(self, agenda_frame):
+        if getattr(agenda_frame, "_dashboard_recomendacion_hook_instalado", False):
+            return
+
+        guardar_original = agenda_frame.guardar_formulario
+
+        def guardar_formulario_con_recomendacion(self, ventana, tarea_original=None):
+            guardar_original(ventana, tarea_original)
+            if not ventana.winfo_exists():
+                self._dashboard_actualizar_recomendacion()
+
+        agenda_frame._dashboard_actualizar_recomendacion = self.actualizar_recomendacion
+        agenda_frame.guardar_formulario = MethodType(guardar_formulario_con_recomendacion, agenda_frame)
+        agenda_frame._dashboard_recomendacion_hook_instalado = True
 
     def ir_resumenes(self):
         aplicacion = self.winfo_toplevel()
