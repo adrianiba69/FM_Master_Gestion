@@ -593,8 +593,13 @@ class InicioFrame(ctk.CTkFrame):
         )
         motivos.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 10))
 
+        contenedor_acciones = ctk.CTkFrame(tarjeta, fg_color="transparent", corner_radius=0)
+        contenedor_acciones.grid(row=5, column=0, sticky="w", padx=12, pady=(0, 10))
+        for columna in range(4):
+            contenedor_acciones.grid_columnconfigure(columna, weight=0)
+
         boton_abrir_ficha = ctk.CTkButton(
-            tarjeta,
+            contenedor_acciones,
             text="Abrir ficha",
             width=110,
             height=28,
@@ -604,15 +609,59 @@ class InicioFrame(ctk.CTkFrame):
             corner_radius=4,
             command=lambda: None,
         )
-        boton_abrir_ficha.grid(row=5, column=0, sticky="w", padx=12, pady=(0, 10))
-        boton_abrir_ficha.grid_remove()
+        boton_abrir_ficha.grid(row=0, column=0, padx=(0, 8))
+
+        boton_registrar_cobro = ctk.CTkButton(
+            contenedor_acciones,
+            text="Registrar cobro",
+            width=130,
+            height=28,
+            font=("Arial", 10, "bold"),
+            fg_color=self.ROJO,
+            hover_color="#990000",
+            corner_radius=4,
+            command=lambda: None,
+        )
+        boton_registrar_cobro.grid(row=0, column=1, padx=(0, 8))
+
+        boton_nuevo_resumen = ctk.CTkButton(
+            contenedor_acciones,
+            text="Nuevo resumen",
+            width=130,
+            height=28,
+            font=("Arial", 10, "bold"),
+            fg_color=self.ROJO,
+            hover_color="#990000",
+            corner_radius=4,
+            command=lambda: None,
+        )
+        boton_nuevo_resumen.grid(row=0, column=2, padx=(0, 8))
+
+        boton_nueva_tarea = ctk.CTkButton(
+            contenedor_acciones,
+            text="Nueva tarea",
+            width=120,
+            height=28,
+            font=("Arial", 10, "bold"),
+            fg_color=self.ROJO,
+            hover_color="#990000",
+            corner_radius=4,
+            command=lambda: None,
+        )
+        boton_nueva_tarea.grid(row=0, column=3)
+
+        contenedor_acciones.grid_remove()
 
         return {
             "titulo": titulo,
             "mensaje": mensaje,
             "prioridad": prioridad,
             "motivos": motivos,
+            "contenedor_acciones": contenedor_acciones,
             "boton_abrir_ficha": boton_abrir_ficha,
+            "boton_registrar_cobro": boton_registrar_cobro,
+            "boton_nuevo_resumen": boton_nuevo_resumen,
+            "boton_nueva_tarea": boton_nueva_tarea,
         }
 
     def actualizar_dashboard(self):
@@ -741,13 +790,31 @@ class InicioFrame(ctk.CTkFrame):
                 texto_motivos = ""
             self.bloque_prioridad["motivos"].configure(text=texto_motivos)
 
+        contenedor_acciones = self.bloque_prioridad.get("contenedor_acciones")
         boton_ficha = self.bloque_prioridad.get("boton_abrir_ficha")
-        if boton_ficha is not None:
+        boton_registrar_cobro = self.bloque_prioridad.get("boton_registrar_cobro")
+        boton_nuevo_resumen = self.bloque_prioridad.get("boton_nuevo_resumen")
+        boton_nueva_tarea = self.bloque_prioridad.get("boton_nueva_tarea")
+
+        if contenedor_acciones is not None:
             if cliente_id not in (None, ""):
-                boton_ficha.configure(command=lambda cid=cliente_id: self.abrir_ficha_cliente_desde_dashboard(cid))
-                boton_ficha.grid()
+                if boton_ficha is not None:
+                    boton_ficha.configure(command=lambda cid=cliente_id: self.abrir_ficha_cliente_desde_dashboard(cid))
+                if boton_registrar_cobro is not None:
+                    boton_registrar_cobro.configure(
+                        command=lambda cid=cliente_id: self.abrir_cobros_cliente_desde_dashboard(cid)
+                    )
+                if boton_nuevo_resumen is not None:
+                    boton_nuevo_resumen.configure(
+                        command=lambda cid=cliente_id: self.abrir_resumenes_cliente_desde_dashboard(cid)
+                    )
+                if boton_nueva_tarea is not None:
+                    boton_nueva_tarea.configure(
+                        command=lambda cid=cliente_id: self.abrir_nueva_tarea_cliente_desde_dashboard(cid)
+                    )
+                contenedor_acciones.grid()
             else:
-                boton_ficha.grid_remove()
+                contenedor_acciones.grid_remove()
 
         for item in self.tabla_agenda.get_children():
             self.tabla_agenda.delete(item)
@@ -830,6 +897,36 @@ class InicioFrame(ctk.CTkFrame):
         clientes_frame.tabla.selection_set(item_objetivo)
         clientes_frame.tabla.focus(item_objetivo)
         clientes_frame.abrir_ficha_cliente()
+
+    def abrir_resumenes_cliente_desde_dashboard(self, cliente_id):
+        try:
+            id_cliente = int(cliente_id)
+        except (TypeError, ValueError):
+            return
+
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_resumenes"):
+            aplicacion.mostrar_resumenes(cliente_id=id_cliente)
+
+    def abrir_cobros_cliente_desde_dashboard(self, cliente_id):
+        try:
+            id_cliente = int(cliente_id)
+        except (TypeError, ValueError):
+            return
+
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_cobros"):
+            aplicacion.mostrar_cobros(cliente_id=id_cliente)
+
+    def abrir_nueva_tarea_cliente_desde_dashboard(self, cliente_id):
+        try:
+            id_cliente = int(cliente_id)
+        except (TypeError, ValueError):
+            return
+
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_agenda"):
+            aplicacion.mostrar_agenda(cliente_id=id_cliente, nueva_tarea=True)
 
     def ir_resumenes(self):
         aplicacion = self.winfo_toplevel()
