@@ -21,11 +21,19 @@ class Resumen:
     id: int = None
     numero: int = None
     cliente_id: int = None
+    emisor_fiscal_id: int = None
     fecha: str = ""
     fecha_vencimiento: str = ""
+    tipo_factura: str = ""
+    punto_venta: str = ""
     total: float = 0
     saldo: float = 0
     estado: str = "Pendiente"
     pdf_path: str = ""
     fecha_creacion: str = ""
+    estado_facturacion: str = "Pendiente"
+    fecha_facturacion: str = ""
+    cae: str = ""
+    vencimiento_cae: str = ""
+    numero_factura: str = ""
     conceptos: list = field(default_factory=list)

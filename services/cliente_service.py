@@ -47,6 +47,8 @@ class ClienteService:
                 email,
                 cuit,
                 iva,
+                tipo_factura,
+                monotributo_facturacion,
                 emisor_id,
                 emisor_recomendado_id,
                 vencimiento,
@@ -55,7 +57,7 @@ class ClienteService:
                 fecha_alta,
                 fecha_modificacion
             )
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             cliente.razon_social,
             cliente.codigo,
@@ -69,6 +71,8 @@ class ClienteService:
             cliente.email,
             cliente.cuit,
             cliente.iva,
+            cliente.tipo_factura,
+            cliente.monotributo_facturacion,
             cliente.emisor_id,
             cliente.emisor_recomendado_id,
             cliente.vencimiento,
@@ -103,6 +107,8 @@ class ClienteService:
                 email,
                 cuit,
                 iva,
+                COALESCE(tipo_factura, '') AS tipo_factura,
+                COALESCE(monotributo_facturacion, '') AS monotributo_facturacion,
                 emisor_id,
                 emisor_recomendado_id,
                 vencimiento,
@@ -140,6 +146,8 @@ class ClienteService:
                 email=?,
                 cuit=?,
                 iva=?,
+                tipo_factura=?,
+                monotributo_facturacion=?,
                 emisor_id=?,
                 emisor_recomendado_id=?,
                 vencimiento=?,
@@ -160,6 +168,8 @@ class ClienteService:
             cliente.email,
             cliente.cuit,
             cliente.iva,
+            cliente.tipo_factura,
+            cliente.monotributo_facturacion,
             cliente.emisor_id,
             cliente.emisor_recomendado_id,
             cliente.vencimiento,
@@ -204,6 +214,29 @@ class ClienteService:
             WHERE COALESCE(NULLIF(razon_social, ''), nombre) LIKE ?
             ORDER BY COALESCE(NULLIF(razon_social, ''), nombre)
         """, ('%' + texto + '%',))
+
+        datos = cur.fetchall()
+
+        conn.close()
+
+        return datos
+
+    @staticmethod
+    def listar_contactos():
+
+        conn = conectar()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                id,
+                codigo,
+                COALESCE(NULLIF(razon_social, ''), nombre) AS razon_social,
+                telefono,
+                whatsapp
+            FROM clientes
+            ORDER BY COALESCE(NULLIF(razon_social, ''), nombre)
+        """)
 
         datos = cur.fetchall()
 

@@ -29,6 +29,86 @@ class ResumenService:
         return emision.replace(month=emision.month + 1, day=dia)
 
     @staticmethod
+    def _resolver_datos_fiscales_cliente(cur, cliente_id):
+        cur.execute(
+            "SELECT monotributo_facturacion FROM clientes WHERE id=?",
+            (cliente_id,),
+        )
+        fila = cur.fetchone()
+        referencia_emisor = (fila[0] or "").strip() if fila else ""
+        if not referencia_emisor or referencia_emisor == "No aplica":
+            return None, None, None
+
+        emisor = None
+        if referencia_emisor.startswith("EMISOR:"):
+            try:
+                emisor_id = int(referencia_emisor.split(":", 1)[1])
+            except (TypeError, ValueError):
+                emisor_id = None
+            if emisor_id is not None:
+                cur.execute(
+                    "SELECT id, tipo_factura, punto_venta FROM emisores_fiscales WHERE id=?",
+                    (emisor_id,),
+                )
+                emisor = cur.fetchone()
+        elif referencia_emisor in ("Monotributo 1", "Monotributo 2"):
+            indice = 0 if referencia_emisor.endswith("1") else 1
+            cur.execute(
+                "SELECT id, tipo_factura, punto_venta FROM emisores_fiscales WHERE activo=1 ORDER BY id"
+            )
+            emisores = cur.fetchall()
+            if len(emisores) > indice:
+                emisor = emisores[indice]
+        else:
+            cur.execute(
+                """
+                SELECT id, tipo_factura, punto_venta
+                FROM emisores_fiscales
+                WHERE nombre_fantasia=? OR razon_social=?
+                ORDER BY activo DESC, id
+                LIMIT 1
+                """,
+                (referencia_emisor, referencia_emisor),
+            )
+            emisor = cur.fetchone()
+
+        if emisor is None:
+            return None, None, None
+
+        return emisor[0], emisor[1] or None, emisor[2] or None
+
+    @staticmethod
+    def _insertar_resumen(cur, numero, cliente_id, fecha_emision, vencimiento, total):
+        emisor_fiscal_id, tipo_factura, punto_venta = ResumenService._resolver_datos_fiscales_cliente(
+            cur,
+            cliente_id,
+        )
+        cur.execute(
+            """
+            INSERT INTO resumenes(
+                numero, cliente_id, emisor_fiscal_id, fecha, fecha_vencimiento,
+                tipo_factura, punto_venta, total, saldo, estado,
+                estado_facturacion, fecha_creacion
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                numero,
+                cliente_id,
+                emisor_fiscal_id,
+                fecha_emision.isoformat(),
+                vencimiento.isoformat(),
+                tipo_factura,
+                punto_venta,
+                total,
+                total,
+                "Pendiente",
+                "Pendiente",
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        return cur.lastrowid
+
+    @staticmethod
     def generar_desde_servicios(cliente_id, fecha=None, fecha_vencimiento=None):
         fecha_emision = fecha or date.today()
         if isinstance(fecha_emision, str):
@@ -92,22 +172,14 @@ class ResumenService:
                 for servicio in servicios
             )
 
-            cur.execute("""
-                INSERT INTO resumenes(
-                    numero, cliente_id, fecha, fecha_vencimiento, total,
-                    saldo, estado, fecha_creacion
-                ) VALUES(?,?,?,?,?,?,?,?)
-            """, (
+            resumen_id = ResumenService._insertar_resumen(
+                cur,
                 numero,
                 cliente_id,
-                fecha_emision.isoformat(),
-                vencimiento.isoformat(),
+                fecha_emision,
+                vencimiento,
                 total,
-                total,
-                "Pendiente",
-                datetime.now().isoformat(timespec="seconds"),
-            ))
-            resumen_id = cur.lastrowid
+            )
 
             for servicio in servicios:
                 cantidad = float(servicio[3] or 0)
@@ -252,17 +324,14 @@ class ResumenService:
                 - float(servicio[5] or 0)
                 for servicio in servicios
             )
-            cur.execute("""
-                INSERT INTO resumenes(
-                    numero, cliente_id, fecha, fecha_vencimiento, total,
-                    saldo, estado, fecha_creacion
-                ) VALUES(?,?,?,?,?,?,?,?)
-            """, (
-                numero, cliente_id, fecha_emision.isoformat(),
-                vencimiento.isoformat(), total, total, "Pendiente",
-                datetime.now().isoformat(timespec="seconds"),
-            ))
-            resumen_id = cur.lastrowid
+            resumen_id = ResumenService._insertar_resumen(
+                cur,
+                numero,
+                cliente_id,
+                fecha_emision,
+                vencimiento,
+                total,
+            )
 
             for servicio in servicios:
                 cantidad = float(servicio[3] or 0)
@@ -362,17 +431,14 @@ class ResumenService:
                     vencimiento = fecha_emision.replace(
                         month=fecha_emision.month + 1, day=dia
                     )
-                cur.execute("""
-                    INSERT INTO resumenes(
-                        numero, cliente_id, fecha, fecha_vencimiento, total,
-                        saldo, estado, fecha_creacion
-                    ) VALUES(?,?,?,?,?,?,?,?)
-                """, (
-                    numero, cliente_id, fecha_emision.isoformat(),
-                    vencimiento.isoformat(), total, total, "Pendiente",
-                    datetime.now().isoformat(timespec="seconds"),
-                ))
-                resumen_id = cur.lastrowid
+                resumen_id = ResumenService._insertar_resumen(
+                    cur,
+                    numero,
+                    cliente_id,
+                    fecha_emision,
+                    vencimiento,
+                    total,
+                )
                 resumen_ids.append(resumen_id)
 
                 for fila in renovaciones:
@@ -432,8 +498,13 @@ class ResumenService:
         conn = conectar()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, numero, cliente_id, fecha, fecha_vencimiento,
-                   total, saldo, estado, pdf_path, fecha_creacion
+             SELECT id, numero, cliente_id, emisor_fiscal_id, fecha, fecha_vencimiento,
+                 tipo_factura, punto_venta, total, saldo, estado, pdf_path, fecha_creacion,
+                 COALESCE(estado_facturacion, 'Pendiente'),
+                 COALESCE(fecha_facturacion, ''),
+                 COALESCE(cae, ''),
+                 COALESCE(vencimiento_cae, ''),
+                 COALESCE(numero_factura, '')
             FROM resumenes WHERE id=?
         """, (resumen_id,))
         fila = cur.fetchone()
@@ -451,6 +522,134 @@ class ResumenService:
         resumen.conceptos = [ResumenConcepto(*concepto) for concepto in cur.fetchall()]
         conn.close()
         return resumen
+
+    @staticmethod
+    def obtener_datos_facturacion(resumen_id):
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                emisor_fiscal_id,
+                tipo_factura,
+                punto_venta,
+                COALESCE(estado_facturacion, 'Pendiente'),
+                COALESCE(fecha_facturacion, ''),
+                COALESCE(cae, ''),
+                COALESCE(vencimiento_cae, ''),
+                COALESCE(numero_factura, '')
+            FROM resumenes WHERE id=?
+            """,
+            (resumen_id,),
+        )
+        fila = cur.fetchone()
+        conn.close()
+        if not fila:
+            return None
+        return {
+            "emisor_fiscal_id": fila[0],
+            "tipo_factura": fila[1] or "",
+            "punto_venta": fila[2] or "",
+            "estado_facturacion": fila[3] or "Pendiente",
+            "fecha_facturacion": fila[4] or "",
+            "cae": fila[5] or "",
+            "vencimiento_cae": fila[6] or "",
+            "numero_factura": fila[7] or "",
+        }
+
+    @staticmethod
+    def marcar_facturado(
+        resumen_id,
+        numero_factura="",
+        cae="",
+        vencimiento_cae="",
+        fecha_facturacion=None,
+        estado_facturacion="Facturado",
+    ):
+        fecha_valor = fecha_facturacion
+        if fecha_valor is None:
+            fecha_valor = datetime.now().isoformat(timespec="seconds")
+        elif isinstance(fecha_valor, (date, datetime)):
+            fecha_valor = fecha_valor.isoformat()
+
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE resumenes
+            SET estado_facturacion=?,
+                fecha_facturacion=?,
+                cae=?,
+                vencimiento_cae=?,
+                numero_factura=?
+            WHERE id=?
+            """,
+            (
+                estado_facturacion or "Facturado",
+                fecha_valor,
+                cae or "",
+                vencimiento_cae or "",
+                numero_factura or "",
+                resumen_id,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def obtener_pendientes_facturacion():
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                r.id,
+                r.numero,
+                r.cliente_id,
+                COALESCE(NULLIF(c.razon_social, ''), c.nombre),
+                r.fecha,
+                r.total,
+                COALESCE(r.estado_facturacion, 'Pendiente'),
+                r.emisor_fiscal_id,
+                COALESCE(r.tipo_factura, ''),
+                COALESCE(r.punto_venta, '')
+            FROM resumenes r
+            JOIN clientes c ON c.id = r.cliente_id
+            WHERE COALESCE(r.estado_facturacion, 'Pendiente') = 'Pendiente'
+            ORDER BY r.numero DESC
+            """
+        )
+        filas = cur.fetchall()
+        conn.close()
+        return filas
+
+    @staticmethod
+    def obtener_facturados():
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                r.id,
+                r.numero,
+                r.cliente_id,
+                COALESCE(NULLIF(c.razon_social, ''), c.nombre),
+                r.fecha,
+                r.total,
+                COALESCE(r.estado_facturacion, 'Pendiente'),
+                COALESCE(r.fecha_facturacion, ''),
+                COALESCE(r.numero_factura, ''),
+                COALESCE(r.cae, ''),
+                COALESCE(r.vencimiento_cae, '')
+            FROM resumenes r
+            JOIN clientes c ON c.id = r.cliente_id
+            WHERE COALESCE(r.estado_facturacion, 'Pendiente') <> 'Pendiente'
+            ORDER BY COALESCE(r.fecha_facturacion, r.fecha_creacion, r.fecha) DESC, r.numero DESC
+            """
+        )
+        filas = cur.fetchall()
+        conn.close()
+        return filas
 
     @staticmethod
     def obtener_cliente(resumen_id):

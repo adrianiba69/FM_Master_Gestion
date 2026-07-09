@@ -15,6 +15,8 @@ class Cliente:
     email: str = ""
     cuit: str = ""
     iva: str = ""
+    tipo_factura: str = "No factura"
+    monotributo_facturacion: str = "No aplica"
     emisor_id: int = None
     emisor_recomendado_id: int = None
     servicio: str = ""

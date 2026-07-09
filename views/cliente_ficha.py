@@ -11,6 +11,7 @@ from services.contacto_service import ContactoService
 from services.resumen_service import ResumenService
 from services.servicio_service import ServicioService
 from services.tarea_service import TareaService
+from services.emisor_fiscal_service import EmisorFiscalService
 
 
 class FichaClienteFrame(ctk.CTkFrame):
@@ -22,6 +23,8 @@ class FichaClienteFrame(ctk.CTkFrame):
             "responsable": "",
             "cuit": "",
             "iva": "",
+            "tipo_factura": "No factura",
+            "monotributo_facturacion": "No aplica",
             "telefono": "",
             "whatsapp": "",
             "email": "",
@@ -76,10 +79,14 @@ class FichaClienteFrame(ctk.CTkFrame):
                     "whatsapp": fila[8],
                     "email": fila[9],
                     "cuit": fila[10],
-                    "iva": fila[11],
-                    "estado": fila[16] if len(fila) > 16 else "",
+                    "iva": fila[11] if len(fila) > 11 and fila[11] else "Otro",
+                    "tipo_factura": fila[12] if len(fila) > 12 and fila[12] else "No factura",
+                    "monotributo_facturacion": EmisorFiscalService.resolver_etiqueta(
+                        fila[13] if len(fila) > 13 else ""
+                    ),
+                    "estado": fila[17] if len(fila) > 17 else "",
                 })
-                observaciones = fila[17] if len(fila) > 17 else ""
+                observaciones = fila[18] if len(fila) > 18 else ""
                 datos["observaciones"] = observaciones or ""
 
             servicios = ServicioService.listar(cliente_id)
@@ -392,6 +399,8 @@ class FichaClienteFrame(ctk.CTkFrame):
             ("responsable", "Responsable"),
             ("cuit", "CUIT"),
             ("iva", "IVA"),
+            ("tipo_factura", "Tipo de Factura"),
+            ("monotributo_facturacion", "Emisor fiscal"),
             ("telefono", "Teléfono"),
             ("whatsapp", "WhatsApp"),
             ("email", "Email"),
@@ -455,6 +464,9 @@ class FichaClienteFrame(ctk.CTkFrame):
         contenido.grid_rowconfigure(fila_servicios, weight=0)
 
         return tarjeta
+
+    def _resolver_emisor_fiscal(self, valor):
+        return EmisorFiscalService.resolver_etiqueta(valor)
 
     def _crear_tarjeta_proximo_vencimiento(self, parent):
         tarjeta = self._crear_tarjeta_base(parent, "CUENTA CORRIENTE")

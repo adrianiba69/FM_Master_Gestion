@@ -104,7 +104,7 @@ class ConfiguracionFrame(ctk.CTkFrame):
 
         self.boton_emisores = ctk.CTkButton(
             acciones,
-            text="Emisores de Facturacion",
+            text="Emisores Fiscales",
             width=200,
             height=40,
             fg_color="#333333",
@@ -168,11 +168,11 @@ class ConfiguracionFrame(ctk.CTkFrame):
 
     def abrir_emisores(self):
         try:
-            from views.emisores import EmisoresWindow
+            from views.emisores_fiscales import EmisoresFiscalesWindow
         except Exception as error:
-            messagebox.showerror("Emisores", f"No se pudo abrir emisores.\n{error}", parent=self)
+            messagebox.showerror("Emisores Fiscales", f"No se pudo abrir emisores fiscales.\n{error}", parent=self)
             return
-        EmisoresWindow(self)
+        EmisoresFiscalesWindow(self)
 
     def crear_seccion_arca(self, contenedor):
         arca_frame = ctk.CTkFrame(contenedor, fg_color="#FFFFFF", corner_radius=6)

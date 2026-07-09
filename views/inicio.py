@@ -43,7 +43,7 @@ class InicioFrame(ctk.CTkFrame):
         encabezado.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             encabezado,
-            text="DASHBOARD",
+            text="PANEL DE CONTROL",
             font=("Arial", 26, "bold"),
             text_color=self.ROJO,
         ).grid(row=0, column=0, sticky="w")
@@ -95,12 +95,12 @@ class InicioFrame(ctk.CTkFrame):
         self.indicadores_renovacion = self.crear_tarjeta_renovaciones(
             metricas,
             len(configuracion) // 4,
-            len(configuracion) % 4,
+            0,
         )
         self.indicadores_agenda = self.crear_tarjeta_agenda(
             metricas,
             len(configuracion) // 4,
-            len(configuracion) % 4 + 1,
+            2,
         )
         self.indicadores_seguimientos = self.crear_tarjeta_seguimientos(
             metricas,
@@ -270,10 +270,11 @@ class InicioFrame(ctk.CTkFrame):
         titulo_label.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 0))
 
         if es_moneda:
-            self.importes_visibles[clave] = True
+            ocultar_inicio = clave in {"facturado_mes", "cobrado_mes", "saldo_pendiente"}
+            self.importes_visibles[clave] = not ocultar_inicio
             boton_ojo = ctk.CTkButton(
                 tarjeta,
-                text="👁",
+                text="🙈" if ocultar_inicio else "👁",
                 width=30,
                 height=26,
                 font=("Segoe UI Emoji", 15),
@@ -311,7 +312,7 @@ class InicioFrame(ctk.CTkFrame):
             fg_color=self.NEGRO,
             corner_radius=6,
         )
-        tarjeta.grid(row=fila, column=columna, sticky="nsew", padx=6, pady=5)
+        tarjeta.grid(row=fila, column=columna, columnspan=2, sticky="nsew", padx=6, pady=5)
         tarjeta.grid_propagate(False)
         for indice in range(4):
             tarjeta.grid_columnconfigure(indice, weight=1, uniform="renovacion")

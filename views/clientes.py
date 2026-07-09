@@ -10,6 +10,8 @@ import customtkinter as ctk
 from models.cliente import Cliente
 from services.cliente_service import ClienteService
 from services.contacto_service import ContactoService
+from services.emisor_fiscal_service import EmisorFiscalService
+from runtime_paths import EXPORTS_DIR
 from views.cobros import CobrosFrame
 from views.cliente_ficha import FichaClienteFrame
 from views.crm import CRMWindow
@@ -17,6 +19,16 @@ from views.servicios import ServiciosWindow
 
 
 class ClientesFrame(ctk.CTkFrame):
+
+    IVA_OPCIONES = [
+        "Monotributo",
+        "Responsable Inscripto",
+        "Consumidor Final",
+        "Exento",
+        "Otro",
+    ]
+    TIPO_FACTURA_OPCIONES = ["Factura A", "Factura C", "No factura"]
+    EMISOR_FACTURACION_DEFAULT = ["No aplica"]
 
     CAMPOS_FORMULARIO = [
         ("codigo", "Codigo"),
@@ -30,6 +42,8 @@ class ClientesFrame(ctk.CTkFrame):
         ("email", "Email"),
         ("cuit", "CUIT"),
         ("iva", "IVA"),
+        ("tipo_factura", "Tipo de Factura"),
+        ("monotributo_facturacion", "Emisor Fiscal"),
         ("vencimiento", "Vencimiento"),
         ("estado", "Estado"),
         ("observaciones", "Observaciones"),
@@ -169,6 +183,17 @@ class ClientesFrame(ctk.CTkFrame):
             command=self.abrir_crm_cliente,
         )
         boton_crm.grid(row=2, column=1, padx=(10, 0), pady=(10, 0))
+
+        boton_contactos = ctk.CTkButton(
+            barra,
+            text="Listado contactos",
+            width=150,
+            height=36,
+            fg_color="#333333",
+            hover_color="#111111",
+            command=self.generar_listado_contactos,
+        )
+        boton_contactos.grid(row=2, column=2, padx=(10, 0), pady=(10, 0), sticky="w")
 
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
@@ -466,6 +491,73 @@ class ClientesFrame(ctk.CTkFrame):
             return
         CRMWindow(self, cliente_id=id_cliente)
 
+    def generar_listado_contactos(self):
+        try:
+            contactos = ClienteService.listar_contactos()
+        except Exception as error:
+            messagebox.showerror(
+                "Listado de contactos",
+                f"No se pudo generar el listado.\n\nDetalle: {error}",
+                parent=self,
+            )
+            return
+
+        if not contactos:
+            messagebox.showinfo(
+                "Listado de contactos",
+                "No hay clientes para incluir en el listado.",
+                parent=self,
+            )
+            return
+
+        destino_dir = EXPORTS_DIR / "estadisticas"
+        destino_dir.mkdir(parents=True, exist_ok=True)
+        marca_tiempo = datetime.now().strftime("%Y%m%d_%H%M")
+        destino = destino_dir / f"listado_contactos_{marca_tiempo}.txt"
+
+        lineas = [
+            "FM MASTER GESTION - LISTADO DE CONTACTOS",
+            f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+            "",
+            "CODIGO | RAZON SOCIAL | TELEFONO | WHATSAPP",
+            "-" * 100,
+        ]
+
+        for _, codigo, razon_social, telefono, whatsapp in contactos:
+            lineas.append(
+                " | ".join([
+                    (codigo or "-").strip(),
+                    (razon_social or "-").strip(),
+                    (telefono or "-").strip(),
+                    (whatsapp or "-").strip(),
+                ])
+            )
+
+        try:
+            destino.write_text("\n".join(lineas), encoding="utf-8")
+        except OSError as error:
+            messagebox.showerror(
+                "Listado de contactos",
+                f"No se pudo guardar el archivo.\n\nDetalle: {error}",
+                parent=self,
+            )
+            return
+
+        abrir_ahora = messagebox.askyesno(
+            "Listado de contactos",
+            f"Listado generado en:\n{destino}\n\n¿Desea abrirlo ahora para imprimir?",
+            parent=self,
+        )
+        if abrir_ahora:
+            try:
+                os.startfile(str(destino))
+            except OSError:
+                messagebox.showwarning(
+                    "Listado de contactos",
+                    "No se pudo abrir automaticamente el archivo.",
+                    parent=self,
+                )
+
     def abrir_formulario(self, titulo, cliente=None, on_guardado=None):
         ventana = ctk.CTkToplevel(self)
         ventana.title(titulo)
@@ -496,17 +588,37 @@ class ClientesFrame(ctk.CTkFrame):
             ).grid(row=0, column=0, sticky="e", pady=(0, 10))
 
         self.campos_formulario = {}
+        emisores_fiscales = self.obtener_opciones_emisor_fiscal()
+        campos_opciones = {
+            "iva": self.IVA_OPCIONES,
+            "tipo_factura": self.TIPO_FACTURA_OPCIONES,
+            "monotributo_facturacion": emisores_fiscales,
+        }
         for fila, (clave, etiqueta) in enumerate(self.CAMPOS_FORMULARIO, start=1):
             label = ctk.CTkLabel(contenedor, text=etiqueta, anchor="w")
             label.grid(row=fila * 2 - 1, column=0, sticky="ew", pady=(8, 0))
 
-            entrada = ctk.CTkEntry(contenedor)
+            if clave in campos_opciones:
+                entrada = ctk.CTkOptionMenu(
+                    contenedor,
+                    values=campos_opciones[clave],
+                    fg_color="white",
+                    button_color="#C00000",
+                    button_hover_color="#990000",
+                    text_color="#1F1F1F",
+                )
+            else:
+                entrada = ctk.CTkEntry(contenedor)
+
             entrada.grid(row=fila * 2, column=0, sticky="ew")
             self.campos_formulario[clave] = entrada
 
         if cliente is None:
-            self.campos_formulario["vencimiento"].insert(0, "1")
-            self.campos_formulario["estado"].insert(0, "Activo")
+            self.set_campo("iva", "Otro")
+            self.set_campo("tipo_factura", "No factura")
+            self.set_campo("monotributo_facturacion", "No aplica")
+            self.set_campo("vencimiento", "1")
+            self.set_campo("estado", "Activo")
         else:
             self.cargar_datos_en_formulario(cliente)
 
@@ -534,14 +646,16 @@ class ClientesFrame(ctk.CTkFrame):
             "whatsapp": cliente.whatsapp,
             "email": cliente.email,
             "cuit": cliente.cuit,
-            "iva": cliente.iva,
+            "iva": cliente.iva or "Otro",
+            "tipo_factura": cliente.tipo_factura or "No factura",
+            "monotributo_facturacion": EmisorFiscalService.resolver_etiqueta(cliente.monotributo_facturacion),
             "vencimiento": str(cliente.vencimiento or 1),
             "estado": cliente.estado or "Activo",
             "observaciones": cliente.observaciones,
         }
 
         for clave, valor in valores.items():
-            self.campos_formulario[clave].insert(0, valor or "")
+            self.set_campo(clave, valor or "")
 
     def guardar_formulario(self, ventana, cliente_original=None, on_guardado=None):
         razon_social = self.obtener_campo("razon_social")
@@ -569,6 +683,10 @@ class ClientesFrame(ctk.CTkFrame):
             email=self.obtener_campo("email"),
             cuit=self.obtener_campo("cuit"),
             iva=self.obtener_campo("iva"),
+            tipo_factura=self.obtener_campo("tipo_factura") or "No factura",
+            monotributo_facturacion=EmisorFiscalService.codificar_seleccion(
+                self.obtener_campo("monotributo_facturacion") or "No aplica"
+            ),
             vencimiento=vencimiento,
             estado=self.obtener_campo("estado") or "Activo",
             observaciones=self.obtener_campo("observaciones"),
@@ -594,25 +712,65 @@ class ClientesFrame(ctk.CTkFrame):
         )
 
     def crear_cliente_desde_fila(self, fila):
+        def valor(indice, por_defecto=""):
+            if indice < len(fila):
+                return fila[indice]
+            return por_defecto
+
         return Cliente(
-            id=fila[0],
-            codigo=fila[1] or "",
-            razon_social=fila[2] or "",
-            nombre_comercial=fila[3] or "",
-            responsable=fila[4] or "",
-            direccion=fila[5] or "",
-            localidad=fila[6] or "",
-            telefono=fila[7] or "",
-            whatsapp=fila[8] or "",
-            email=fila[9] or "",
-            cuit=fila[10] or "",
-            iva=fila[11] or "",
-            vencimiento=fila[12] or 1,
-            estado=fila[13] or "Activo",
-            observaciones=fila[14] or "",
-            fecha_alta=fila[15] or "",
-            fecha_modificacion=fila[16] or "",
+            id=valor(0),
+            codigo=valor(1) or "",
+            razon_social=valor(2) or "",
+            nombre_comercial=valor(3) or "",
+            responsable=valor(4) or "",
+            direccion=valor(5) or "",
+            localidad=valor(6) or "",
+            telefono=valor(7) or "",
+            whatsapp=valor(8) or "",
+            email=valor(9) or "",
+            cuit=valor(10) or "",
+            iva=valor(11) or "Otro",
+            tipo_factura=valor(12) or "No factura",
+            monotributo_facturacion=valor(13) or "No aplica",
+            vencimiento=valor(16, 1) or 1,
+            estado=valor(17, "Activo") or "Activo",
+            observaciones=valor(18) or "",
+            fecha_alta=valor(19) or "",
+            fecha_modificacion=valor(20) or "",
         )
+
+    def set_campo(self, clave, valor):
+        campo = self.campos_formulario.get(clave)
+        if campo is None:
+            return
+
+        if isinstance(campo, ctk.CTkEntry):
+            campo.delete(0, "end")
+            campo.insert(0, valor)
+            return
+
+        if isinstance(campo, ctk.CTkOptionMenu):
+            valores = list(campo.cget("values") or [])
+            if valor and valor not in valores:
+                valores.append(valor)
+                campo.configure(values=valores)
+            campo.set(valor)
+
+    def obtener_opciones_emisor_fiscal(self):
+        opciones = ["No aplica"]
+        try:
+            emisores = EmisorFiscalService.listar_activos()
+        except Exception:
+            emisores = []
+
+        for emisor in emisores:
+            nombre = EmisorFiscalService.etiqueta_visible(emisor)
+            if nombre and nombre not in opciones:
+                opciones.append(nombre)
+
+        if not opciones:
+            return ["No aplica"]
+        return opciones
 
     def obtener_campo(self, clave):
         return self.campos_formulario[clave].get().strip()

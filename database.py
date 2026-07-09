@@ -51,6 +51,8 @@ def crear_base():
         email TEXT,
         cuit TEXT,
         iva TEXT,
+        tipo_factura TEXT DEFAULT 'No factura',
+        monotributo_facturacion TEXT DEFAULT 'No aplica',
         emisor_id INTEGER,
         emisor_recomendado_id INTEGER,
         vencimiento INTEGER,
@@ -75,6 +77,8 @@ def crear_base():
         "email": "TEXT",
         "cuit": "TEXT",
         "iva": "TEXT",
+        "tipo_factura": "TEXT DEFAULT 'No factura'",
+        "monotributo_facturacion": "TEXT DEFAULT 'No aplica'",
         "vencimiento": "INTEGER",
         "estado": "TEXT",
         "observaciones": "TEXT",
@@ -203,6 +207,87 @@ def crear_base():
     for columna, definicion in columnas_emisores.items():
         agregar_columna_si_falta(cur, "emisores_facturacion", columna, definicion)
 
+    # ==========================
+    # EMISORES FISCALES (PRE-ARCA)
+    # ==========================
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS emisores_fiscales(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        razon_social TEXT NOT NULL,
+        nombre_fantasia TEXT,
+        cuit TEXT,
+        condicion_iva TEXT,
+        tipo_factura TEXT,
+        punto_venta TEXT,
+        activo INTEGER DEFAULT 1,
+        observaciones TEXT
+    )
+    """)
+
+    columnas_emisores_fiscales = {
+        "razon_social": "TEXT NOT NULL DEFAULT ''",
+        "nombre_fantasia": "TEXT",
+        "cuit": "TEXT",
+        "condicion_iva": "TEXT",
+        "tipo_factura": "TEXT",
+        "punto_venta": "TEXT",
+        "activo": "INTEGER DEFAULT 1",
+        "observaciones": "TEXT",
+    }
+    for columna, definicion in columnas_emisores_fiscales.items():
+        agregar_columna_si_falta(cur, "emisores_fiscales", columna, definicion)
+
+    emisores_iniciales = [
+        (
+            "Ibarrondo Adrian Oscar",
+            "F.M. Master 98.3",
+            "20-20687162-9",
+            "Monotributo",
+            "Factura C",
+            "00002",
+            1,
+            "",
+        ),
+        (
+            "Ibarrondo Luis Angel",
+            "Publicidad & Servicios",
+            "20-26385888-4",
+            "Monotributo",
+            "Factura C",
+            "00002",
+            1,
+            "",
+        ),
+        (
+            "Ibarrondo Adrian Oscar e Ibarrondo Luis Angel S.H.",
+            "Publicidad & Servicios S.H.",
+            "30-71217861-9",
+            "Responsable Inscripto",
+            "Factura A",
+            "00002",
+            1,
+            "",
+        ),
+    ]
+    for emisor in emisores_iniciales:
+        cur.execute("SELECT id FROM emisores_fiscales WHERE cuit=?", (emisor[2],))
+        if cur.fetchone() is None:
+            cur.execute(
+                """
+                INSERT INTO emisores_fiscales(
+                    razon_social,
+                    nombre_fantasia,
+                    cuit,
+                    condicion_iva,
+                    tipo_factura,
+                    punto_venta,
+                    activo,
+                    observaciones
+                ) VALUES(?,?,?,?,?,?,?,?)
+                """,
+                emisor,
+            )
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS arca_config(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -280,19 +365,45 @@ def crear_base():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         numero INTEGER NOT NULL UNIQUE,
         cliente_id INTEGER NOT NULL,
+        emisor_fiscal_id INTEGER,
         fecha TEXT NOT NULL,
         fecha_vencimiento TEXT NOT NULL,
+        tipo_factura TEXT,
+        punto_venta TEXT,
         total REAL NOT NULL DEFAULT 0,
         saldo REAL NOT NULL DEFAULT 0,
         estado TEXT NOT NULL DEFAULT 'Pendiente',
+        estado_facturacion TEXT NOT NULL DEFAULT 'Pendiente',
+        fecha_facturacion TEXT,
+        cae TEXT,
+        vencimiento_cae TEXT,
+        numero_factura TEXT,
         pdf_path TEXT,
         fecha_creacion TEXT,
 
         FOREIGN KEY(cliente_id)
-        REFERENCES clientes(id)
+        REFERENCES clientes(id),
+        FOREIGN KEY(emisor_fiscal_id)
+        REFERENCES emisores_fiscales(id)
 
     )
     """)
+
+    columnas_resumenes = {
+        "emisor_fiscal_id": "INTEGER",
+        "tipo_factura": "TEXT",
+        "punto_venta": "TEXT",
+        "estado_facturacion": "TEXT NOT NULL DEFAULT 'Pendiente'",
+        "fecha_facturacion": "TEXT",
+        "cae": "TEXT",
+        "vencimiento_cae": "TEXT",
+        "numero_factura": "TEXT",
+    }
+    for columna, definicion in columnas_resumenes.items():
+        agregar_columna_si_falta(cur, "resumenes", columna, definicion)
+    cur.execute(
+        "UPDATE resumenes SET estado_facturacion='Pendiente' WHERE estado_facturacion IS NULL OR TRIM(estado_facturacion)=''"
+    )
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS resumen_conceptos(

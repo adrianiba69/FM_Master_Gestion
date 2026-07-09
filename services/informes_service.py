@@ -8,7 +8,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
@@ -26,6 +26,7 @@ class InformesService:
         "Cobros por período",
         "Facturación mensual",
         "Deuda total por cliente",
+        "Agenda Telefónica de Clientes",
     )
     ESTADOS = (
         "Todos",
@@ -40,7 +41,20 @@ class InformesService:
     COLUMNAS_MONEDA = {"Importe", "Total", "Facturado", "Cobrado", "Saldo", "Deuda"}
 
     @classmethod
-    def generar(cls, informe, fecha_desde=None, fecha_hasta=None, cliente_id=None, estado=None):
+    def generar(
+        cls,
+        informe,
+        fecha_desde=None,
+        fecha_hasta=None,
+        cliente_id=None,
+        estado=None,
+        agenda_todos=False,
+        agenda_activos=False,
+        agenda_telefono=False,
+        agenda_whatsapp=False,
+        agenda_email=False,
+        agenda_orden="Razón Social",
+    ):
         if informe not in cls.INFORMES:
             raise ValueError("Seleccione un informe válido.")
         desde = cls._fecha(fecha_desde)
@@ -58,6 +72,14 @@ class InformesService:
             "Cobros por período": cls._cobros_periodo,
             "Facturación mensual": cls._facturacion_mensual,
             "Deuda total por cliente": cls._deuda_clientes,
+            "Agenda Telefónica de Clientes": lambda _desde, _hasta, _cliente_id, _estado: cls._agenda_telefonica(
+                todos=agenda_todos,
+                activos=agenda_activos,
+                telefono=agenda_telefono,
+                whatsapp=agenda_whatsapp,
+                email=agenda_email,
+                orden=agenda_orden,
+            ),
         }
         columnas, filas = metodos[informe](desde, hasta, cliente_id, estado)
         return {
@@ -151,6 +173,47 @@ class InformesService:
         return (
             "Cliente", "Concepto", "Fecha inicio", "Fecha fin", "Cantidad",
             "Importe", "Descuento", "Total", "Estado",
+        ), filas
+
+    @classmethod
+    def _agenda_telefonica(cls, todos=False, activos=False, telefono=False, whatsapp=False, email=False, orden="Razón Social"):
+        condiciones = []
+        parametros = []
+        if activos and not todos:
+            condiciones.append("LOWER(TRIM(COALESCE(c.estado, '')))='activo'")
+        if telefono and not todos:
+            condiciones.append("TRIM(COALESCE(c.telefono, ''))<>''")
+        if whatsapp and not todos:
+            condiciones.append("TRIM(COALESCE(c.whatsapp, ''))<>''")
+        if email and not todos:
+            condiciones.append("TRIM(COALESCE(c.email, ''))<>''")
+
+        ordenes = {
+            "Razón Social": "1",
+            "Nombre Comercial": "2",
+            "Localidad": "6",
+        }
+        orden_sql = ordenes.get(orden or "", "1")
+        where = f" WHERE {' AND '.join(condiciones)}" if condiciones else ""
+        filas = cls._consultar(f"""
+            SELECT
+                COALESCE(NULLIF(c.razon_social, ''), c.nombre) AS razon_social,
+                COALESCE(NULLIF(c.nombre_comercial, ''), '') AS nombre_comercial,
+                COALESCE(NULLIF(c.telefono, ''), '') AS telefono,
+                COALESCE(NULLIF(c.whatsapp, ''), '') AS whatsapp,
+                COALESCE(NULLIF(c.email, ''), '') AS email,
+                COALESCE(NULLIF(c.localidad, ''), '') AS localidad
+            FROM clientes c
+            {where}
+            ORDER BY {orden_sql}, 2, 6
+        """, parametros)
+        return (
+            "Razón Social",
+            "Nombre Comercial",
+            "Teléfono",
+            "WhatsApp",
+            "Email",
+            "Localidad",
         ), filas
 
     @classmethod
@@ -306,6 +369,9 @@ class InformesService:
     @classmethod
     def exportar_pdf(cls, datos):
         ruta = cls._ruta_exportacion(datos["titulo"], ".pdf")
+        if datos["titulo"] == "Agenda Telefónica de Clientes":
+            cls._exportar_pdf_agenda_telefonica(ruta, datos)
+            return str(ruta)
         documento = SimpleDocTemplate(
             str(ruta),
             pagesize=landscape(A4),
@@ -347,6 +413,104 @@ class InformesService:
         elementos.append(tabla)
         documento.build(elementos)
         return str(ruta)
+
+    @classmethod
+    def _exportar_pdf_agenda_telefonica(cls, ruta, datos):
+        documento = SimpleDocTemplate(
+            str(ruta),
+            pagesize=landscape(A4),
+            leftMargin=12 * mm,
+            rightMargin=12 * mm,
+            topMargin=12 * mm,
+            bottomMargin=12 * mm,
+            title=datos["titulo"],
+        )
+        estilos = getSampleStyleSheet()
+        titulo = ParagraphStyle(
+            "TituloAgenda",
+            parent=estilos["Title"],
+            fontSize=18,
+            leading=22,
+            textColor=colors.HexColor("#C00000"),
+            spaceAfter=4,
+        )
+        subtitulo = ParagraphStyle(
+            "SubtituloAgenda",
+            parent=estilos["BodyText"],
+            fontSize=10,
+            leading=12,
+            textColor=colors.HexColor("#444444"),
+            spaceAfter=2,
+        )
+        encabezado_tabla = ParagraphStyle(
+            "EncabezadoAgenda",
+            parent=estilos["BodyText"],
+            fontSize=8,
+            leading=9,
+            textColor=colors.white,
+            alignment=1,
+        )
+        celda = ParagraphStyle(
+            "CeldaAgenda",
+            parent=estilos["BodyText"],
+            fontSize=8,
+            leading=9,
+        )
+
+        elementos = [
+            Paragraph("AGENDA TELEFÓNICA DE CLIENTES", titulo),
+            Paragraph(f"Fecha de emisión: {datetime.now().strftime('%d/%m/%Y %H:%M')}", subtitulo),
+            Paragraph(f"Cantidad de clientes: {len(datos['filas'])}", subtitulo),
+            Spacer(1, 4 * mm),
+        ]
+
+        tabla_datos = [[Paragraph(columna, encabezado_tabla) for columna in datos["columnas"]]]
+        for fila in datos["filas"]:
+            tabla_datos.append([
+                Paragraph(cls._texto_pdf(valor, columna), celda)
+                for valor, columna in zip(fila, datos["columnas"])
+            ])
+
+        if len(tabla_datos) == 1:
+            tabla_datos.append([Paragraph("Sin resultados", celda)] + [""] * (len(datos["columnas"]) - 1))
+
+        ancho_disponible = landscape(A4)[0] - 24 * mm
+        proporciones = [0.26, 0.20, 0.13, 0.13, 0.13, 0.15]
+        tabla = Table(
+            tabla_datos,
+            colWidths=[ancho_disponible * proporcion for proporcion in proporciones],
+            repeatRows=1,
+        )
+        tabla.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1B1B1B")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#C8C8C8")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F7F7")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        elementos.append(tabla)
+        documento.build(elementos)
+
+    @classmethod
+    def imprimir_pdf(cls, datos):
+        ruta = cls.exportar_pdf(datos)
+        try:
+            import os
+
+            os.startfile(ruta, "print")
+        except Exception:
+            try:
+                import os
+
+                os.startfile(ruta)
+            except Exception:
+                pass
+        return ruta
 
     @classmethod
     def _ruta_exportacion(cls, titulo, extension):
