@@ -220,7 +220,12 @@ def crear_base():
         tipo_factura TEXT,
         punto_venta TEXT,
         activo INTEGER DEFAULT 1,
-        observaciones TEXT
+        observaciones TEXT,
+        ambiente_arca TEXT DEFAULT 'Homologación',
+        ruta_certificado TEXT DEFAULT '',
+        ruta_clave_privada TEXT DEFAULT '',
+        carpeta_facturas TEXT DEFAULT '',
+        configuracion_arca_completa INTEGER DEFAULT 0
     )
     """)
 
@@ -233,6 +238,11 @@ def crear_base():
         "punto_venta": "TEXT",
         "activo": "INTEGER DEFAULT 1",
         "observaciones": "TEXT",
+        "ambiente_arca": "TEXT DEFAULT 'Homologación'",
+        "ruta_certificado": "TEXT DEFAULT ''",
+        "ruta_clave_privada": "TEXT DEFAULT ''",
+        "carpeta_facturas": "TEXT DEFAULT ''",
+        "configuracion_arca_completa": "INTEGER DEFAULT 0",
     }
     for columna, definicion in columnas_emisores_fiscales.items():
         agregar_columna_si_falta(cur, "emisores_fiscales", columna, definicion)

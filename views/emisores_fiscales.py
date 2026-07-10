@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from services.emisor_fiscal_service import EmisorFiscalService
 
@@ -13,6 +13,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         "Otro",
     ]
     TIPOS_FACTURA = ["Factura A", "Factura C", "No factura"]
+    AMBIENTES_ARCA = ["Homologación", "Producción"]
     FILTROS_ESTADO = ["Todos", "Activos", "Inactivos"]
 
     def __init__(self, master):
@@ -24,6 +25,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         self.grab_set()
         self.emisor_id_actual = None
         self.filtro_estado = "Todos"
+        self.configuracion_arca_completa = 0
         self._crear_interfaz()
         self.cargar_emisores()
 
@@ -148,7 +150,8 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         panel.grid(row=1, column=1, sticky="nsew")
         panel.grid_propagate(False)
         panel.grid_columnconfigure(0, weight=1)
-        panel.grid_rowconfigure(2, weight=1)
+        panel.grid_rowconfigure(2, weight=0)
+        panel.grid_rowconfigure(3, weight=0)
 
         ctk.CTkLabel(
             panel,
@@ -193,8 +196,10 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         self.text_observaciones = ctk.CTkTextbox(formulario, height=28, fg_color="white", text_color="#1F1F1F")
         self.text_observaciones.grid(row=7, column=0, columnspan=3, sticky="ew")
 
+        self._crear_seccion_arca(panel)
+
         acciones = ctk.CTkFrame(panel, fg_color="transparent")
-        acciones.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 16))
+        acciones.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 16))
         acciones.grid_columnconfigure(0, weight=1)
         acciones.grid_columnconfigure(1, weight=1)
         ctk.CTkButton(
@@ -213,6 +218,122 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
             hover_color="#444444",
             command=self.destroy,
         ).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+    def _crear_seccion_arca(self, parent):
+        arca_frame = ctk.CTkFrame(parent, fg_color="#FFFFFF", corner_radius=6, border_width=1, border_color="#DADADA")
+        arca_frame.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 10))
+        arca_frame.grid_columnconfigure(1, weight=1)
+        arca_frame.grid_columnconfigure(2, weight=0)
+
+        ctk.CTkLabel(
+            arca_frame,
+            text="Configuración ARCA",
+            font=("Arial", 14, "bold"),
+            text_color="#222222",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=14, pady=(12, 8))
+
+        ctk.CTkLabel(arca_frame, text="Ambiente:", font=("Arial", 12, "bold"), text_color="#222222").grid(
+            row=1, column=0, sticky="w", padx=14, pady=(0, 4)
+        )
+        self.combo_ambiente_arca = ctk.CTkOptionMenu(
+            arca_frame,
+            values=self.AMBIENTES_ARCA,
+            fg_color="white",
+            button_color="#C00000",
+            button_hover_color="#990000",
+            text_color="#1F1F1F",
+        )
+        self.combo_ambiente_arca.grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 14), pady=(0, 4))
+        self.combo_ambiente_arca.set(self.AMBIENTES_ARCA[0])
+
+        self.entry_ruta_certificado = self._crear_selector_ruta(
+            arca_frame,
+            fila=2,
+            etiqueta="Certificado digital:",
+            boton_texto="Seleccionar",
+            comando=self._seleccionar_certificado,
+        )
+        self.entry_ruta_clave_privada = self._crear_selector_ruta(
+            arca_frame,
+            fila=3,
+            etiqueta="Clave privada:",
+            boton_texto="Seleccionar",
+            comando=self._seleccionar_clave_privada,
+        )
+        self.entry_carpeta_facturas = self._crear_selector_ruta(
+            arca_frame,
+            fila=4,
+            etiqueta="Carpeta de facturas:",
+            boton_texto="Seleccionar carpeta",
+            comando=self._seleccionar_carpeta_facturas,
+            es_carpeta=True,
+        )
+
+        ctk.CTkButton(
+            arca_frame,
+            text="Validar configuración",
+            width=180,
+            fg_color="#333333",
+            hover_color="#111111",
+            command=self.validar_configuracion_arca_actual,
+        ).grid(row=5, column=0, columnspan=3, sticky="e", padx=14, pady=(8, 12))
+
+    def _crear_selector_ruta(self, master, fila, etiqueta, boton_texto, comando, es_carpeta=False):
+        ctk.CTkLabel(master, text=etiqueta, font=("Arial", 11, "bold"), text_color="#222222").grid(
+            row=fila,
+            column=0,
+            sticky="w",
+            padx=14,
+            pady=(4, 4),
+        )
+        contenedor = ctk.CTkFrame(master, fg_color="transparent")
+        contenedor.grid(row=fila, column=1, columnspan=2, sticky="ew", padx=(0, 14), pady=(4, 4))
+        contenedor.grid_columnconfigure(0, weight=1)
+
+        entrada = ctk.CTkEntry(contenedor)
+        entrada.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        ctk.CTkButton(
+            contenedor,
+            text=boton_texto,
+            width=126 if not es_carpeta else 146,
+            fg_color="#666666",
+            hover_color="#444444",
+            command=comando,
+        ).grid(row=0, column=1, sticky="e")
+        return entrada
+
+    def _seleccionar_certificado(self):
+        ruta = filedialog.askopenfilename(
+            parent=self,
+            title="Seleccionar certificado digital",
+            filetypes=[
+                ("Certificados", "*.crt *.cer *.pem *.p12 *.pfx"),
+                ("Todos los archivos", "*.*"),
+            ],
+        )
+        if ruta:
+            self.entry_ruta_certificado.delete(0, "end")
+            self.entry_ruta_certificado.insert(0, ruta)
+
+    def _seleccionar_clave_privada(self):
+        ruta = filedialog.askopenfilename(
+            parent=self,
+            title="Seleccionar clave privada",
+            filetypes=[
+                ("Claves privadas", "*.key *.pem"),
+                ("Todos los archivos", "*.*"),
+            ],
+        )
+        if ruta:
+            self.entry_ruta_clave_privada.delete(0, "end")
+            self.entry_ruta_clave_privada.insert(0, ruta)
+
+    def _seleccionar_carpeta_facturas(self):
+        ruta = filedialog.askdirectory(parent=self, title="Seleccionar carpeta de facturas")
+        if ruta:
+            self.entry_carpeta_facturas.delete(0, "end")
+            self.entry_carpeta_facturas.insert(0, ruta)
 
     def _crear_campo(self, master, fila, columna, etiqueta, colspan=1):
         columna_final = columna + colspan - 1
@@ -303,9 +424,14 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         self.entry_cuit.delete(0, "end")
         self.combo_condicion_iva.set(self.CONDICIONES_IVA[0])
         self.combo_tipo_factura.set(self.TIPOS_FACTURA[0])
+        self.combo_ambiente_arca.set(self.AMBIENTES_ARCA[0])
         self.entry_punto_venta.delete(0, "end")
+        self.entry_ruta_certificado.delete(0, "end")
+        self.entry_ruta_clave_privada.delete(0, "end")
+        self.entry_carpeta_facturas.delete(0, "end")
         self.text_observaciones.delete("1.0", "end")
         self.var_activo.set(1)
+        self.configuracion_arca_completa = 0
 
     def nuevo_emisor(self):
         self.limpiar_formulario()
@@ -342,6 +468,48 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         self.var_activo.set(1 if fila[7] else 0)
         self.text_observaciones.delete("1.0", "end")
         self.text_observaciones.insert("1.0", fila[8] or "")
+        self.combo_ambiente_arca.set(fila[9] or self.AMBIENTES_ARCA[0])
+        self.entry_ruta_certificado.delete(0, "end")
+        self.entry_ruta_certificado.insert(0, fila[10] or "")
+        self.entry_ruta_clave_privada.delete(0, "end")
+        self.entry_ruta_clave_privada.insert(0, fila[11] or "")
+        self.entry_carpeta_facturas.delete(0, "end")
+        self.entry_carpeta_facturas.insert(0, fila[12] or "")
+        self.configuracion_arca_completa = 1 if len(fila) > 13 and fila[13] else 0
+
+    def validar_configuracion_arca_actual(self):
+        if self.emisor_id_actual is None:
+            messagebox.showwarning(
+                "Emisores Fiscales",
+                "Seleccione o guarde un emisor para validar la configuración ARCA.",
+                parent=self,
+            )
+            return
+
+        resultado = EmisorFiscalService.validar_configuracion_arca(self.emisor_id_actual)
+        self.configuracion_arca_completa = 1 if resultado["completa"] else 0
+
+        if resultado["completa"]:
+            messagebox.showinfo(
+                "Configuración ARCA",
+                "Configuración completa",
+                parent=self,
+            )
+            return
+
+        lineas = ["Configuración incompleta"]
+        if resultado["faltantes"]:
+            lineas.append("")
+            lineas.extend(f"• {item}" for item in resultado["faltantes"])
+        if resultado["errores"]:
+            lineas.append("")
+            lineas.extend(f"• {item}" for item in resultado["errores"])
+
+        messagebox.showwarning(
+            "Configuración ARCA",
+            "\n".join(lineas),
+            parent=self,
+        )
 
     def guardar_emisor(self):
         razon_social = self.entry_razon_social.get().strip()
@@ -352,6 +520,10 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         punto_venta = self.entry_punto_venta.get().strip()
         observaciones = self.text_observaciones.get("1.0", "end").strip()
         activo = 1 if self.var_activo.get() else 0
+        ambiente_arca = self.combo_ambiente_arca.get().strip() or self.AMBIENTES_ARCA[0]
+        ruta_certificado = self.entry_ruta_certificado.get().strip()
+        ruta_clave_privada = self.entry_ruta_clave_privada.get().strip()
+        carpeta_facturas = self.entry_carpeta_facturas.get().strip()
 
         if not razon_social:
             messagebox.showerror("Emisores Fiscales", "La razón social es obligatoria.", parent=self)
@@ -371,6 +543,11 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
                     punto_venta,
                     activo,
                     observaciones,
+                    ambiente_arca,
+                    ruta_certificado,
+                    ruta_clave_privada,
+                    carpeta_facturas,
+                    self.configuracion_arca_completa,
                 )
             else:
                 EmisorFiscalService.actualizar(
@@ -383,6 +560,11 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
                     punto_venta,
                     activo,
                     observaciones,
+                    ambiente_arca,
+                    ruta_certificado,
+                    ruta_clave_privada,
+                    carpeta_facturas,
+                    self.configuracion_arca_completa,
                 )
         except Exception as error:
             messagebox.showerror("Emisores Fiscales", f"No se pudo guardar el emisor.\n{error}", parent=self)

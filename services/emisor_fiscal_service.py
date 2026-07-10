@@ -1,3 +1,5 @@
+import os
+
 from database import conectar
 
 
@@ -74,7 +76,12 @@ class EmisorFiscalService:
                 tipo_factura,
                 punto_venta,
                 activo,
-                observaciones
+                observaciones,
+                ambiente_arca,
+                ruta_certificado,
+                ruta_clave_privada,
+                carpeta_facturas,
+                configuracion_arca_completa
             FROM emisores_fiscales
             ORDER BY
                 CASE WHEN activo=1 THEN 0 ELSE 1 END,
@@ -100,7 +107,12 @@ class EmisorFiscalService:
                 tipo_factura,
                 punto_venta,
                 activo,
-                observaciones
+                observaciones,
+                ambiente_arca,
+                ruta_certificado,
+                ruta_clave_privada,
+                carpeta_facturas,
+                configuracion_arca_completa
             FROM emisores_fiscales
             WHERE activo=1
             ORDER BY COALESCE(NULLIF(nombre_fantasia, ''), razon_social)
@@ -125,7 +137,12 @@ class EmisorFiscalService:
                 tipo_factura,
                 punto_venta,
                 activo,
-                observaciones
+                observaciones,
+                ambiente_arca,
+                ruta_certificado,
+                ruta_clave_privada,
+                carpeta_facturas,
+                configuracion_arca_completa
             FROM emisores_fiscales
             WHERE id=?
             """,
@@ -145,6 +162,11 @@ class EmisorFiscalService:
         punto_venta,
         activo=1,
         observaciones="",
+        ambiente_arca="Homologación",
+        ruta_certificado="",
+        ruta_clave_privada="",
+        carpeta_facturas="",
+        configuracion_arca_completa=0,
     ):
         conn = conectar()
         cur = conn.cursor()
@@ -158,8 +180,13 @@ class EmisorFiscalService:
                 tipo_factura,
                 punto_venta,
                 activo,
-                observaciones
-            ) VALUES(?,?,?,?,?,?,?,?)
+                observaciones,
+                ambiente_arca,
+                ruta_certificado,
+                ruta_clave_privada,
+                carpeta_facturas,
+                configuracion_arca_completa
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 razon_social,
@@ -170,6 +197,11 @@ class EmisorFiscalService:
                 punto_venta,
                 activo,
                 observaciones,
+                ambiente_arca,
+                ruta_certificado,
+                ruta_clave_privada,
+                carpeta_facturas,
+                int(bool(configuracion_arca_completa)),
             ),
         )
         emisor_id = cur.lastrowid
@@ -188,6 +220,11 @@ class EmisorFiscalService:
         punto_venta,
         activo=1,
         observaciones="",
+        ambiente_arca="Homologación",
+        ruta_certificado="",
+        ruta_clave_privada="",
+        carpeta_facturas="",
+        configuracion_arca_completa=0,
     ):
         conn = conectar()
         cur = conn.cursor()
@@ -201,7 +238,12 @@ class EmisorFiscalService:
                 tipo_factura=?,
                 punto_venta=?,
                 activo=?,
-                observaciones=?
+                observaciones=?,
+                ambiente_arca=?,
+                ruta_certificado=?,
+                ruta_clave_privada=?,
+                carpeta_facturas=?,
+                configuracion_arca_completa=?
             WHERE id=?
             """,
             (
@@ -213,6 +255,11 @@ class EmisorFiscalService:
                 punto_venta,
                 activo,
                 observaciones,
+                ambiente_arca,
+                ruta_certificado,
+                ruta_clave_privada,
+                carpeta_facturas,
+                int(bool(configuracion_arca_completa)),
                 id_,
             ),
         )
@@ -229,3 +276,48 @@ class EmisorFiscalService:
         )
         conn.commit()
         conn.close()
+
+    @staticmethod
+    def validar_configuracion_arca(emisor_id):
+        resultado = {
+            "completa": False,
+            "faltantes": [],
+            "errores": [],
+        }
+
+        emisor = EmisorFiscalService.obtener(emisor_id)
+        if not emisor:
+            resultado["errores"].append("Emisor fiscal no encontrado.")
+            return resultado
+
+        cuit = str(emisor[3] or "").strip() if len(emisor) > 3 else ""
+        punto_venta = str(emisor[6] or "").strip() if len(emisor) > 6 else ""
+        ambiente_arca = str(emisor[9] or "").strip() if len(emisor) > 9 else ""
+        ruta_certificado = str(emisor[10] or "").strip() if len(emisor) > 10 else ""
+        ruta_clave_privada = str(emisor[11] or "").strip() if len(emisor) > 11 else ""
+        carpeta_facturas = str(emisor[12] or "").strip() if len(emisor) > 12 else ""
+
+        if not cuit:
+            resultado["faltantes"].append("Falta CUIT")
+        if not punto_venta:
+            resultado["faltantes"].append("Falta punto de venta")
+        if ambiente_arca not in {"Homologación", "Producción"}:
+            resultado["faltantes"].append("Falta ambiente ARCA")
+
+        if not ruta_certificado:
+            resultado["faltantes"].append("Falta ruta del certificado digital")
+        elif not os.path.isfile(ruta_certificado):
+            resultado["errores"].append("No existe el archivo del certificado digital.")
+
+        if not ruta_clave_privada:
+            resultado["faltantes"].append("Falta ruta de la clave privada")
+        elif not os.path.isfile(ruta_clave_privada):
+            resultado["errores"].append("No existe el archivo de la clave privada.")
+
+        if not carpeta_facturas:
+            resultado["faltantes"].append("Falta carpeta de facturas")
+        elif not os.path.isdir(carpeta_facturas):
+            resultado["errores"].append("No existe la carpeta de facturas.")
+
+        resultado["completa"] = not resultado["faltantes"] and not resultado["errores"]
+        return resultado

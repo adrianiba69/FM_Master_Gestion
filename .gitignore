@@ -23,3 +23,9 @@ database/*.db
 
 *.log
 *.tmp
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
