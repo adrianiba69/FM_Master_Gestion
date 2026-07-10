@@ -461,12 +461,76 @@ class FichaClienteFrame(ctk.CTkFrame):
         )
         self.label_importe_servicio.pack(anchor="w", padx=12, pady=(0, 10))
 
+        fila_estado = fila_servicios + 1
+        bloque_estado = ctk.CTkFrame(contenido, fg_color="#F6F6F6", corner_radius=8)
+        bloque_estado.grid(row=fila_estado, column=0, columnspan=2, sticky="ew", padx=6, pady=(8, 6))
+
+        ctk.CTkLabel(
+            bloque_estado,
+            text="Estado del Cliente",
+            font=("Arial", 12, "bold"),
+            text_color=COLOR_PRINCIPAL,
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        self.label_estado_cliente = ctk.CTkLabel(
+            bloque_estado,
+            text="-",
+            font=("Arial", 12, "bold"),
+            text_color="#1F1F1F",
+            justify="left",
+            wraplength=520,
+        )
+        self.label_estado_cliente.pack(anchor="w", padx=12, pady=(0, 4))
+
+        self.label_faltantes_estado = ctk.CTkLabel(
+            bloque_estado,
+            text="",
+            font=("Arial", 12),
+            text_color="#1F1F1F",
+            justify="left",
+            wraplength=520,
+        )
+        self.label_faltantes_estado.pack(anchor="w", padx=12, pady=(0, 10))
+
         contenido.grid_rowconfigure(fila_servicios, weight=0)
 
         return tarjeta
 
     def _resolver_emisor_fiscal(self, valor):
         return EmisorFiscalService.resolver_etiqueta(valor)
+
+    def _evaluar_estado_cliente(self, datos_generales, servicios_activos):
+        faltantes = []
+
+        def _vacio(valor):
+            return str(valor or "").strip() in {"", "-"}
+
+        if _vacio(datos_generales.get("razon_social")):
+            faltantes.append("Falta Razón Social")
+
+        if _vacio(datos_generales.get("cuit")):
+            faltantes.append("Falta CUIT")
+
+        if _vacio(datos_generales.get("iva")):
+            faltantes.append("Falta Condición IVA")
+
+        emisor_fiscal = str(datos_generales.get("monotributo_facturacion") or "").strip()
+        if emisor_fiscal in {"", "-", "No aplica"}:
+            faltantes.append("Falta Emisor Fiscal")
+
+        tipo_factura = str(datos_generales.get("tipo_factura") or "").strip()
+        if tipo_factura in {"", "-", "No factura"}:
+            faltantes.append("Falta Tipo de Factura")
+
+        tiene_servicio_activo = any(
+            str(servicio.get("estado") or "").strip().lower() == "activo"
+            for servicio in servicios_activos
+            if isinstance(servicio, dict)
+        )
+        if not tiene_servicio_activo:
+            faltantes.append("Falta al menos un Servicio activo")
+
+        return len(faltantes) == 0, faltantes
 
     def _crear_tarjeta_proximo_vencimiento(self, parent):
         tarjeta = self._crear_tarjeta_base(parent, "CUENTA CORRIENTE")
@@ -672,6 +736,20 @@ class FichaClienteFrame(ctk.CTkFrame):
         else:
             self.label_servicio_activo.configure(text="Sin servicios activos.")
             self.label_importe_servicio.configure(text="")
+
+        cliente_listo, faltantes = self._evaluar_estado_cliente(datos_generales, servicios_activos)
+        if cliente_listo:
+            self.label_estado_cliente.configure(
+                text="🟢 Cliente listo para facturación.",
+                text_color="#0E6E3A",
+            )
+            self.label_faltantes_estado.configure(text="")
+        else:
+            self.label_estado_cliente.configure(
+                text="🟡 Faltan datos administrativos.",
+                text_color="#8A6D00",
+            )
+            self.label_faltantes_estado.configure(text="\n".join(f"• {item}" for item in faltantes))
 
         self._cargar_tabla(self.tabla_servicios, servicios_activos)
         self._cargar_tabla(self.tabla_resumenes, self.cliente_data.get("ultimos_resumenes", []))
