@@ -26,7 +26,7 @@ class CobrosFrame(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self,
-            text="CUENTA CORRIENTE Y COBROS",
+            text="COBROS",
             font=("Arial", 26, "bold"),
             text_color="#C00000",
         ).grid(row=0, column=0, sticky="w", padx=20, pady=(20, 10))
@@ -114,7 +114,7 @@ class CobrosFrame(ctk.CTkFrame):
 
         panel_resumenes = ctk.CTkFrame(self.pestanas, fg_color="white", corner_radius=0)
         panel_cobros = ctk.CTkFrame(self.pestanas, fg_color="white", corner_radius=0)
-        self.pestanas.add(panel_resumenes, text="  Resumenes emitidos  ")
+        self.pestanas.add(panel_resumenes, text="  Resúmenes emitidos  ")
         self.pestanas.add(panel_cobros, text="  Cobros realizados  ")
         self.crear_tabla_resumenes(panel_resumenes)
         self.crear_tabla_cobros(panel_cobros)

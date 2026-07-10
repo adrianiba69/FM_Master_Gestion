@@ -308,7 +308,7 @@ class InicioFrame(ctk.CTkFrame):
     def crear_tarjeta_renovaciones(self, master, fila, columna):
         tarjeta = ctk.CTkFrame(
             master,
-            height=82,
+            height=90,
             fg_color=self.NEGRO,
             corner_radius=6,
         )
@@ -337,14 +337,14 @@ class InicioFrame(ctk.CTkFrame):
                 font=("Arial", 9, "bold"),
                 text_color=color,
             )
-            etiqueta.grid(row=1, column=columna_indice, pady=(7, 8))
+            etiqueta.grid(row=1, column=columna_indice, pady=(9, 9))
             etiquetas[clave] = etiqueta
         return etiquetas
 
     def crear_tarjeta_agenda(self, master, fila, columna):
         tarjeta = ctk.CTkFrame(
             master,
-            height=82,
+            height=90,
             fg_color=self.NEGRO,
             corner_radius=6,
         )
@@ -408,37 +408,37 @@ class InicioFrame(ctk.CTkFrame):
         return etiquetas
 
     def crear_tarjeta_seguimientos(self, master, fila, columna):
-        tarjeta = ctk.CTkFrame(master, height=76, fg_color=self.NEGRO, corner_radius=6)
+        tarjeta = ctk.CTkFrame(master, height=90, fg_color=self.NEGRO, corner_radius=6)
         tarjeta.grid(row=fila, column=columna, columnspan=2, sticky="nsew", padx=6, pady=5)
         tarjeta.grid_propagate(False)
         for indice in range(4):
-            tarjeta.grid_columnconfigure(indice, weight=1)
+            tarjeta.grid_columnconfigure(indice, weight=1, uniform="seguimientos")
         ctk.CTkLabel(
             tarjeta, text="SEGUIMIENTOS", font=("Arial", 10, "bold"), text_color="#E0E0E0",
-        ).grid(row=0, column=0, sticky="w", padx=12, pady=(9, 0))
+        ).grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(10, 0))
         etiquetas = {}
         datos = (
             ("hoy", "Contactos para hoy: 0", "#F4C542"),
             ("atrasados", "Atrasados: 0", "#FF4D4D"),
             ("semana", "Esta semana: 0", "#52C878"),
         )
-        for indice, (clave, texto, color) in enumerate(datos, start=1):
+        for indice, (clave, texto, color) in enumerate(datos):
             etiqueta = ctk.CTkLabel(
                 tarjeta, text=texto, font=("Arial", 10, "bold"), text_color=color,
             )
-            etiqueta.grid(row=1, column=indice, padx=6, pady=(4, 8))
+            etiqueta.grid(row=1, column=indice, padx=6, pady=(8, 10), sticky="w")
             etiquetas[clave] = etiqueta
         return etiquetas
 
     def crear_tarjeta_oportunidades(self, master, fila, columna):
-        tarjeta = ctk.CTkFrame(master, height=76, fg_color=self.NEGRO, corner_radius=6)
+        tarjeta = ctk.CTkFrame(master, height=90, fg_color=self.NEGRO, corner_radius=6)
         tarjeta.grid(row=fila, column=columna, columnspan=2, sticky="nsew", padx=6, pady=5)
         tarjeta.grid_propagate(False)
         for indice in range(4):
-            tarjeta.grid_columnconfigure(indice, weight=1)
+            tarjeta.grid_columnconfigure(indice, weight=1, uniform="oportunidades")
         ctk.CTkLabel(
             tarjeta, text="OPORTUNIDADES", font=("Arial", 10, "bold"), text_color="#E0E0E0",
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(9, 0))
+        ).grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(10, 0))
         etiquetas = {}
         for indice, (clave, texto, color) in enumerate((
             ("nuevas", "Nuevas: 0", "#F4C542"),
@@ -449,7 +449,7 @@ class InicioFrame(ctk.CTkFrame):
             etiqueta = ctk.CTkLabel(
                 tarjeta, text=texto, font=("Arial", 9, "bold"), text_color=color,
             )
-            etiqueta.grid(row=1, column=indice, padx=3, pady=(4, 8))
+            etiqueta.grid(row=1, column=indice, padx=6, pady=(8, 10), sticky="w")
             etiquetas[clave] = etiqueta
         return etiquetas
 

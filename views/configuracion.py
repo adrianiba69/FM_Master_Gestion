@@ -20,7 +20,7 @@ class ConfiguracionFrame(ctk.CTkFrame):
 
         ctk.CTkLabel(
             self,
-            text="CONFIGURACION",
+            text="CONFIGURACIÓN",
             font=("Arial", 26, "bold"),
             text_color="#C00000",
         ).grid(row=0, column=0, sticky="w", padx=20, pady=(20, 10))

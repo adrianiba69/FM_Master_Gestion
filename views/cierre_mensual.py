@@ -271,7 +271,7 @@ class CierreMensualFrame(ctk.CTkFrame):
             widget.destroy()
         ctk.CTkLabel(marco, text="CIERRE MENSUAL FINALIZADO CORRECTAMENTE", font=("Arial", 20, "bold"), text_color=self.ROJO).pack(pady=(8, 14))
         ctk.CTkLabel(marco, text=f"PDF: {rutas['pdf']}\n\nExcel: {rutas['excel']}", justify="left", wraplength=700, text_color="#444444").pack()
-        ctk.CTkButton(marco, text="Volver al Dashboard", width=190, height=42, fg_color=self.NEGRO, command=self.volver_inicio).pack(pady=(24, 0))
+        ctk.CTkButton(marco, text="Volver al Panel de Control", width=190, height=42, fg_color=self.NEGRO, command=self.volver_inicio).pack(pady=(24, 0))
         messagebox.showinfo("Cierre del Mes", "Cierre mensual finalizado correctamente", parent=self)
 
     def _panel_centrado(self, titulo, detalle):

@@ -29,7 +29,7 @@ class ResumenesFrame(ctk.CTkFrame):
 
         titulo = ctk.CTkLabel(
             self,
-            text="RESUMENES",
+            text="RESÚMENES",
             font=("Arial", 26, "bold"),
             text_color="#C00000",
         )
@@ -124,6 +124,7 @@ class ResumenesFrame(ctk.CTkFrame):
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
         tabla_frame.grid_rowconfigure(0, weight=1)
+        tabla_frame.grid_rowconfigure(1, weight=0)
         tabla_frame.grid_columnconfigure(0, weight=1)
 
         columnas = (
@@ -132,14 +133,14 @@ class ResumenesFrame(ctk.CTkFrame):
         )
         self.tabla = ttk.Treeview(tabla_frame, columns=columnas, show="headings", height=16)
         encabezados = {
-            "id": ("ID", 50),
-            "numero": ("Resumen", 90),
-            "fecha": ("Fecha", 95),
-            "vencimiento": ("Vencimiento", 105),
-            "cliente": ("Cliente", 260),
-            "total": ("Total", 110),
-            "saldo": ("Saldo", 110),
-            "estado": ("Estado", 100),
+            "id": ("ID", 0),
+            "numero": ("Resumen", 95),
+            "fecha": ("Fecha", 100),
+            "vencimiento": ("Vencimiento", 108),
+            "cliente": ("Cliente", 360),
+            "total": ("Total", 120),
+            "saldo": ("Saldo", 120),
+            "estado": ("Estado", 115),
             "pdf_path": ("PDF", 0),
         }
         for columna, (texto, ancho) in encabezados.items():
@@ -149,14 +150,22 @@ class ResumenesFrame(ctk.CTkFrame):
                 width=ancho,
                 minwidth=0 if columna == "pdf_path" else 40,
                 stretch=columna in ("cliente",),
-                anchor="w",
+                anchor="e" if columna in ("total", "saldo") else "w",
             )
+
+        self.tabla.tag_configure("estado_pendiente", foreground="#B88600")
+        self.tabla.tag_configure("estado_vencido", foreground="#C00000")
+        self.tabla.tag_configure("estado_pagado", foreground="#16823A")
+        self.tabla.tag_configure("estado_facturado", foreground="#1E5AA8")
+        self.tabla.tag_configure("estado_default", foreground="#222222")
 
         self.tabla.bind("<Double-1>", lambda _evento: self.abrir_pdf_seleccionado())
         scroll = ttk.Scrollbar(tabla_frame, orient="vertical", command=self.tabla.yview)
-        self.tabla.configure(yscrollcommand=scroll.set)
+        scroll_x = ttk.Scrollbar(tabla_frame, orient="horizontal", command=self.tabla.xview)
+        self.tabla.configure(yscrollcommand=scroll.set, xscrollcommand=scroll_x.set)
         self.tabla.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
 
     def cargar_clientes(self):
         clientes = ClienteService.listar()
@@ -199,6 +208,7 @@ class ResumenesFrame(ctk.CTkFrame):
             self.tabla.delete(item)
 
         for fila in ResumenService.listar():
+            estado = (fila[7] or "").strip()
             self.tabla.insert("", "end", values=(
                 fila[0],
                 f"{fila[1]:06d}",
@@ -207,9 +217,9 @@ class ResumenesFrame(ctk.CTkFrame):
                 fila[4],
                 self.formatear_moneda(fila[5]),
                 self.formatear_moneda(fila[6]),
-                fila[7],
+                estado,
                 fila[8] or "",
-            ))
+            ), tags=(self._tag_estado(estado),))
 
     def generar_resumen(self):
         cliente_id = self.clientes_por_nombre.get(self.selector_cliente.get())
@@ -524,3 +534,16 @@ class ResumenesFrame(ctk.CTkFrame):
     def formatear_moneda(valor):
         numero = f"{float(valor or 0):,.2f}"
         return "$ " + numero.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    @staticmethod
+    def _tag_estado(estado):
+        estado_limpio = (estado or "").strip().lower()
+        if estado_limpio == "pendiente":
+            return "estado_pendiente"
+        if estado_limpio == "vencido":
+            return "estado_vencido"
+        if estado_limpio == "pagado":
+            return "estado_pagado"
+        if estado_limpio == "facturado":
+            return "estado_facturado"
+        return "estado_default"

@@ -18,7 +18,21 @@ class ResumenService:
     @staticmethod
     def calcular_vencimiento(cliente, fecha_emision=None):
         emision = fecha_emision or date.today()
-        dia = int(cliente[12] or 1)
+        valor_vencimiento = 1
+        if isinstance(cliente, (tuple, list)):
+            for indice in (16, 12):
+                if indice < len(cliente) and cliente[indice] not in (None, ""):
+                    valor_vencimiento = cliente[indice]
+                    break
+        elif isinstance(cliente, dict):
+            valor_vencimiento = cliente.get("vencimiento", 1)
+        else:
+            valor_vencimiento = getattr(cliente, "vencimiento", 1)
+
+        try:
+            dia = int(valor_vencimiento or 1)
+        except (TypeError, ValueError):
+            dia = 1
         dia = max(1, min(dia, 28))
 
         if dia >= emision.day:

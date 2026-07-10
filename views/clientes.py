@@ -62,7 +62,7 @@ class ClientesFrame(ctk.CTkFrame):
 
         titulo = ctk.CTkLabel(
             self,
-            text="ADMINISTRACION DE CLIENTES",
+            text="CLIENTES",
             font=("Arial", 26, "bold"),
             text_color="#C00000",
         )
@@ -75,7 +75,7 @@ class ClientesFrame(ctk.CTkFrame):
         self.entrada_buscar = ctk.CTkEntry(
             barra,
             placeholder_text="Buscar cliente por razon social...",
-            width=340,
+            width=430,
         )
         self.entrada_buscar.grid(row=0, column=0, sticky="w")
         self.entrada_buscar.bind("<Return>", lambda _event: self.buscar_clientes())
@@ -83,7 +83,7 @@ class ClientesFrame(ctk.CTkFrame):
         boton_buscar = ctk.CTkButton(
             barra,
             text="Buscar",
-            width=95,
+            width=105,
             height=36,
             command=self.buscar_clientes,
         )
@@ -92,7 +92,7 @@ class ClientesFrame(ctk.CTkFrame):
         boton_limpiar = ctk.CTkButton(
             barra,
             text="Limpiar",
-            width=95,
+            width=105,
             height=36,
             fg_color="#555555",
             hover_color="#333333",
@@ -103,7 +103,7 @@ class ClientesFrame(ctk.CTkFrame):
         boton_nuevo = ctk.CTkButton(
             barra,
             text="Nuevo",
-            width=95,
+            width=110,
             height=36,
             fg_color="#C00000",
             hover_color="#990000",
@@ -114,7 +114,7 @@ class ClientesFrame(ctk.CTkFrame):
         boton_modificar = ctk.CTkButton(
             barra,
             text="Modificar",
-            width=95,
+            width=110,
             height=36,
             fg_color="#444444",
             hover_color="#222222",
@@ -125,7 +125,7 @@ class ClientesFrame(ctk.CTkFrame):
         boton_eliminar = ctk.CTkButton(
             barra,
             text="Eliminar",
-            width=95,
+            width=110,
             height=36,
             fg_color="#7A0000",
             hover_color="#550000",
@@ -136,7 +136,7 @@ class ClientesFrame(ctk.CTkFrame):
         boton_servicios = ctk.CTkButton(
             barra,
             text="Servicios",
-            width=95,
+            width=110,
             height=36,
             fg_color="#333333",
             hover_color="#111111",
@@ -198,24 +198,30 @@ class ClientesFrame(ctk.CTkFrame):
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
         tabla_frame.grid_rowconfigure(0, weight=1)
+        tabla_frame.grid_rowconfigure(1, weight=0)
         tabla_frame.grid_columnconfigure(0, weight=1)
 
         columnas = ("id", "codigo", "razon_social", "telefono", "localidad", "estado", "semaforo")
         self.tabla = ttk.Treeview(tabla_frame, columns=columnas, show="headings", height=18)
 
         encabezados = {
-            "id": ("ID", 60),
-            "codigo": ("Codigo", 100),
-            "razon_social": ("Razon Social", 320),
-            "telefono": ("Telefono", 150),
-            "localidad": ("Localidad", 180),
-            "estado": ("Estado", 110),
-            "semaforo": ("Semáforo comercial", 145),
+            "id": ("ID", 52),
+            "codigo": ("Codigo", 110),
+            "razon_social": ("Razon Social", 360),
+            "telefono": ("Telefono", 165),
+            "localidad": ("Localidad", 190),
+            "estado": ("Estado", 100),
+            "semaforo": ("Semáforo comercial", 170),
         }
 
         for columna, (texto, ancho) in encabezados.items():
             self.tabla.heading(columna, text=texto)
-            self.tabla.column(columna, width=ancho, anchor="w")
+            self.tabla.column(
+                columna,
+                width=ancho,
+                anchor="w",
+                stretch=columna in ("razon_social", "localidad"),
+            )
 
         self.tabla.bind("<Double-1>", lambda _event: self.abrir_ficha_cliente())
         self.tabla.tag_configure("verde", foreground="#16823A")
@@ -223,10 +229,12 @@ class ClientesFrame(ctk.CTkFrame):
         self.tabla.tag_configure("rojo", foreground="#C00000")
 
         scroll_y = ttk.Scrollbar(tabla_frame, orient="vertical", command=self.tabla.yview)
-        self.tabla.configure(yscrollcommand=scroll_y.set)
+        scroll_x = ttk.Scrollbar(tabla_frame, orient="horizontal", command=self.tabla.xview)
+        self.tabla.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
 
         self.tabla.grid(row=0, column=0, sticky="nsew")
         scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
 
     def cargar_clientes(self):
         self.limpiar_tabla()

@@ -287,7 +287,7 @@ class OportunidadesFrame(ctk.CTkFrame):
         self.grid_rowconfigure(3, weight=1)
         self.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            self, text="OPORTUNIDADES COMERCIALES", font=("Arial", 26, "bold"),
+            self, text="CRM", font=("Arial", 26, "bold"),
             text_color="#C00000",
         ).grid(row=0, column=0, sticky="w", padx=20, pady=(18, 8))
         metricas = ctk.CTkFrame(self, fg_color="#1B1B1B", corner_radius=5)
