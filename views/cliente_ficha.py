@@ -135,6 +135,7 @@ class FichaClienteFrame(ctk.CTkFrame):
                         self._formatear_moneda(resumen[5]) or "-",
                         resumen[7] or "-",
                         resumen[8] or "",
+                        resumen[0],
                     )
                     for resumen in resumenes[:5]
                 ]
@@ -324,13 +325,14 @@ class FichaClienteFrame(ctk.CTkFrame):
         self._crear_tarjeta_tabla(
             panel,
             titulo="ÚLTIMOS RESÚMENES",
-            columnas=("numero", "fecha", "importe", "estado", "pdf_path"),
+            columnas=("numero", "fecha", "importe", "estado", "pdf_path", "resumen_id"),
             encabezados={
                 "numero": ("Resumen", 110),
                 "fecha": ("Fecha", 100),
                 "importe": ("Importe", 110),
                 "estado": ("Estado", 110),
                 "pdf_path": ("", 0),
+                "resumen_id": ("", 0),
             },
             atributo_tabla="tabla_resumenes",
             altura=5,
@@ -595,7 +597,13 @@ class FichaClienteFrame(ctk.CTkFrame):
         return tarjeta
 
     def _crear_tarjeta_tabla(self, parent, titulo, columnas, encabezados, atributo_tabla, altura):
-        tarjeta = self._crear_tarjeta_base(parent, titulo)
+        mostrar_boton_emitir = atributo_tabla == "tabla_resumenes"
+        tarjeta = self._crear_tarjeta_base(
+            parent,
+            titulo,
+            boton_texto="Emitir factura" if mostrar_boton_emitir else None,
+            boton_comando=self._emitir_factura_resumen_seleccionado if mostrar_boton_emitir else None,
+        )
         contenedor_tabla = ctk.CTkFrame(tarjeta, fg_color="transparent")
         contenedor_tabla.pack(fill="both", expand=True, padx=18, pady=(0, 18))
         contenedor_tabla.grid_rowconfigure(0, weight=1)
@@ -614,7 +622,7 @@ class FichaClienteFrame(ctk.CTkFrame):
             tabla.column(
                 columna,
                 width=ancho,
-                minwidth=0 if columna == "pdf_path" else 20,
+                minwidth=0 if columna in ("pdf_path", "resumen_id") else 20,
                 anchor="w",
                 stretch=columna == columnas[0],
             )
@@ -630,14 +638,30 @@ class FichaClienteFrame(ctk.CTkFrame):
         setattr(self, atributo_tabla, tabla)
         return tarjeta
 
-    def _crear_tarjeta_base(self, parent, titulo):
+    def _crear_tarjeta_base(self, parent, titulo, boton_texto=None, boton_comando=None):
         tarjeta = ctk.CTkFrame(parent, fg_color=COLOR_BLANCO, corner_radius=10, border_width=1, border_color="#DADADA")
+        encabezado = ctk.CTkFrame(tarjeta, fg_color="transparent")
+        encabezado.pack(fill="x", padx=18, pady=(16, 12))
+        encabezado.grid_columnconfigure(0, weight=1)
+
         ctk.CTkLabel(
-            tarjeta,
+            encabezado,
             text=titulo,
             font=("Arial", 15, "bold"),
             text_color=COLOR_NEGRO,
-        ).pack(anchor="w", padx=18, pady=(16, 12))
+        ).grid(row=0, column=0, sticky="w")
+
+        if boton_texto and callable(boton_comando):
+            ctk.CTkButton(
+                encabezado,
+                text=boton_texto,
+                width=140,
+                height=30,
+                fg_color="#333333",
+                hover_color="#222222",
+                command=boton_comando,
+            ).grid(row=0, column=1, sticky="e")
+
         return tarjeta
 
     def _crear_tarjeta_resumen_ejecutivo(self, parent):
@@ -752,7 +776,11 @@ class FichaClienteFrame(ctk.CTkFrame):
             self.label_faltantes_estado.configure(text="\n".join(f"• {item}" for item in faltantes))
 
         self._cargar_tabla(self.tabla_servicios, servicios_activos)
-        self._cargar_tabla(self.tabla_resumenes, self.cliente_data.get("ultimos_resumenes", []))
+        self._cargar_tabla(
+            self.tabla_resumenes,
+            self.cliente_data.get("ultimos_resumenes", []),
+            fila_vacia=("Sin registros", "-", "-", "-", "", ""),
+        )
         self._cargar_tabla(self.tabla_cobros, self.cliente_data.get("ultimos_cobros", []))
         self._cargar_tabla(self.tabla_crm, self.cliente_data.get("historial_crm", []))
         self._cargar_tabla(
@@ -823,6 +851,330 @@ class FichaClienteFrame(ctk.CTkFrame):
                 f"No se pudo abrir el PDF: {error}",
                 parent=self.winfo_toplevel(),
             )
+
+    def _emitir_factura_resumen_seleccionado(self):
+        seleccion = self.tabla_resumenes.selection()
+        if not seleccion:
+            messagebox.showwarning(
+                "Emitir factura",
+                "Seleccione un resumen para continuar.",
+                parent=self.winfo_toplevel(),
+            )
+            return
+
+        valores = self.tabla_resumenes.item(seleccion[0], "values")
+        try:
+            resumen_id = int(valores[5]) if len(valores) > 5 and str(valores[5]).strip() else None
+        except (TypeError, ValueError):
+            resumen_id = None
+
+        diagnostico = self._construir_diagnostico_facturacion(resumen_id)
+        self._mostrar_diagnostico_facturacion(diagnostico)
+
+    def _construir_diagnostico_facturacion(self, resumen_id):
+        checklist = []
+        faltantes_cliente = False
+        faltantes_emisor = False
+
+        resumen = ResumenService.obtener(resumen_id) if resumen_id is not None else None
+        resumen_ok = resumen is not None
+        checklist.append({
+            "ok": resumen_ok,
+            "correcto": "Resumen seleccionado",
+            "error": "Falta / Incorrecto: resumen seleccionado",
+        })
+
+        cliente_fila = ClienteService.obtener(resumen.cliente_id) if resumen_ok else None
+        razon_social = str(cliente_fila[2] if cliente_fila and len(cliente_fila) > 2 else "" or "").strip()
+        cuit_cliente = str(cliente_fila[10] if cliente_fila and len(cliente_fila) > 10 else "" or "").strip()
+        iva_cliente = str(cliente_fila[11] if cliente_fila and len(cliente_fila) > 11 else "" or "").strip()
+        tipo_factura_cliente = str(cliente_fila[12] if cliente_fila and len(cliente_fila) > 12 else "" or "").strip()
+        referencia_emisor = str(cliente_fila[13] if cliente_fila and len(cliente_fila) > 13 else "" or "").strip()
+
+        razon_social_ok = bool(razon_social)
+        checklist.append({
+            "ok": razon_social_ok,
+            "correcto": "Razón social",
+            "error": "Falta / Incorrecto: razón social",
+        })
+        if not razon_social_ok:
+            faltantes_cliente = True
+
+        cuit_cliente_ok = bool(cuit_cliente)
+        checklist.append({
+            "ok": cuit_cliente_ok,
+            "correcto": "CUIT del cliente",
+            "error": "Falta / Incorrecto: CUIT del cliente",
+        })
+        if not cuit_cliente_ok:
+            faltantes_cliente = True
+
+        iva_cliente_ok = bool(iva_cliente)
+        checklist.append({
+            "ok": iva_cliente_ok,
+            "correcto": "Condición IVA",
+            "error": "Falta / Incorrecto: condición IVA",
+        })
+        if not iva_cliente_ok:
+            faltantes_cliente = True
+
+        tipo_factura_ok = tipo_factura_cliente in {"Factura A", "Factura C"}
+        checklist.append({
+            "ok": tipo_factura_ok,
+            "correcto": "Tipo de factura",
+            "error": "Falta / Incorrecto: tipo de factura (debe ser Factura A o Factura C)",
+        })
+        if not tipo_factura_ok:
+            faltantes_cliente = True
+
+        emisor_id = self._resolver_emisor_id_desde_referencia(referencia_emisor)
+        emisor_asignado_ok = bool(emisor_id)
+        checklist.append({
+            "ok": emisor_asignado_ok,
+            "correcto": "Emisor fiscal",
+            "error": "Falta / Incorrecto: emisor fiscal",
+        })
+        if not emisor_asignado_ok:
+            faltantes_cliente = True
+
+        emisor = EmisorFiscalService.obtener(emisor_id) if emisor_id else None
+        cuit_emisor = str(emisor[3] if emisor and len(emisor) > 3 else "" or "").strip()
+        punto_venta_emisor = str(emisor[6] if emisor and len(emisor) > 6 else "" or "").strip()
+
+        cuit_emisor_ok = bool(cuit_emisor)
+        checklist.append({
+            "ok": cuit_emisor_ok,
+            "correcto": "CUIT del emisor",
+            "error": "Falta / Incorrecto: CUIT del emisor",
+        })
+        if not cuit_emisor_ok:
+            faltantes_emisor = True
+
+        punto_venta_ok = bool(punto_venta_emisor)
+        checklist.append({
+            "ok": punto_venta_ok,
+            "correcto": "Punto de venta",
+            "error": "Falta / Incorrecto: punto de venta",
+        })
+        if not punto_venta_ok:
+            faltantes_emisor = True
+
+        total_resumen = 0
+        if resumen is not None:
+            try:
+                total_resumen = float(resumen.total or 0)
+            except (TypeError, ValueError):
+                total_resumen = 0
+        importe_ok = total_resumen > 0
+        checklist.append({
+            "ok": importe_ok,
+            "correcto": "Importe del resumen",
+            "error": "Falta / Incorrecto: importe del resumen",
+        })
+
+        estado_facturacion = str(resumen.estado_facturacion if resumen else "" or "").strip().lower()
+        estado_facturacion_ok = bool(resumen) and estado_facturacion != "facturado"
+        checklist.append({
+            "ok": estado_facturacion_ok,
+            "correcto": "Estado de facturación del resumen",
+            "error": "Falta / Incorrecto: el resumen ya figura como facturado",
+        })
+
+        validacion_arca = {"completa": False, "faltantes": [], "errores": []}
+        if emisor_id:
+            validacion_arca = EmisorFiscalService.validar_configuracion_arca(emisor_id)
+
+        faltantes_arca = set(validacion_arca.get("faltantes") or [])
+        errores_arca = set(validacion_arca.get("errores") or [])
+
+        certificado_ok = (
+            "Falta ruta del certificado digital" not in faltantes_arca
+            and "No existe el archivo del certificado digital." not in errores_arca
+            and emisor_id is not None
+        )
+        checklist.append({
+            "ok": certificado_ok,
+            "correcto": "Certificado ARCA",
+            "error": "Falta / Incorrecto: certificado ARCA",
+        })
+
+        clave_ok = (
+            "Falta ruta de la clave privada" not in faltantes_arca
+            and "No existe el archivo de la clave privada." not in errores_arca
+            and emisor_id is not None
+        )
+        checklist.append({
+            "ok": clave_ok,
+            "correcto": "Clave privada",
+            "error": "Falta / Incorrecto: clave privada",
+        })
+
+        carpeta_ok = (
+            "Falta carpeta de facturas" not in faltantes_arca
+            and "No existe la carpeta de facturas." not in errores_arca
+            and emisor_id is not None
+        )
+        checklist.append({
+            "ok": carpeta_ok,
+            "correcto": "Carpeta de facturas",
+            "error": "Falta / Incorrecto: carpeta de facturas",
+        })
+
+        configuracion_arca_ok = bool(validacion_arca.get("completa")) and emisor_id is not None
+        checklist.append({
+            "ok": configuracion_arca_ok,
+            "correcto": "Configuración ARCA del emisor",
+            "error": "Falta / Incorrecto: configuración ARCA del emisor",
+        })
+
+        if not (certificado_ok and clave_ok and carpeta_ok and configuracion_arca_ok):
+            faltantes_emisor = True
+
+        preparada = all(item["ok"] for item in checklist)
+        return {
+            "preparada": preparada,
+            "checklist": checklist,
+            "faltantes_cliente": faltantes_cliente,
+            "faltantes_emisor": faltantes_emisor,
+        }
+
+    def _mostrar_diagnostico_facturacion(self, diagnostico):
+        modal = ctk.CTkToplevel(self)
+        modal.title("Diagnóstico de facturación")
+        modal.geometry("760x620")
+        modal.minsize(700, 560)
+        modal.transient(self.winfo_toplevel())
+        modal.grab_set()
+
+        contenedor = ctk.CTkFrame(modal, fg_color=COLOR_BLANCO)
+        contenedor.pack(fill="both", expand=True, padx=16, pady=16)
+        contenedor.grid_columnconfigure(0, weight=1)
+        contenedor.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            contenedor,
+            text="Diagnóstico de facturación",
+            font=("Arial", 20, "bold"),
+            text_color=COLOR_NEGRO,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        if diagnostico.get("preparada"):
+            estado_texto = (
+                "Factura preparada para emitir\n"
+                "La conexión real con ARCA todavía no está habilitada."
+            )
+            estado_color = "#0E6E3A"
+        else:
+            estado_texto = "Factura no preparada para emitir"
+            estado_color = "#A11A1A"
+
+        ctk.CTkLabel(
+            contenedor,
+            text=estado_texto,
+            font=("Arial", 13, "bold"),
+            justify="left",
+            text_color=estado_color,
+        ).grid(row=0, column=0, sticky="e", pady=(0, 6))
+
+        lista = ctk.CTkScrollableFrame(contenedor, fg_color="#F6F6F6")
+        lista.grid(row=1, column=0, sticky="nsew", pady=(8, 12))
+        lista.grid_columnconfigure(0, weight=1)
+
+        for indice, item in enumerate(diagnostico.get("checklist", [])):
+            texto = f"✓ {item['correcto']}" if item.get("ok") else f"✗ {item['error']}"
+            color = "#0E6E3A" if item.get("ok") else "#A11A1A"
+            ctk.CTkLabel(
+                lista,
+                text=texto,
+                font=("Arial", 12),
+                text_color=color,
+                justify="left",
+                anchor="w",
+            ).grid(row=indice, column=0, sticky="ew", padx=10, pady=(6 if indice == 0 else 4, 2))
+
+        acciones = ctk.CTkFrame(contenedor, fg_color="transparent")
+        acciones.grid(row=2, column=0, sticky="e")
+
+        columna = 0
+        if diagnostico.get("faltantes_cliente"):
+            ctk.CTkButton(
+                acciones,
+                text="Editar cliente",
+                width=140,
+                fg_color="#333333",
+                hover_color="#222222",
+                command=lambda: self._abrir_edicion_cliente_desde_diagnostico(modal),
+            ).grid(row=0, column=columna, padx=(0, 8))
+            columna += 1
+
+        if diagnostico.get("faltantes_emisor"):
+            ctk.CTkButton(
+                acciones,
+                text="Configurar emisor",
+                width=160,
+                fg_color="#333333",
+                hover_color="#222222",
+                command=self._abrir_configuracion_emisores_desde_diagnostico,
+            ).grid(row=0, column=columna, padx=(0, 8))
+            columna += 1
+
+        ctk.CTkButton(
+            acciones,
+            text="Cerrar",
+            width=110,
+            fg_color="#666666",
+            hover_color="#444444",
+            command=modal.destroy,
+        ).grid(row=0, column=columna)
+
+    def _abrir_edicion_cliente_desde_diagnostico(self, modal):
+        modal.destroy()
+        callback = self.callbacks.get("editar_cliente")
+        if callable(callback):
+            callback(self.cliente_data)
+            return
+
+        messagebox.showinfo(
+            "Acción no disponible",
+            "No hay un flujo de edición de cliente configurado desde esta vista.",
+            parent=self.winfo_toplevel(),
+        )
+
+    def _abrir_configuracion_emisores_desde_diagnostico(self):
+        try:
+            from views.emisores_fiscales import EmisoresFiscalesWindow
+        except Exception as error:
+            messagebox.showerror(
+                "Emisores Fiscales",
+                f"No se pudo abrir la configuración de emisores.\n{error}",
+                parent=self.winfo_toplevel(),
+            )
+            return
+
+        EmisoresFiscalesWindow(self.winfo_toplevel())
+
+    def _resolver_emisor_id_desde_referencia(self, referencia_emisor):
+        texto = str(referencia_emisor or "").strip()
+        if not texto or texto == "No aplica":
+            return None
+
+        if texto.startswith("EMISOR:"):
+            try:
+                return int(texto.split(":", 1)[1])
+            except (TypeError, ValueError):
+                return None
+
+        if texto in ("Monotributo 1", "Monotributo 2"):
+            indice = 0 if texto.endswith("1") else 1
+            emisores = EmisorFiscalService.listar_activos_ordenados_por_id()
+            if len(emisores) > indice:
+                return emisores[indice][0]
+            return None
+
+        for emisor in EmisorFiscalService.listar():
+            if texto == EmisorFiscalService.etiqueta_visible(emisor):
+                return emisor[0]
+        return None
 
     def _ejecutar_accion(self, nombre_accion):
         callback = self.callbacks.get(nombre_accion)
