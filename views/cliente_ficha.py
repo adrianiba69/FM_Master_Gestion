@@ -1030,12 +1030,34 @@ class FichaClienteFrame(ctk.CTkFrame):
         if not (certificado_ok and clave_ok and carpeta_ok and configuracion_arca_ok):
             faltantes_emisor = True
 
+        cliente_validado = razon_social_ok and cuit_cliente_ok and iva_cliente_ok and tipo_factura_ok and emisor_asignado_ok
+        emisor_validado = emisor_asignado_ok and cuit_emisor_ok and punto_venta_ok
+        resumen_disponible = resumen_ok and importe_ok and estado_facturacion_ok
+
         preparada = all(item["ok"] for item in checklist)
         return {
             "preparada": preparada,
             "checklist": checklist,
             "faltantes_cliente": faltantes_cliente,
             "faltantes_emisor": faltantes_emisor,
+            "detalle": {
+                "cliente": razon_social or "-",
+                "cuit_cliente": cuit_cliente or "-",
+                "resumen_numero": str(resumen.numero) if resumen is not None else "-",
+                "resumen_fecha": str(resumen.fecha or "-") if resumen is not None else "-",
+                "importe_total": self._formatear_moneda(total_resumen) or "-",
+                "emisor": EmisorFiscalService.etiqueta_visible(emisor) if emisor is not None else "-",
+                "cuit_emisor": cuit_emisor or "-",
+                "tipo_factura": tipo_factura_cliente or "-",
+                "punto_venta": punto_venta_emisor or "-",
+                "ambiente_arca": str(emisor[9] if emisor and len(emisor) > 9 else "" or "-").strip() or "-",
+            },
+            "estado_confirmacion": {
+                "cliente_validado": cliente_validado,
+                "emisor_validado": emisor_validado,
+                "configuracion_arca_validada": configuracion_arca_ok,
+                "resumen_disponible": resumen_disponible,
+            },
         }
 
     def _mostrar_diagnostico_facturacion(self, diagnostico):
@@ -1118,6 +1140,17 @@ class FichaClienteFrame(ctk.CTkFrame):
             ).grid(row=0, column=columna, padx=(0, 8))
             columna += 1
 
+        if diagnostico.get("preparada"):
+            ctk.CTkButton(
+                acciones,
+                text="Continuar",
+                width=120,
+                fg_color=COLOR_PRINCIPAL,
+                hover_color="#990000",
+                command=lambda: self._abrir_confirmacion_factura_preparada(modal, diagnostico),
+            ).grid(row=0, column=columna, padx=(0, 8))
+            columna += 1
+
         ctk.CTkButton(
             acciones,
             text="Cerrar",
@@ -1126,6 +1159,140 @@ class FichaClienteFrame(ctk.CTkFrame):
             hover_color="#444444",
             command=modal.destroy,
         ).grid(row=0, column=columna)
+
+    def _abrir_confirmacion_factura_preparada(self, modal_diagnostico, diagnostico):
+        modal_diagnostico.destroy()
+        self._mostrar_confirmacion_factura_preparada(diagnostico)
+
+    def _mostrar_confirmacion_factura_preparada(self, diagnostico):
+        detalle = diagnostico.get("detalle", {})
+        estado = diagnostico.get("estado_confirmacion", {})
+
+        modal = ctk.CTkToplevel(self)
+        modal.title("Factura lista para emitir")
+        modal.geometry("760x620")
+        modal.minsize(700, 560)
+        modal.transient(self.winfo_toplevel())
+        modal.grab_set()
+
+        contenedor = ctk.CTkFrame(modal, fg_color=COLOR_BLANCO)
+        contenedor.pack(fill="both", expand=True, padx=16, pady=16)
+        contenedor.grid_columnconfigure(0, weight=1)
+        contenedor.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            contenedor,
+            text="Factura lista para emitir",
+            font=("Arial", 20, "bold"),
+            text_color=COLOR_NEGRO,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        cuerpo = ctk.CTkScrollableFrame(contenedor, fg_color="#F6F6F6")
+        cuerpo.grid(row=1, column=0, sticky="nsew", pady=(8, 12))
+        cuerpo.grid_columnconfigure(0, weight=1)
+        cuerpo.grid_columnconfigure(1, weight=1)
+
+        datos = [
+            ("Cliente", detalle.get("cliente", "-")),
+            ("CUIT del cliente", detalle.get("cuit_cliente", "-")),
+            ("Resumen seleccionado", detalle.get("resumen_numero", "-")),
+            ("Fecha del resumen", detalle.get("resumen_fecha", "-")),
+            ("Importe total", detalle.get("importe_total", "-")),
+            ("Emisor fiscal", detalle.get("emisor", "-")),
+            ("CUIT del emisor", detalle.get("cuit_emisor", "-")),
+            ("Tipo de factura", detalle.get("tipo_factura", "-")),
+            ("Punto de venta", detalle.get("punto_venta", "-")),
+            ("Ambiente ARCA", detalle.get("ambiente_arca", "-")),
+        ]
+
+        for indice, (etiqueta, valor) in enumerate(datos):
+            fila = indice // 2
+            columna = indice % 2
+            bloque = ctk.CTkFrame(cuerpo, fg_color=COLOR_BLANCO, corner_radius=8, border_width=1, border_color="#DADADA")
+            bloque.grid(row=fila, column=columna, sticky="ew", padx=8, pady=6)
+            ctk.CTkLabel(
+                bloque,
+                text=etiqueta,
+                font=("Arial", 11, "bold"),
+                text_color=COLOR_PRINCIPAL,
+            ).pack(anchor="w", padx=12, pady=(10, 2))
+            ctk.CTkLabel(
+                bloque,
+                text=valor,
+                font=("Arial", 12),
+                text_color="#1F1F1F",
+                justify="left",
+                wraplength=300,
+            ).pack(anchor="w", padx=12, pady=(0, 10))
+
+        inicio_checklist = (len(datos) + 1) // 2
+        estado_items = [
+            (estado.get("cliente_validado", False), "Cliente validado"),
+            (estado.get("emisor_validado", False), "Emisor validado"),
+            (estado.get("configuracion_arca_validada", False), "Configuración ARCA validada"),
+            (estado.get("resumen_disponible", False), "Resumen disponible"),
+        ]
+
+        estado_frame = ctk.CTkFrame(cuerpo, fg_color=COLOR_BLANCO, corner_radius=8, border_width=1, border_color="#DADADA")
+        estado_frame.grid(row=inicio_checklist, column=0, columnspan=2, sticky="ew", padx=8, pady=(10, 6))
+        ctk.CTkLabel(
+            estado_frame,
+            text="Estado",
+            font=("Arial", 12, "bold"),
+            text_color=COLOR_PRINCIPAL,
+        ).pack(anchor="w", padx=12, pady=(10, 6))
+
+        for ok, texto in estado_items:
+            prefijo = "✓" if ok else "✗"
+            color = "#0E6E3A" if ok else "#A11A1A"
+            ctk.CTkLabel(
+                estado_frame,
+                text=f"{prefijo} {texto}",
+                font=("Arial", 12),
+                text_color=color,
+                justify="left",
+            ).pack(anchor="w", padx=12, pady=2)
+
+        acciones = ctk.CTkFrame(contenedor, fg_color="transparent")
+        acciones.grid(row=2, column=0, sticky="e")
+
+        ctk.CTkButton(
+            acciones,
+            text="Volver",
+            width=110,
+            fg_color="#333333",
+            hover_color="#222222",
+            command=lambda: self._volver_a_diagnostico_desde_confirmacion(modal, diagnostico),
+        ).grid(row=0, column=0, padx=(0, 8))
+
+        ctk.CTkButton(
+            acciones,
+            text="Cerrar",
+            width=110,
+            fg_color="#666666",
+            hover_color="#444444",
+            command=modal.destroy,
+        ).grid(row=0, column=1, padx=(0, 8))
+
+        ctk.CTkButton(
+            acciones,
+            text="Emitir factura",
+            width=130,
+            fg_color=COLOR_PRINCIPAL,
+            hover_color="#990000",
+            command=self._informar_emision_no_habilitada,
+        ).grid(row=0, column=2)
+
+    def _volver_a_diagnostico_desde_confirmacion(self, modal_confirmacion, diagnostico):
+        modal_confirmacion.destroy()
+        self._mostrar_diagnostico_facturacion(diagnostico)
+
+    def _informar_emision_no_habilitada(self):
+        messagebox.showinfo(
+            "Emitir factura",
+            "La conexión real con ARCA todavía no está habilitada.\n\nNo se realizó ninguna emisión.",
+            parent=self.winfo_toplevel(),
+        )
 
     def _abrir_edicion_cliente_desde_diagnostico(self, modal):
         modal.destroy()
