@@ -20,24 +20,27 @@ class WSAAService:
 		if duracion <= 0:
 			raise ValueError("La duracion debe ser mayor a cero.")
 
-		ahora_utc = datetime.now(timezone.utc)
-		generation_time = ahora_utc - timedelta(minutes=5)
-		expiration_time = ahora_utc + timedelta(seconds=duracion)
-		unique_id = str(int(time.time() * 1000))
+		zona_argentina = timezone(timedelta(hours=-3))
+		ahora_argentina = datetime.now(zona_argentina)
+		generation_time = ahora_argentina - timedelta(minutes=5)
+		expiration_time = ahora_argentina + timedelta(seconds=duracion)
+		unique_id = (int(time.time() * 1000) % 4294967295) or 4294967295
 
-		login_ticket_request = ET.Element("loginTicketRequest", attrib={"version": "1.0"})
-		header = ET.SubElement(login_ticket_request, "header")
-		ET.SubElement(header, "uniqueId").text = unique_id
-		ET.SubElement(header, "generationTime").text = generation_time.replace(microsecond=0).isoformat().replace(
-			"+00:00", "Z"
-		)
-		ET.SubElement(header, "expirationTime").text = expiration_time.replace(microsecond=0).isoformat().replace(
-			"+00:00", "Z"
-		)
-		ET.SubElement(login_ticket_request, "service").text = servicio_normalizado
+		generation_texto = generation_time.isoformat(timespec="milliseconds")
+		expiration_texto = expiration_time.isoformat(timespec="milliseconds")
 
-		xml_bytes = ET.tostring(login_ticket_request, encoding="utf-8", xml_declaration=True)
-		return xml_bytes.decode("utf-8")
+		xml = (
+			"<?xml version='1.0' encoding='utf-8'?>\n"
+			"<loginTicketRequest version=\"1.0\">\n"
+			"  <header>\n"
+			f"    <uniqueId>{unique_id}</uniqueId>\n"
+			f"    <generationTime>{generation_texto}</generationTime>\n"
+			f"    <expirationTime>{expiration_texto}</expirationTime>\n"
+			"  </header>\n"
+			f"  <service>{servicio_normalizado}</service>\n"
+			"</loginTicketRequest>"
+		)
+		return xml
 
 	@staticmethod
 	def guardar_tra(ruta_destino, servicio="wsfe", duracion_segundos=3600):

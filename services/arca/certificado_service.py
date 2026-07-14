@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil
 import subprocess
+import time
 
 
 class CertificadoService:
@@ -196,3 +197,134 @@ class CertificadoService:
 
         resultado["valido"] = True
         return resultado
+
+    @staticmethod
+    def firmar_tra_cms(ruta_tra, ruta_certificado, ruta_clave_privada, ruta_salida=None):
+        resultado = {
+            "firmado": False,
+            "ruta_cms": "",
+            "errores": [],
+            "openssl_disponible": False,
+        }
+
+        openssl_path = CertificadoService._localizar_openssl()
+        resultado["openssl_disponible"] = bool(openssl_path)
+
+        ruta_tra_texto = str(ruta_tra or "").strip()
+        if not ruta_tra_texto:
+            resultado["errores"].append("Ruta de TRA no informada.")
+            return resultado
+
+        ruta_tra_path = Path(ruta_tra_texto)
+        if not ruta_tra_path.exists() or not ruta_tra_path.is_file():
+            resultado["errores"].append("El archivo TRA no existe.")
+            return resultado
+
+        if ruta_tra_path.suffix.lower() != ".xml":
+            resultado["errores"].append("El archivo TRA debe tener extensión .xml.")
+            return resultado
+
+        ruta_certificado_texto = str(ruta_certificado or "").strip()
+        if not ruta_certificado_texto:
+            resultado["errores"].append("Ruta de certificado no informada.")
+            return resultado
+
+        ruta_certificado_path = Path(ruta_certificado_texto)
+        if not ruta_certificado_path.exists() or not ruta_certificado_path.is_file():
+            resultado["errores"].append("El archivo de certificado no existe.")
+            return resultado
+
+        if ruta_certificado_path.suffix.lower() not in {".pem", ".crt", ".cer"}:
+            resultado["errores"].append("La extensión del certificado no es válida.")
+            return resultado
+
+        ruta_clave_texto = str(ruta_clave_privada or "").strip()
+        if not ruta_clave_texto:
+            resultado["errores"].append("Ruta de clave privada no informada.")
+            return resultado
+
+        ruta_clave_path = Path(ruta_clave_texto)
+        if not ruta_clave_path.exists() or not ruta_clave_path.is_file():
+            resultado["errores"].append("El archivo de clave privada no existe.")
+            return resultado
+
+        if not openssl_path:
+            resultado["errores"].append("OpenSSL no está disponible en el equipo.")
+            return resultado
+
+        if ruta_salida is None or str(ruta_salida).strip() == "":
+            ruta_cms_base = ruta_tra_path.with_suffix(".cms")
+        else:
+            ruta_salida_texto = str(ruta_salida).strip()
+            ruta_cms_base = Path(ruta_salida_texto)
+            if ruta_cms_base.exists() and ruta_cms_base.is_dir():
+                resultado["errores"].append("La ruta de salida no puede ser una carpeta.")
+                return resultado
+            if ruta_cms_base.suffix.lower() != ".cms":
+                ruta_cms_base = ruta_cms_base.with_suffix(".cms")
+
+        ruta_cms_final = CertificadoService._generar_ruta_alternativa(ruta_cms_base)
+        ruta_cms_final.parent.mkdir(parents=True, exist_ok=True)
+
+        comando = [
+            "cms",
+            "-sign",
+            "-in",
+            str(ruta_tra_path),
+            "-signer",
+            str(ruta_certificado_path),
+            "-inkey",
+            str(ruta_clave_path),
+            "-nodetach",
+            "-outform",
+            "PEM",
+            "-out",
+            str(ruta_cms_final),
+        ]
+
+        try:
+            proceso = CertificadoService._ejecutar_openssl(openssl_path, comando, timeout=12)
+        except subprocess.TimeoutExpired:
+            resultado["errores"].append("OpenSSL excedió el tiempo de firma del TRA.")
+            return resultado
+        except Exception:
+            resultado["errores"].append("No se pudo ejecutar OpenSSL para firmar el TRA.")
+            return resultado
+
+        salida = (proceso.stdout or "") + "\n" + (proceso.stderr or "")
+        if proceso.returncode != 0:
+            resultado["errores"].append("OpenSSL no pudo generar la firma CMS del TRA.")
+            if salida.strip():
+                resultado["errores"].append("La firma fue rechazada por OpenSSL.")
+            if ruta_cms_final.exists():
+                try:
+                    ruta_cms_final.unlink()
+                except OSError:
+                    pass
+            return resultado
+
+        if not ruta_cms_final.exists() or ruta_cms_final.stat().st_size <= 0:
+            resultado["errores"].append("OpenSSL no generó el archivo CMS esperado.")
+            return resultado
+
+        resultado["firmado"] = True
+        resultado["ruta_cms"] = str(ruta_cms_final.resolve())
+        return resultado
+
+    @staticmethod
+    def _generar_ruta_alternativa(ruta_base):
+        ruta_base = Path(ruta_base)
+        if not ruta_base.exists():
+            return ruta_base
+
+        marca_tiempo = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+        candidata = ruta_base.with_name(f"{ruta_base.stem}_{marca_tiempo}{ruta_base.suffix}")
+        if not candidata.exists():
+            return candidata
+
+        contador = 1
+        while True:
+            alternativa = ruta_base.with_name(f"{ruta_base.stem}_{marca_tiempo}_{contador}{ruta_base.suffix}")
+            if not alternativa.exists():
+                return alternativa
+            contador += 1

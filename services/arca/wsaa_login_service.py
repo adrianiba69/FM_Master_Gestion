@@ -1,0 +1,238 @@
+from base64 import b64encode
+from pathlib import Path
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+
+from services.arca.certificado_service import CertificadoService
+
+
+class WSAALoginService:
+    WSAA_HOMOLOGACION_URL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms"
+    TIMEOUT_SEGUNDOS = 20
+
+    @staticmethod
+    def login_homologacion(ruta_tra, ruta_certificado, ruta_clave):
+        resultado = {
+            "ok": False,
+            "token": "",
+            "sign": "",
+            "expiration": "",
+            "faultcode": "",
+            "faultstring": "",
+            "detail": "",
+            "status_http": 0,
+            "cuerpo_respuesta_sanitizado": "",
+            "errores": [],
+        }
+
+        firma = CertificadoService.firmar_tra_cms(
+            ruta_tra=ruta_tra,
+            ruta_certificado=ruta_certificado,
+            ruta_clave_privada=ruta_clave,
+            ruta_salida=None,
+        )
+        if not firma.get("firmado"):
+            resultado["errores"].extend(firma.get("errores") or ["No se pudo generar el CMS del TRA."])
+            return resultado
+
+        ruta_cms = Path(str(firma.get("ruta_cms") or "").strip())
+        if not ruta_cms.exists() or not ruta_cms.is_file():
+            resultado["errores"].append("No se encontró el archivo CMS generado.")
+            return resultado
+
+        try:
+            cms_base64 = WSAALoginService._leer_cms_base64(ruta_cms)
+        except OSError:
+            resultado["errores"].append("No se pudo leer el archivo CMS para preparar el login WSAA.")
+            return resultado
+
+        soap_body = WSAALoginService._construir_sobre_soap(cms_base64)
+
+        request = urllib.request.Request(
+            url=WSAALoginService.WSAA_HOMOLOGACION_URL,
+            data=soap_body.encode("utf-8"),
+            method="POST",
+            headers={
+                "Content-Type": "text/xml; charset=UTF-8",
+                "SOAPAction": "urn:LoginCms",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=WSAALoginService.TIMEOUT_SEGUNDOS) as response:
+                status_http = getattr(response, "status", getattr(response, "code", 200))
+                response_xml = response.read().decode("utf-8", errors="replace")
+                resultado["status_http"] = int(status_http or 200)
+        except urllib.error.HTTPError as error:
+            resultado["status_http"] = int(getattr(error, "code", 0) or 0)
+            detalle = ""
+            try:
+                detalle = error.read().decode("utf-8", errors="replace").strip()
+            except Exception:
+                detalle = ""
+            resultado["cuerpo_respuesta_sanitizado"] = WSAALoginService._sanitizar_respuesta(detalle)
+            parseo = WSAALoginService._parsear_respuesta_login(detalle)
+            resultado["faultcode"] = parseo.get("faultcode", "")
+            resultado["faultstring"] = parseo.get("faultstring", "")
+            resultado["detail"] = parseo.get("detail", "")
+            if parseo.get("errores"):
+                resultado["errores"].extend(parseo.get("errores"))
+            else:
+                resultado["errores"].append(f"Error HTTP al invocar WSAA: {error.code} {error.reason}")
+            return resultado
+        except urllib.error.URLError as error:
+            resultado["errores"].append(f"No se pudo conectar con WSAA de Homologación: {error.reason}")
+            return resultado
+        except TimeoutError:
+            resultado["errores"].append("Tiempo de espera agotado al invocar WSAA de Homologación.")
+            return resultado
+        except Exception as error:
+            resultado["errores"].append(f"Error inesperado al invocar WSAA de Homologación: {error}")
+            return resultado
+
+        parseo = WSAALoginService._parsear_respuesta_login(response_xml)
+        resultado["cuerpo_respuesta_sanitizado"] = WSAALoginService._sanitizar_respuesta(response_xml)
+        resultado["status_http"] = int(resultado.get("status_http") or 200)
+        if not parseo.get("ok"):
+            resultado["faultcode"] = parseo.get("faultcode", "")
+            resultado["faultstring"] = parseo.get("faultstring", "")
+            resultado["detail"] = parseo.get("detail", "")
+            resultado["errores"].extend(parseo.get("errores") or ["Respuesta inválida de WSAA."])
+            return resultado
+
+        resultado["ok"] = True
+        resultado["token"] = parseo.get("token", "")
+        resultado["sign"] = parseo.get("sign", "")
+        resultado["expiration"] = parseo.get("expiration", "")
+        return resultado
+
+    @staticmethod
+    def _leer_cms_base64(ruta_cms):
+        contenido = ruta_cms.read_text(encoding="utf-8", errors="replace")
+        lineas = []
+        for linea in contenido.splitlines():
+            texto = linea.strip()
+            if not texto:
+                continue
+            if texto.startswith("-----BEGIN") or texto.startswith("-----END"):
+                continue
+            lineas.append(texto)
+        return "".join(lineas)
+
+    @staticmethod
+    def _construir_sobre_soap(cms_base64):
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+            "xmlns:wsaa=\"http://wsaa.view.sua.dvadac.desein.afip.gov\">"
+            "<soapenv:Header/>"
+            "<soapenv:Body>"
+            "<wsaa:loginCms>"
+            f"<wsaa:in0>{cms_base64}</wsaa:in0>"
+            "</wsaa:loginCms>"
+            "</soapenv:Body>"
+            "</soapenv:Envelope>"
+        )
+
+    @staticmethod
+    def _parsear_respuesta_login(response_xml):
+        resultado = {
+            "ok": False,
+            "token": "",
+            "sign": "",
+            "expiration": "",
+            "faultcode": "",
+            "faultstring": "",
+            "detail": "",
+            "errores": [],
+        }
+
+        try:
+            root = ET.fromstring(response_xml)
+        except ET.ParseError:
+            resultado["errores"].append("WSAA devolvió XML SOAP inválido.")
+            return resultado
+
+        fault = WSAALoginService._buscar_por_sufijo(root, "Fault")
+        if fault is not None:
+            faultstring = WSAALoginService._extraer_texto_por_sufijo(fault, "faultstring")
+            faultcode = WSAALoginService._extraer_texto_por_sufijo(fault, "faultcode")
+            detail = WSAALoginService._extraer_texto_por_sufijo(fault, "detail")
+            resultado["faultcode"] = faultcode
+            resultado["faultstring"] = faultstring
+            resultado["detail"] = detail
+            if faultstring or faultcode:
+                resultado["errores"].append(f"WSAA respondió SOAP Fault: {faultcode or 'Sin código'} - {faultstring or 'Sin detalle'}")
+            else:
+                resultado["errores"].append("WSAA respondió con SOAP Fault.")
+            return resultado
+
+        login_return = WSAALoginService._buscar_por_sufijo(root, "loginCmsReturn")
+        if login_return is None or not (login_return.text or "").strip():
+            resultado["errores"].append("WSAA no devolvió loginCmsReturn.")
+            return resultado
+
+        inner_xml = (login_return.text or "").strip()
+        try:
+            login_ticket = ET.fromstring(inner_xml)
+        except ET.ParseError:
+            resultado["errores"].append("WSAA devolvió loginCmsReturn inválido.")
+            return resultado
+
+        token = WSAALoginService._extraer_texto_por_sufijo(login_ticket, "token")
+        sign = WSAALoginService._extraer_texto_por_sufijo(login_ticket, "sign")
+        expiration = WSAALoginService._extraer_texto_por_sufijo(login_ticket, "expirationTime")
+
+        if not token or not sign:
+            resultado["errores"].append("No se encontraron token/sign en la respuesta de WSAA.")
+            return resultado
+
+        resultado["ok"] = True
+        resultado["token"] = token
+        resultado["sign"] = sign
+        resultado["expiration"] = expiration or ""
+        return resultado
+
+    @staticmethod
+    def _sanitizar_respuesta(response_xml):
+        texto = str(response_xml or "")
+        if not texto:
+            return ""
+
+        reemplazos = [
+            ("token", "token"),
+            ("sign", "sign"),
+            ("cms", "cms"),
+        ]
+
+        try:
+            root = ET.fromstring(texto)
+        except ET.ParseError:
+            sanitizado = texto
+        else:
+            for nodo in root.iter():
+                nombre = nodo.tag.split("}")[-1].lower()
+                if nombre in {"token", "sign", "cms", "in0"} and (nodo.text or "").strip():
+                    nodo.text = "[OCULTO]"
+            sanitizado = ET.tostring(root, encoding="unicode")
+
+        for clave, marcador in reemplazos:
+            sanitizado = sanitizado.replace(clave, marcador)
+        return sanitizado.strip()
+
+    @staticmethod
+    def _buscar_por_sufijo(root, sufijo):
+        if root.tag.endswith(sufijo):
+            return root
+        for nodo in root.iter():
+            if nodo.tag.endswith(sufijo):
+                return nodo
+        return None
+
+    @staticmethod
+    def _extraer_texto_por_sufijo(root, sufijo):
+        nodo = WSAALoginService._buscar_por_sufijo(root, sufijo)
+        if nodo is None:
+            return ""
+        return (nodo.text or "").strip()
