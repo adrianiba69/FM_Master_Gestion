@@ -10,6 +10,183 @@ class WSFEService:
     TIMEOUT_SEGUNDOS = 20
 
     @staticmethod
+    def construir_solicitud_cae(
+        cuit,
+        punto_venta,
+        tipo_comprobante,
+        numero_comprobante,
+        concepto,
+        documento_receptor,
+        tipo_documento,
+        importe,
+        importe_neto,
+        importe_iva,
+        importe_exento,
+        fecha_comprobante,
+        moneda,
+        cotizacion,
+    ):
+        errores = []
+
+        cuit_texto = str(cuit or "").strip()
+        documento_raw = documento_receptor
+        documento_texto = "" if documento_raw is None else str(documento_raw).strip()
+        fecha_texto = str(fecha_comprobante or "").strip()
+        moneda_texto = str(moneda or "").strip()
+
+        if not cuit_texto:
+            errores.append("CUIT obligatorio.")
+        if not fecha_texto:
+            errores.append("Fecha comprobante obligatoria.")
+        if not moneda_texto:
+            errores.append("Moneda obligatoria.")
+
+        try:
+            pto_vta = int(punto_venta)
+            if pto_vta <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            errores.append("Punto de venta inválido.")
+            pto_vta = 0
+
+        try:
+            cbte_tipo = int(tipo_comprobante)
+            if cbte_tipo <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            errores.append("Tipo de comprobante inválido.")
+            cbte_tipo = 0
+
+        try:
+            cbte_numero = int(numero_comprobante)
+            if cbte_numero <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            errores.append("Número de comprobante inválido.")
+            cbte_numero = 0
+
+        try:
+            concepto_val = int(concepto)
+            if concepto_val not in {1, 2, 3}:
+                raise ValueError()
+        except (TypeError, ValueError):
+            errores.append("Concepto inválido. Debe ser 1, 2 o 3.")
+            concepto_val = 0
+
+        try:
+            doc_tipo = int(tipo_documento)
+        except (TypeError, ValueError):
+            errores.append("Tipo de documento inválido.")
+            doc_tipo = 0
+
+        if documento_raw is None or (isinstance(documento_raw, str) and documento_texto == ""):
+            errores.append("Documento receptor obligatorio.")
+            doc_nro = 0
+        else:
+            try:
+                doc_nro = int(documento_texto)
+            except (TypeError, ValueError):
+                errores.append("Documento receptor inválido.")
+                doc_nro = 0
+            else:
+                if doc_nro < 0:
+                    errores.append("Documento receptor inválido.")
+                elif doc_tipo == 99 and doc_nro != 0:
+                    errores.append("Documento receptor inválido para DocTipo 99: debe ser 0.")
+                elif doc_tipo != 99 and doc_nro <= 0:
+                    errores.append("Documento receptor inválido: debe ser mayor que 0 para este tipo de documento.")
+
+        try:
+            imp_total = round(float(importe), 2)
+        except (TypeError, ValueError):
+            errores.append("Importe total inválido.")
+            imp_total = 0.0
+
+        try:
+            imp_neto = round(float(importe_neto), 2)
+        except (TypeError, ValueError):
+            errores.append("Importe neto inválido.")
+            imp_neto = 0.0
+
+        try:
+            imp_iva = round(float(importe_iva), 2)
+        except (TypeError, ValueError):
+            errores.append("Importe IVA inválido.")
+            imp_iva = 0.0
+
+        try:
+            imp_exento = round(float(importe_exento), 2)
+        except (TypeError, ValueError):
+            errores.append("Importe exento inválido.")
+            imp_exento = 0.0
+
+        try:
+            mon_cotiz = round(float(cotizacion), 6)
+            if mon_cotiz <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            errores.append("Cotización inválida.")
+            mon_cotiz = 0.0
+
+        if imp_total <= 0:
+            errores.append("El importe total debe ser mayor a cero.")
+        if imp_neto < 0 or imp_iva < 0 or imp_exento < 0:
+            errores.append("Importes neto, IVA y exento no pueden ser negativos.")
+
+        suma_componentes = round(imp_neto + imp_iva + imp_exento, 2)
+        if round(imp_total, 2) != suma_componentes:
+            errores.append("Los totales no cierran: importe total debe igualar neto + IVA + exento.")
+
+        if imp_iva > 0 and imp_neto <= 0:
+            errores.append("IVA inválido: si hay IVA, el importe neto debe ser mayor a cero.")
+
+        if concepto_val in {2, 3}:
+            errores.append("Concepto 2/3 requiere fechas de servicio, no incluidas en este constructor.")
+
+        if errores:
+            return {
+                "ok": False,
+                "solicitud": {},
+                "errores": errores,
+            }
+
+        solicitud = {
+            "FeCAEReq": {
+                "FeCabReq": {
+                    "CantReg": 1,
+                    "PtoVta": pto_vta,
+                    "CbteTipo": cbte_tipo,
+                },
+                "FeDetReq": {
+                    "FECAEDetRequest": [
+                        {
+                            "Concepto": concepto_val,
+                            "DocTipo": doc_tipo,
+                            "DocNro": doc_nro,
+                            "CbteDesde": cbte_numero,
+                            "CbteHasta": cbte_numero,
+                            "CbteFch": fecha_texto,
+                            "ImpTotal": imp_total,
+                            "ImpTotConc": 0.0,
+                            "ImpNeto": imp_neto,
+                            "ImpOpEx": imp_exento,
+                            "ImpTrib": 0.0,
+                            "ImpIVA": imp_iva,
+                            "MonId": moneda_texto,
+                            "MonCotiz": mon_cotiz,
+                        }
+                    ]
+                },
+            },
+            "Cuit": cuit_texto,
+        }
+
+        return {
+            "ok": True,
+            "solicitud": solicitud,
+        }
+
+    @staticmethod
     def fedummy():
         resultado = {
             "ok": False,
