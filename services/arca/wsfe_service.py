@@ -1,6 +1,7 @@
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from decimal import Decimal, InvalidOperation
 
 
 class WSFEService:
@@ -566,6 +567,20 @@ class WSFEService:
         )
 
     @staticmethod
+    def construir_soap_cae_sanitizado(cuit, solicitud):
+        if isinstance(solicitud, dict) and isinstance(solicitud.get("FeCAEReq"), dict):
+            fe_cae_req = solicitud.get("FeCAEReq", {})
+        else:
+            fe_cae_req = solicitud if isinstance(solicitud, dict) else {}
+
+        return WSFEService._construir_soap_cae_solicitar(
+            token="[TOKEN]",
+            sign="[SIGN]",
+            cuit=str(cuit or "").strip(),
+            fe_cae_req=fe_cae_req,
+        )
+
+    @staticmethod
     def _construir_xml_fe_cae_req(fe_cae_req):
         fe_cab_req = fe_cae_req.get("FeCabReq", {})
         fe_det_req = fe_cae_req.get("FeDetReq", {})
@@ -573,15 +588,36 @@ class WSFEService:
         if isinstance(detalles, dict):
             detalles = [detalles]
 
+        cant_reg = WSFEService._serializar_entero_xml(fe_cab_req.get("CantReg", 1), default="1")
+        pto_vta = WSFEService._serializar_entero_xml(fe_cab_req.get("PtoVta", 0), default="0")
+        cbte_tipo = WSFEService._serializar_entero_xml(fe_cab_req.get("CbteTipo", 0), default="0")
+
         cab = (
             "<ar:FeCabReq>"
-            f"<ar:CantReg>{int(fe_cab_req.get('CantReg', 1))}</ar:CantReg>"
-            f"<ar:PtoVta>{int(fe_cab_req.get('PtoVta', 0))}</ar:PtoVta>"
-            f"<ar:CbteTipo>{int(fe_cab_req.get('CbteTipo', 0))}</ar:CbteTipo>"
+            f"<ar:CantReg>{cant_reg}</ar:CantReg>"
+            f"<ar:PtoVta>{pto_vta}</ar:PtoVta>"
+            f"<ar:CbteTipo>{cbte_tipo}</ar:CbteTipo>"
             "</ar:FeCabReq>"
         )
 
         detalles_xml = []
+        claves_enteras = {
+            "Concepto",
+            "DocTipo",
+            "DocNro",
+            "CbteDesde",
+            "CbteHasta",
+            "CondicionIVAReceptorId",
+        }
+        claves_decimales = {
+            "ImpTotal",
+            "ImpTotConc",
+            "ImpNeto",
+            "ImpOpEx",
+            "ImpTrib",
+            "ImpIVA",
+            "MonCotiz",
+        }
         claves_detalle = [
             "Concepto",
             "DocTipo",
@@ -607,7 +643,13 @@ class WSFEService:
                 if clave not in detalle:
                     continue
                 valor = detalle.get(clave)
-                partes.append(f"<ar:{clave}>{WSFEService._escapar_xml(valor)}</ar:{clave}>")
+                if clave in claves_enteras:
+                    valor_xml = WSFEService._serializar_entero_xml(valor)
+                elif clave in claves_decimales:
+                    valor_xml = WSFEService._serializar_decimal_xml(valor)
+                else:
+                    valor_xml = WSFEService._escapar_xml(valor)
+                partes.append(f"<ar:{clave}>{valor_xml}</ar:{clave}>")
             partes.append("</ar:FECAEDetRequest>")
             detalles_xml.append("".join(partes))
 
@@ -869,3 +911,46 @@ class WSFEService:
             .replace('"', "&quot;")
             .replace("'", "&apos;")
         )
+
+    @staticmethod
+    def _serializar_entero_xml(valor, default="0"):
+        if valor is None:
+            return WSFEService._escapar_xml(default)
+
+        texto = str(valor).strip()
+        if texto == "":
+            return WSFEService._escapar_xml(default)
+
+        texto = texto.replace(",", ".")
+        try:
+            numero = Decimal(texto)
+        except (InvalidOperation, ValueError):
+            return WSFEService._escapar_xml(default)
+
+        if numero != numero.to_integral_value():
+            return WSFEService._escapar_xml(default)
+
+        return WSFEService._escapar_xml(str(int(numero)))
+
+    @staticmethod
+    def _serializar_decimal_xml(valor, default="0"):
+        if valor is None:
+            return WSFEService._escapar_xml(default)
+
+        texto = str(valor).strip()
+        if texto == "":
+            return WSFEService._escapar_xml(default)
+
+        texto = texto.replace(",", ".")
+        try:
+            numero = Decimal(texto)
+        except (InvalidOperation, ValueError):
+            return WSFEService._escapar_xml(default)
+
+        normalizado = format(numero, "f")
+        if "." in normalizado:
+            normalizado = normalizado.rstrip("0").rstrip(".")
+        if normalizado in {"", "-0"}:
+            normalizado = "0"
+
+        return WSFEService._escapar_xml(normalizado)
