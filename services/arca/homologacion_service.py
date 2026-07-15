@@ -8,6 +8,86 @@ from services.arca.wsfe_service import WSFEService
 class HomologacionService:
 
     @staticmethod
+    def consultar_comprobante_emitido(
+        ruta_certificado,
+        ruta_clave,
+        cuit_emisor,
+        punto_venta,
+        tipo_comprobante,
+        numero_comprobante,
+        carpeta_trabajo,
+    ):
+        resultado = {
+            "ok": False,
+            "resultado": "",
+            "cuit_emisor": "",
+            "punto_venta": 0,
+            "tipo_comprobante": 0,
+            "numero_comprobante": 0,
+            "fecha_comprobante": "",
+            "doc_tipo": 0,
+            "doc_nro": 0,
+            "importe_total": 0.0,
+            "importe_neto": 0.0,
+            "importe_iva": 0.0,
+            "moneda": "",
+            "cotizacion": 0.0,
+            "cae": "",
+            "vencimiento_cae": "",
+            "condicion_iva_receptor_id": 0,
+            "observaciones": [],
+            "errores_arca": [],
+            "eventos": [],
+            "status_http": 0,
+            "faultcode": "",
+            "faultstring": "",
+            "errores": [],
+        }
+
+        carpeta_texto = str(carpeta_trabajo or "").strip()
+        if not carpeta_texto:
+            resultado["errores"].append("Carpeta de trabajo no informada.")
+            return resultado
+
+        ruta_tra = WSAAService.guardar_tra(
+            Path(carpeta_texto) / "tra_wsfe_comp_consultar.xml",
+            servicio="wsfe",
+            duracion_segundos=3600,
+        )
+
+        login = WSAALoginService.login_homologacion(
+            ruta_tra=ruta_tra,
+            ruta_certificado=ruta_certificado,
+            ruta_clave=ruta_clave,
+        )
+
+        if not login.get("ok"):
+            resultado["errores"].extend(login.get("errores") or ["No se pudo autenticar en WSAA."])
+            if login.get("faultcode"):
+                resultado["faultcode"] = str(login.get("faultcode") or "")
+            if login.get("faultstring"):
+                resultado["faultstring"] = str(login.get("faultstring") or "")
+            return resultado
+
+        token = str(login.get("token") or "").strip()
+        sign = str(login.get("sign") or "").strip()
+
+        if not token or not sign:
+            resultado["errores"].append("WSAA no devolvio credenciales de acceso validas.")
+            return resultado
+
+        consulta = WSFEService.fe_comp_consultar(
+            token=token,
+            sign=sign,
+            cuit=cuit_emisor,
+            punto_venta=punto_venta,
+            tipo_comprobante=tipo_comprobante,
+            numero_comprobante=numero_comprobante,
+        )
+
+        return consulta
+
+    @staticmethod
     def emitir_factura_c_prueba(
         ruta_certificado,
         ruta_clave,
