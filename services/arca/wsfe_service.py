@@ -7,6 +7,7 @@ class WSFEService:
     WSFE_HOMOLOGACION_URL = "https://wswhomo.afip.gov.ar/wsfev1/service.asmx"
     SOAP_ACTION_FEDUMMY = "http://ar.gov.afip.dif.FEV1/FEDummy"
     SOAP_ACTION_ULTIMO_AUTORIZADO = "http://ar.gov.afip.dif.FEV1/FECompUltimoAutorizado"
+    SOAP_ACTION_FECAE_SOLICITAR = "http://ar.gov.afip.dif.FEV1/FECAESolicitar"
     TIMEOUT_SEGUNDOS = 20
 
     @staticmethod
@@ -15,6 +16,7 @@ class WSFEService:
         punto_venta,
         tipo_comprobante,
         numero_comprobante,
+        condicion_iva_receptor_id,
         concepto,
         documento_receptor,
         tipo_documento,
@@ -64,6 +66,14 @@ class WSFEService:
         except (TypeError, ValueError):
             errores.append("Número de comprobante inválido.")
             cbte_numero = 0
+
+        try:
+            cond_iva_receptor = int(condicion_iva_receptor_id)
+            if cond_iva_receptor <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            errores.append("Condición IVA receptor inválida.")
+            cond_iva_receptor = 0
 
         try:
             concepto_val = int(concepto)
@@ -166,6 +176,7 @@ class WSFEService:
                             "CbteDesde": cbte_numero,
                             "CbteHasta": cbte_numero,
                             "CbteFch": fecha_texto,
+                            "CondicionIVAReceptorId": cond_iva_receptor,
                             "ImpTotal": imp_total,
                             "ImpTotConc": 0.0,
                             "ImpNeto": imp_neto,
@@ -375,6 +386,132 @@ class WSFEService:
         return resultado
 
     @staticmethod
+    def fe_cae_solicitar(token, sign, cuit, solicitud):
+        resultado = {
+            "ok": False,
+            "resultado": "",
+            "cae": "",
+            "vencimiento_cae": "",
+            "numero_comprobante": 0,
+            "fecha_comprobante": "",
+            "observaciones": [],
+            "errores_arca": [],
+            "eventos": [],
+            "status_http": 0,
+            "faultcode": "",
+            "faultstring": "",
+            "errores": [],
+        }
+
+        token_texto = str(token or "").strip()
+        sign_texto = str(sign or "").strip()
+        cuit_texto = str(cuit or "").strip()
+
+        if not token_texto:
+            resultado["errores"].append("Token no informado.")
+            return resultado
+        if not sign_texto:
+            resultado["errores"].append("Sign no informado.")
+            return resultado
+        if not cuit_texto or not cuit_texto.isdigit() or len(cuit_texto) != 11:
+            resultado["errores"].append("CUIT inválido.")
+            return resultado
+
+        if not isinstance(solicitud, dict):
+            resultado["errores"].append("Solicitud inválida.")
+            return resultado
+
+        fe_cae_req = solicitud.get("FeCAEReq")
+        if not isinstance(fe_cae_req, dict):
+            resultado["errores"].append("Solicitud inválida: falta FeCAEReq.")
+            return resultado
+
+        fe_cab_req = fe_cae_req.get("FeCabReq")
+        fe_det_req = fe_cae_req.get("FeDetReq")
+        if not isinstance(fe_cab_req, dict):
+            resultado["errores"].append("Solicitud inválida: falta FeCabReq.")
+            return resultado
+        if not isinstance(fe_det_req, dict):
+            resultado["errores"].append("Solicitud inválida: falta FeDetReq.")
+            return resultado
+
+        soap_body = WSFEService._construir_soap_cae_solicitar(
+            token=token_texto,
+            sign=sign_texto,
+            cuit=cuit_texto,
+            fe_cae_req=fe_cae_req,
+        )
+
+        request = urllib.request.Request(
+            url=WSFEService.WSFE_HOMOLOGACION_URL,
+            data=soap_body.encode("utf-8"),
+            method="POST",
+            headers={
+                "Content-Type": "text/xml; charset=UTF-8",
+                "SOAPAction": WSFEService.SOAP_ACTION_FECAE_SOLICITAR,
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=WSFEService.TIMEOUT_SEGUNDOS) as response:
+                status_http = getattr(response, "status", getattr(response, "code", 200))
+                response_xml = response.read().decode("utf-8", errors="replace")
+                resultado["status_http"] = int(status_http or 200)
+                if resultado["status_http"] >= 400:
+                    resultado["errores"].append(
+                        f"HTTP {resultado['status_http']} al invocar FECAESolicitar."
+                    )
+                    fault = WSFEService._parsear_fault_generico(response_xml)
+                    resultado["faultcode"] = fault.get("faultcode", "")
+                    resultado["faultstring"] = fault.get("faultstring", "")
+                    resultado["errores"].extend(fault.get("errores", []))
+                    return resultado
+        except urllib.error.HTTPError as error:
+            resultado["status_http"] = int(getattr(error, "code", 0) or 0)
+            cuerpo = ""
+            try:
+                cuerpo = error.read().decode("utf-8", errors="replace")
+            except Exception:
+                cuerpo = ""
+            resultado["errores"].append(f"HTTP {error.code} al invocar FECAESolicitar.")
+            fault = WSFEService._parsear_fault_generico(cuerpo)
+            resultado["faultcode"] = fault.get("faultcode", "")
+            resultado["faultstring"] = fault.get("faultstring", "")
+            resultado["errores"].extend(fault.get("errores", []))
+            return resultado
+        except urllib.error.URLError as error:
+            resultado["errores"].append(
+                f"No se pudo conectar con WSFEv1 de Homologación: {error.reason}"
+            )
+            return resultado
+        except TimeoutError:
+            resultado["errores"].append("Tiempo de espera agotado al invocar FECAESolicitar.")
+            return resultado
+        except Exception as error:
+            resultado["errores"].append(f"Error inesperado al invocar FECAESolicitar: {error}")
+            return resultado
+
+        parseo = WSFEService._parsear_respuesta_cae_solicitar(response_xml)
+        resultado["status_http"] = int(resultado.get("status_http") or 200)
+        resultado["resultado"] = parseo.get("resultado", "")
+        resultado["cae"] = parseo.get("cae", "")
+        resultado["vencimiento_cae"] = parseo.get("vencimiento_cae", "")
+        resultado["numero_comprobante"] = parseo.get("numero_comprobante", 0)
+        resultado["fecha_comprobante"] = parseo.get("fecha_comprobante", "")
+        resultado["observaciones"] = parseo.get("observaciones", [])
+        resultado["errores_arca"] = parseo.get("errores_arca", [])
+        resultado["eventos"] = parseo.get("eventos", [])
+        resultado["faultcode"] = parseo.get("faultcode", "")
+        resultado["faultstring"] = parseo.get("faultstring", "")
+
+        if not parseo.get("ok"):
+            resultado["errores"].extend(parseo.get("errores", ["WSFEv1 rechazó la solicitud FECAESolicitar."]))
+            return resultado
+
+        resultado["ok"] = True
+        return resultado
+
+    @staticmethod
     def _construir_soap_fedummy():
         return (
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -407,6 +544,76 @@ class WSFEService:
             "</soapenv:Body>"
             "</soapenv:Envelope>"
         )
+
+    @staticmethod
+    def _construir_soap_cae_solicitar(token, sign, cuit, fe_cae_req):
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+            "xmlns:ar=\"http://ar.gov.afip.dif.FEV1/\">"
+            "<soapenv:Header/>"
+            "<soapenv:Body>"
+            "<ar:FECAESolicitar>"
+            "<ar:Auth>"
+            f"<ar:Token>{WSFEService._escapar_xml(token)}</ar:Token>"
+            f"<ar:Sign>{WSFEService._escapar_xml(sign)}</ar:Sign>"
+            f"<ar:Cuit>{WSFEService._escapar_xml(cuit)}</ar:Cuit>"
+            "</ar:Auth>"
+            f"{WSFEService._construir_xml_fe_cae_req(fe_cae_req)}"
+            "</ar:FECAESolicitar>"
+            "</soapenv:Body>"
+            "</soapenv:Envelope>"
+        )
+
+    @staticmethod
+    def _construir_xml_fe_cae_req(fe_cae_req):
+        fe_cab_req = fe_cae_req.get("FeCabReq", {})
+        fe_det_req = fe_cae_req.get("FeDetReq", {})
+        detalles = fe_det_req.get("FECAEDetRequest", [])
+        if isinstance(detalles, dict):
+            detalles = [detalles]
+
+        cab = (
+            "<ar:FeCabReq>"
+            f"<ar:CantReg>{int(fe_cab_req.get('CantReg', 1))}</ar:CantReg>"
+            f"<ar:PtoVta>{int(fe_cab_req.get('PtoVta', 0))}</ar:PtoVta>"
+            f"<ar:CbteTipo>{int(fe_cab_req.get('CbteTipo', 0))}</ar:CbteTipo>"
+            "</ar:FeCabReq>"
+        )
+
+        detalles_xml = []
+        claves_detalle = [
+            "Concepto",
+            "DocTipo",
+            "DocNro",
+            "CbteDesde",
+            "CbteHasta",
+            "CbteFch",
+            "CondicionIVAReceptorId",
+            "ImpTotal",
+            "ImpTotConc",
+            "ImpNeto",
+            "ImpOpEx",
+            "ImpTrib",
+            "ImpIVA",
+            "MonId",
+            "MonCotiz",
+        ]
+        for detalle in detalles:
+            if not isinstance(detalle, dict):
+                continue
+            partes = ["<ar:FECAEDetRequest>"]
+            for clave in claves_detalle:
+                if clave not in detalle:
+                    continue
+                valor = detalle.get(clave)
+                partes.append(f"<ar:{clave}>{WSFEService._escapar_xml(valor)}</ar:{clave}>")
+            partes.append("</ar:FECAEDetRequest>")
+            detalles_xml.append("".join(partes))
+
+        det = "<ar:FeDetReq>" + "".join(detalles_xml) + "</ar:FeDetReq>"
+
+        return "<ar:FeCAEReq>" + cab + det + "</ar:FeCAEReq>"
 
     @staticmethod
     def _parsear_respuesta(response_xml):
@@ -504,6 +711,98 @@ class WSFEService:
         resultado["ok"] = True
         resultado["ultimo_numero"] = cbte_nro
         return resultado
+
+    @staticmethod
+    def _parsear_respuesta_cae_solicitar(response_xml):
+        resultado = {
+            "ok": False,
+            "resultado": "",
+            "cae": "",
+            "vencimiento_cae": "",
+            "numero_comprobante": 0,
+            "fecha_comprobante": "",
+            "observaciones": [],
+            "errores_arca": [],
+            "eventos": [],
+            "faultcode": "",
+            "faultstring": "",
+            "errores": [],
+        }
+
+        try:
+            root = ET.fromstring(response_xml)
+        except ET.ParseError:
+            resultado["errores"].append("WSFEv1 devolvió XML inválido.")
+            return resultado
+
+        fault = WSFEService._buscar_por_sufijo(root, "Fault")
+        if fault is not None:
+            faultcode = WSFEService._extraer_texto_por_sufijo(fault, "faultcode")
+            faultstring = WSFEService._extraer_texto_por_sufijo(fault, "faultstring")
+            resultado["faultcode"] = faultcode
+            resultado["faultstring"] = faultstring
+            mensaje = "SOAP Fault en WSFEv1."
+            if faultcode or faultstring:
+                mensaje = f"SOAP Fault en WSFEv1: {faultcode or 'Sin código'} - {faultstring or 'Sin detalle'}"
+            resultado["errores"].append(mensaje)
+            return resultado
+
+        nodo_resultado = WSFEService._buscar_por_sufijo(root, "FECAESolicitarResult")
+        if nodo_resultado is None:
+            resultado["errores"].append("WSFEv1 no devolvió FECAESolicitarResult.")
+            return resultado
+
+        resultado_general = WSFEService._extraer_texto_por_sufijo(nodo_resultado, "Resultado")
+        if not resultado_general:
+            resultado_general = WSFEService._extraer_texto_por_sufijo(nodo_resultado, "Resultado")
+        resultado["resultado"] = resultado_general
+
+        det = WSFEService._buscar_por_sufijo(nodo_resultado, "FECAEDetResponse")
+        resultado_detalle = WSFEService._extraer_texto_por_sufijo(det, "Resultado") if det is not None else ""
+        if not resultado["resultado"] and resultado_detalle:
+            resultado["resultado"] = resultado_detalle
+
+        resultado["cae"] = WSFEService._extraer_texto_por_sufijo(det, "CAE") if det is not None else ""
+        resultado["vencimiento_cae"] = (
+            WSFEService._extraer_texto_por_sufijo(det, "CAEFchVto") if det is not None else ""
+        )
+        cbte_desde = WSFEService._extraer_texto_por_sufijo(det, "CbteDesde") if det is not None else ""
+        resultado["fecha_comprobante"] = WSFEService._extraer_texto_por_sufijo(det, "CbteFch") if det is not None else ""
+        try:
+            resultado["numero_comprobante"] = int(cbte_desde) if cbte_desde else 0
+        except (TypeError, ValueError):
+            resultado["numero_comprobante"] = 0
+
+        resultado["observaciones"] = WSFEService._colectar_codigo_mensaje(nodo_resultado, "Obs")
+        resultado["errores_arca"] = WSFEService._colectar_codigo_mensaje(nodo_resultado, "Err")
+        resultado["eventos"] = WSFEService._colectar_codigo_mensaje(nodo_resultado, "Evt")
+
+        aprobado = (resultado["resultado"] == "A" or resultado_detalle == "A") and bool(resultado["cae"])
+        if aprobado:
+            resultado["ok"] = True
+            return resultado
+
+        if resultado["resultado"] == "R" and not resultado["errores_arca"] and not resultado["observaciones"]:
+            resultado["errores"].append("ARCA rechazó la solicitud FECAESolicitar.")
+        elif not resultado["errores_arca"] and not resultado["observaciones"]:
+            resultado["errores"].append("WSFEv1 no aprobó la solicitud FECAESolicitar.")
+
+        return resultado
+
+    @staticmethod
+    def _colectar_codigo_mensaje(root, sufijo_item):
+        if root is None:
+            return []
+
+        elementos = []
+        for nodo in root.iter():
+            if not nodo.tag.endswith(sufijo_item):
+                continue
+            codigo = WSFEService._extraer_texto_por_sufijo(nodo, "Code")
+            mensaje = WSFEService._extraer_texto_por_sufijo(nodo, "Msg")
+            if codigo or mensaje:
+                elementos.append({"codigo": codigo, "mensaje": mensaje})
+        return elementos
 
     @staticmethod
     def _parsear_fault_generico(response_xml):
