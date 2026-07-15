@@ -103,6 +103,9 @@ class HomologacionService:
         importe_exento,
         fecha_comprobante,
         carpeta_trabajo,
+        fecha_servicio_desde=None,
+        fecha_servicio_hasta=None,
+        fecha_vencimiento_pago=None,
     ):
         tipo_comprobante = 11
         resultado = {
@@ -201,6 +204,9 @@ class HomologacionService:
             fecha_comprobante=fecha_comprobante,
             moneda="PES",
             cotizacion=1.0,
+            fecha_servicio_desde=fecha_servicio_desde,
+            fecha_servicio_hasta=fecha_servicio_hasta,
+            fecha_vencimiento_pago=fecha_vencimiento_pago,
         )
         if not armado.get("ok"):
             resultado["errores"].extend(armado.get("errores") or ["No se pudo construir la solicitud CAE."])

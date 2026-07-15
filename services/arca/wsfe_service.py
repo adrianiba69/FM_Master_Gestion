@@ -1,6 +1,7 @@
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 
@@ -29,6 +30,9 @@ class WSFEService:
         fecha_comprobante,
         moneda,
         cotizacion,
+        fecha_servicio_desde=None,
+        fecha_servicio_hasta=None,
+        fecha_vencimiento_pago=None,
     ):
         errores = []
 
@@ -36,12 +40,17 @@ class WSFEService:
         documento_raw = documento_receptor
         documento_texto = "" if documento_raw is None else str(documento_raw).strip()
         fecha_texto = str(fecha_comprobante or "").strip()
+        fecha_serv_desde_texto = str(fecha_servicio_desde or "").strip()
+        fecha_serv_hasta_texto = str(fecha_servicio_hasta or "").strip()
+        fecha_vto_pago_texto = str(fecha_vencimiento_pago or "").strip()
         moneda_texto = str(moneda or "").strip()
 
         if not cuit_texto:
             errores.append("CUIT obligatorio.")
         if not fecha_texto:
             errores.append("Fecha comprobante obligatoria.")
+        elif not WSFEService._es_fecha_yyyymmdd(fecha_texto):
+            errores.append("Fecha comprobante inválida. Debe tener formato YYYYMMDD.")
         if not moneda_texto:
             errores.append("Moneda obligatoria.")
 
@@ -153,7 +162,27 @@ class WSFEService:
             errores.append("IVA inválido: si hay IVA, el importe neto debe ser mayor a cero.")
 
         if concepto_val in {2, 3}:
-            errores.append("Concepto 2/3 requiere fechas de servicio, no incluidas en este constructor.")
+            if not fecha_serv_desde_texto:
+                errores.append("FchServDesde obligatoria para concepto 2/3.")
+            elif not WSFEService._es_fecha_yyyymmdd(fecha_serv_desde_texto):
+                errores.append("FchServDesde inválida. Debe tener formato YYYYMMDD.")
+
+            if not fecha_serv_hasta_texto:
+                errores.append("FchServHasta obligatoria para concepto 2/3.")
+            elif not WSFEService._es_fecha_yyyymmdd(fecha_serv_hasta_texto):
+                errores.append("FchServHasta inválida. Debe tener formato YYYYMMDD.")
+
+            if not fecha_vto_pago_texto:
+                errores.append("FchVtoPago obligatoria para concepto 2/3.")
+            elif not WSFEService._es_fecha_yyyymmdd(fecha_vto_pago_texto):
+                errores.append("FchVtoPago inválida. Debe tener formato YYYYMMDD.")
+
+            if (
+                WSFEService._es_fecha_yyyymmdd(fecha_serv_desde_texto)
+                and WSFEService._es_fecha_yyyymmdd(fecha_serv_hasta_texto)
+                and fecha_serv_desde_texto > fecha_serv_hasta_texto
+            ):
+                errores.append("Rango de servicio inválido: FchServDesde no puede ser mayor que FchServHasta.")
 
         if errores:
             return {
@@ -161,6 +190,32 @@ class WSFEService:
                 "solicitud": {},
                 "errores": errores,
             }
+
+        detalle = {
+            "Concepto": concepto_val,
+            "DocTipo": doc_tipo,
+            "DocNro": doc_nro,
+            "CbteDesde": cbte_numero,
+            "CbteHasta": cbte_numero,
+            "CbteFch": fecha_texto,
+        }
+
+        if concepto_val in {2, 3}:
+            detalle["FchServDesde"] = fecha_serv_desde_texto
+            detalle["FchServHasta"] = fecha_serv_hasta_texto
+            detalle["FchVtoPago"] = fecha_vto_pago_texto
+
+        detalle.update({
+            "CondicionIVAReceptorId": cond_iva_receptor,
+            "ImpTotal": imp_total,
+            "ImpTotConc": 0.0,
+            "ImpNeto": imp_neto,
+            "ImpOpEx": imp_exento,
+            "ImpTrib": 0.0,
+            "ImpIVA": imp_iva,
+            "MonId": moneda_texto,
+            "MonCotiz": mon_cotiz,
+        })
 
         solicitud = {
             "FeCAEReq": {
@@ -170,25 +225,7 @@ class WSFEService:
                     "CbteTipo": cbte_tipo,
                 },
                 "FeDetReq": {
-                    "FECAEDetRequest": [
-                        {
-                            "Concepto": concepto_val,
-                            "DocTipo": doc_tipo,
-                            "DocNro": doc_nro,
-                            "CbteDesde": cbte_numero,
-                            "CbteHasta": cbte_numero,
-                            "CbteFch": fecha_texto,
-                            "CondicionIVAReceptorId": cond_iva_receptor,
-                            "ImpTotal": imp_total,
-                            "ImpTotConc": 0.0,
-                            "ImpNeto": imp_neto,
-                            "ImpOpEx": imp_exento,
-                            "ImpTrib": 0.0,
-                            "ImpIVA": imp_iva,
-                            "MonId": moneda_texto,
-                            "MonCotiz": mon_cotiz,
-                        }
-                    ]
+                    "FECAEDetRequest": [detalle]
                 },
             },
             "Cuit": cuit_texto,
@@ -805,6 +842,9 @@ class WSFEService:
             "CbteDesde",
             "CbteHasta",
             "CbteFch",
+            "FchServDesde",
+            "FchServHasta",
+            "FchVtoPago",
             "CondicionIVAReceptorId",
             "ImpTotal",
             "ImpTotConc",
@@ -1267,3 +1307,14 @@ class WSFEService:
             return float(str(valor or "0").strip().replace(",", "."))
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _es_fecha_yyyymmdd(valor):
+        texto = str(valor or "").strip()
+        if len(texto) != 8 or not texto.isdigit():
+            return False
+        try:
+            datetime.strptime(texto, "%Y%m%d")
+        except ValueError:
+            return False
+        return True
