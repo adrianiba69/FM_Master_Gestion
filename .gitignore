@@ -1,4 +1,5 @@
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -12,6 +13,18 @@ dist/
 backup/
 exports/
 cierres/
+
+# PDFs generados automaticamente
+pdf/resumenes/
+
+# Archivos temporales y de trabajo local
+*.temp
+*.bak
+*.cache
+*.swp
+*~
+Thumbs.db
+Desktop.ini
 
 database/*.db
 *.db-journal
