@@ -150,8 +150,8 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         panel.grid(row=1, column=1, sticky="nsew")
         panel.grid_propagate(False)
         panel.grid_columnconfigure(0, weight=1)
+        panel.grid_rowconfigure(1, weight=1)
         panel.grid_rowconfigure(2, weight=0)
-        panel.grid_rowconfigure(3, weight=0)
 
         ctk.CTkLabel(
             panel,
@@ -160,26 +160,35 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
             text_color="#222222",
         ).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 10))
 
-        formulario = ctk.CTkFrame(panel, fg_color="transparent")
-        formulario.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 8))
+        cuerpo_scroll = ctk.CTkScrollableFrame(
+            panel,
+            fg_color="transparent",
+            corner_radius=0,
+        )
+        cuerpo_scroll.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 8))
+        cuerpo_scroll.grid_columnconfigure(0, weight=1)
+
+        formulario = ctk.CTkFrame(cuerpo_scroll, fg_color="transparent")
+        formulario.grid(row=0, column=0, sticky="nsew", padx=6, pady=(0, 8))
         formulario.grid_columnconfigure(0, weight=1)
         formulario.grid_columnconfigure(1, weight=1)
         formulario.grid_columnconfigure(2, weight=1)
 
         self.entry_razon_social = self._crear_campo(formulario, 0, 0, "Razón social", colspan=3)
-        self.entry_nombre_fantasia = self._crear_campo(formulario, 1, 0, "Nombre fantasía")
-        self.entry_cuit = self._crear_campo(formulario, 1, 1, "CUIT")
-        self.entry_punto_venta = self._crear_campo(formulario, 1, 2, "Punto de venta")
+        self.entry_domicilio = self._crear_campo(formulario, 1, 0, "Domicilio", colspan=3)
+        self.entry_nombre_fantasia = self._crear_campo(formulario, 2, 0, "Nombre fantasía")
+        self.entry_cuit = self._crear_campo(formulario, 2, 1, "CUIT")
+        self.entry_punto_venta = self._crear_campo(formulario, 2, 2, "Punto de venta")
         self.combo_condicion_iva = self._crear_combo(
             formulario,
-            2,
+            3,
             0,
             "Condición IVA",
             self.CONDICIONES_IVA,
         )
         self.combo_tipo_factura = self._crear_combo(
             formulario,
-            2,
+            3,
             1,
             "Tipo de factura",
             self.TIPOS_FACTURA,
@@ -187,19 +196,19 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
 
         self.var_activo = ctk.IntVar(value=1)
         ctk.CTkCheckBox(formulario, text="Activo", variable=self.var_activo).grid(
-            row=5, column=2, sticky="w", padx=(10, 0), pady=(26, 0)
+            row=7, column=2, sticky="w", padx=(10, 0), pady=(26, 0)
         )
 
         ctk.CTkLabel(formulario, text="Observaciones", anchor="w").grid(
-            row=6, column=0, columnspan=3, sticky="ew", pady=(12, 4)
+            row=8, column=0, columnspan=3, sticky="ew", pady=(12, 4)
         )
         self.text_observaciones = ctk.CTkTextbox(formulario, height=28, fg_color="white", text_color="#1F1F1F")
-        self.text_observaciones.grid(row=7, column=0, columnspan=3, sticky="ew")
+        self.text_observaciones.grid(row=9, column=0, columnspan=3, sticky="ew")
 
-        self._crear_seccion_arca(panel)
+        self._crear_seccion_arca(cuerpo_scroll)
 
         acciones = ctk.CTkFrame(panel, fg_color="transparent")
-        acciones.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 16))
+        acciones.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 16))
         acciones.grid_columnconfigure(0, weight=1)
         acciones.grid_columnconfigure(1, weight=1)
         ctk.CTkButton(
@@ -303,6 +312,93 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         ).grid(row=0, column=1, sticky="e")
         return entrada
 
+    def _persistir_ruta_certificado(self, ruta_certificado):
+        """Persiste solo la ruta del certificado sin afectar otros campos del emisor."""
+        if not self.emisor_id_actual:
+            return
+        
+        # Obtener datos actuales del emisor desde BD
+        emisor = EmisorFiscalService.obtener(self.emisor_id_actual)
+        if not emisor:
+            return
+        
+        # Actualizar solo la ruta del certificado, mantener todo lo demás igual
+        EmisorFiscalService.actualizar(
+            self.emisor_id_actual,
+            emisor[1],  # razon_social
+            emisor[2],  # nombre_fantasia
+            emisor[3],  # cuit
+            emisor[4],  # condicion_iva
+            emisor[5],  # tipo_factura
+            emisor[6],  # punto_venta
+            emisor[7],  # activo
+            emisor[8],  # observaciones
+            emisor[9],  # ambiente_arca
+            emisor[10],  # domicilio (sin cambios)
+            ruta_certificado,  # ← ACTUALIZADO
+            emisor[12],  # ruta_clave_privada (sin cambios)
+            emisor[13],  # carpeta_facturas (sin cambios)
+            emisor[14] if len(emisor) > 14 else 0,  # configuracion_arca_completa
+        )
+
+    def _persistir_ruta_clave_privada(self, ruta_clave_privada):
+        """Persiste solo la ruta de la clave privada sin afectar otros campos del emisor."""
+        if not self.emisor_id_actual:
+            return
+        
+        # Obtener datos actuales del emisor desde BD
+        emisor = EmisorFiscalService.obtener(self.emisor_id_actual)
+        if not emisor:
+            return
+        
+        # Actualizar solo la ruta de la clave, mantener todo lo demás igual
+        EmisorFiscalService.actualizar(
+            self.emisor_id_actual,
+            emisor[1],  # razon_social
+            emisor[2],  # nombre_fantasia
+            emisor[3],  # cuit
+            emisor[4],  # condicion_iva
+            emisor[5],  # tipo_factura
+            emisor[6],  # punto_venta
+            emisor[7],  # activo
+            emisor[8],  # observaciones
+            emisor[9],  # ambiente_arca
+            emisor[10],  # domicilio (sin cambios)
+            emisor[11],  # ruta_certificado (sin cambios)
+            ruta_clave_privada,  # ← ACTUALIZADO
+            emisor[13],  # carpeta_facturas (sin cambios)
+            emisor[14] if len(emisor) > 14 else 0,  # configuracion_arca_completa
+        )
+
+    def _persistir_ruta_carpeta_facturas(self, carpeta_facturas):
+        """Persiste solo la carpeta de facturas sin afectar otros campos del emisor."""
+        if not self.emisor_id_actual:
+            return
+        
+        # Obtener datos actuales del emisor desde BD
+        emisor = EmisorFiscalService.obtener(self.emisor_id_actual)
+        if not emisor:
+            return
+        
+        # Actualizar solo la carpeta, mantener todo lo demás igual
+        EmisorFiscalService.actualizar(
+            self.emisor_id_actual,
+            emisor[1],  # razon_social
+            emisor[2],  # nombre_fantasia
+            emisor[3],  # cuit
+            emisor[4],  # condicion_iva
+            emisor[5],  # tipo_factura
+            emisor[6],  # punto_venta
+            emisor[7],  # activo
+            emisor[8],  # observaciones
+            emisor[9],  # ambiente_arca
+            emisor[10],  # domicilio (sin cambios)
+            emisor[11],  # ruta_certificado (sin cambios)
+            emisor[12],  # ruta_clave_privada (sin cambios)
+            carpeta_facturas,  # ← ACTUALIZADO
+            emisor[14] if len(emisor) > 14 else 0,  # configuracion_arca_completa
+        )
+
     def _seleccionar_certificado(self):
         ruta = filedialog.askopenfilename(
             parent=self,
@@ -315,6 +411,8 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         if ruta:
             self.entry_ruta_certificado.delete(0, "end")
             self.entry_ruta_certificado.insert(0, ruta)
+            # Persistir inmediatamente en la BD sin afectar otros campos
+            self._persistir_ruta_certificado(ruta)
 
     def _seleccionar_clave_privada(self):
         ruta = filedialog.askopenfilename(
@@ -328,12 +426,16 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         if ruta:
             self.entry_ruta_clave_privada.delete(0, "end")
             self.entry_ruta_clave_privada.insert(0, ruta)
+            # Persistir inmediatamente en la BD sin afectar otros campos
+            self._persistir_ruta_clave_privada(ruta)
 
     def _seleccionar_carpeta_facturas(self):
         ruta = filedialog.askdirectory(parent=self, title="Seleccionar carpeta de facturas")
         if ruta:
             self.entry_carpeta_facturas.delete(0, "end")
             self.entry_carpeta_facturas.insert(0, ruta)
+            # Persistir inmediatamente en la BD sin afectar otros campos
+            self._persistir_ruta_carpeta_facturas(ruta)
 
     def _crear_campo(self, master, fila, columna, etiqueta, colspan=1):
         columna_final = columna + colspan - 1
@@ -420,6 +522,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
     def limpiar_formulario(self):
         self.emisor_id_actual = None
         self.entry_razon_social.delete(0, "end")
+        self.entry_domicilio.delete(0, "end")
         self.entry_nombre_fantasia.delete(0, "end")
         self.entry_cuit.delete(0, "end")
         self.combo_condicion_iva.set(self.CONDICIONES_IVA[0])
@@ -457,6 +560,8 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
 
         self.entry_razon_social.delete(0, "end")
         self.entry_razon_social.insert(0, fila[1] or "")
+        self.entry_domicilio.delete(0, "end")
+        self.entry_domicilio.insert(0, fila[10] or "")
         self.entry_nombre_fantasia.delete(0, "end")
         self.entry_nombre_fantasia.insert(0, fila[2] or "")
         self.entry_cuit.delete(0, "end")
@@ -470,12 +575,12 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         self.text_observaciones.insert("1.0", fila[8] or "")
         self.combo_ambiente_arca.set(fila[9] or self.AMBIENTES_ARCA[0])
         self.entry_ruta_certificado.delete(0, "end")
-        self.entry_ruta_certificado.insert(0, fila[10] or "")
+        self.entry_ruta_certificado.insert(0, fila[11] or "")
         self.entry_ruta_clave_privada.delete(0, "end")
-        self.entry_ruta_clave_privada.insert(0, fila[11] or "")
+        self.entry_ruta_clave_privada.insert(0, fila[12] or "")
         self.entry_carpeta_facturas.delete(0, "end")
-        self.entry_carpeta_facturas.insert(0, fila[12] or "")
-        self.configuracion_arca_completa = 1 if len(fila) > 13 and fila[13] else 0
+        self.entry_carpeta_facturas.insert(0, fila[13] or "")
+        self.configuracion_arca_completa = 1 if len(fila) > 14 and fila[14] else 0
 
     def validar_configuracion_arca_actual(self):
         if self.emisor_id_actual is None:
@@ -486,7 +591,19 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
             )
             return
 
-        resultado = EmisorFiscalService.validar_configuracion_arca(self.emisor_id_actual)
+        # Pasar los valores actualmente visibles en los Entry widgets y combo
+        ruta_certificado = self.entry_ruta_certificado.get().strip()
+        ruta_clave_privada = self.entry_ruta_clave_privada.get().strip()
+        carpeta_facturas = self.entry_carpeta_facturas.get().strip()
+        ambiente_arca = self.combo_ambiente_arca.get().strip()
+        
+        resultado = EmisorFiscalService.validar_configuracion_arca(
+            self.emisor_id_actual,
+            ruta_certificado=ruta_certificado,
+            ruta_clave_privada=ruta_clave_privada,
+            carpeta_facturas=carpeta_facturas,
+            ambiente_arca=ambiente_arca,
+        )
         self.configuracion_arca_completa = 1 if resultado["completa"] else 0
 
         if resultado["completa"]:
@@ -513,6 +630,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
 
     def guardar_emisor(self):
         razon_social = self.entry_razon_social.get().strip()
+        domicilio = self.entry_domicilio.get().strip()
         nombre_fantasia = self.entry_nombre_fantasia.get().strip()
         cuit = self.entry_cuit.get().strip()
         condicion_iva = self.combo_condicion_iva.get().strip()
@@ -544,6 +662,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
                     activo,
                     observaciones,
                     ambiente_arca,
+                    domicilio,
                     ruta_certificado,
                     ruta_clave_privada,
                     carpeta_facturas,
@@ -561,6 +680,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
                     activo,
                     observaciones,
                     ambiente_arca,
+                    domicilio,
                     ruta_certificado,
                     ruta_clave_privada,
                     carpeta_facturas,

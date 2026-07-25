@@ -9,6 +9,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 from config import CUIT, DIRECCION, EMAIL, EMPRESA, TELEFONO
+from pdf.nombre_archivos import nombre_resumen_pdf
 from runtime_paths import ASSETS_DIR, PDF_DIR
 from services.resumen_service import ResumenService
 
@@ -44,7 +45,7 @@ class ResumenPDF:
 
         carpeta = PDF_DIR / "resumenes"
         carpeta.mkdir(parents=True, exist_ok=True)
-        destino = Path(ruta) if ruta else carpeta / f"resumen_{resumen.numero:06d}.pdf"
+        destino = Path(ruta) if ruta else carpeta / nombre_resumen_pdf(resumen.cliente_id, resumen.numero)
         destino.parent.mkdir(parents=True, exist_ok=True)
 
         documento = canvas.Canvas(str(destino), pagesize=A4, pageCompression=1)

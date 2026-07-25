@@ -3,7 +3,7 @@ import os
 import re
 import webbrowser
 from types import MethodType
-from tkinter import messagebox, ttk
+from tkinter import TclError, messagebox, ttk
 
 import customtkinter as ctk
 
@@ -29,6 +29,16 @@ class ClientesFrame(ctk.CTkFrame):
     ]
     TIPO_FACTURA_OPCIONES = ["Factura A", "Factura C", "No factura"]
     EMISOR_FACTURACION_DEFAULT = ["No aplica"]
+    MODALIDAD_COMPROBANTE_OPCIONES = [
+        "Solo Resumen",
+        "Resumen + Factura",
+        "Solo Factura",
+    ]
+    EMISOR_HABITUAL_OPCIONES = [
+        "FM Master 98.3",
+        "Publicidad & Servicios",
+        "Publicidad & Servicios S.H.",
+    ]
 
     CAMPOS_FORMULARIO = [
         ("codigo", "Codigo"),
@@ -44,6 +54,8 @@ class ClientesFrame(ctk.CTkFrame):
         ("iva", "IVA"),
         ("tipo_factura", "Tipo de Factura"),
         ("monotributo_facturacion", "Emisor Fiscal"),
+        ("modalidad_comprobante", "Modalidad de Comprobante"),
+        ("emisor_habitual", "Emisor Habitual"),
         ("vencimiento", "Vencimiento"),
         ("estado", "Estado"),
         ("observaciones", "Observaciones"),
@@ -285,10 +297,22 @@ class ClientesFrame(ctk.CTkFrame):
 
         callbacks = {}
         ficha = FichaClienteFrame(ventana, cliente_data=id_cliente, callbacks=callbacks)
+
+        def refrescar_ficha_si_disponible():
+            try:
+                if not ficha.winfo_exists():
+                    return
+                toplevel_ficha = ficha.winfo_toplevel()
+                if toplevel_ficha is None or not toplevel_ficha.winfo_exists():
+                    return
+            except TclError:
+                return
+            ficha.cargar_cliente(id_cliente)
+
         callbacks["nuevo_resumen"] = lambda _cliente_data: self._abrir_resumenes_desde_ficha(
             id_cliente,
             parent_toplevel=ficha.winfo_toplevel(),
-            on_cambio=lambda: ficha.cargar_cliente(id_cliente),
+            on_cambio=refrescar_ficha_si_disponible,
         )
         callbacks["editar_cliente"] = lambda _cliente_data: self._editar_cliente_desde_ficha(
             id_cliente,
@@ -322,13 +346,32 @@ class ClientesFrame(ctk.CTkFrame):
         )
 
     def _abrir_resumenes_desde_ficha(self, id_cliente, parent_toplevel=None, on_cambio=None):
+        fila_cliente = ClienteService.obtener(id_cliente)
+        contexto_facturacion = None
+        if fila_cliente is not None:
+            contexto_facturacion = {
+                "cliente_id": id_cliente,
+                "modalidad_comprobante": fila_cliente[21] if len(fila_cliente) > 21 and fila_cliente[21] else "Solo Resumen",
+                "emisor_habitual": fila_cliente[22] if len(fila_cliente) > 22 and fila_cliente[22] else "FM Master 98.3",
+                "tipo_factura": fila_cliente[12] if len(fila_cliente) > 12 and fila_cliente[12] else "No factura",
+                "condicion_iva": fila_cliente[11] if len(fila_cliente) > 11 and fila_cliente[11] else "",
+            }
+
         aplicacion = self.winfo_toplevel()
         if hasattr(aplicacion, "mostrar_resumenes"):
-            aplicacion.mostrar_resumenes(cliente_id=id_cliente, on_cambio=on_cambio)
+            aplicacion.mostrar_resumenes(
+                cliente_id=id_cliente,
+                on_cambio=on_cambio,
+                contexto_facturacion=contexto_facturacion,
+            )
             aplicacion.lift()
             aplicacion.focus_force()
-        if parent_toplevel is not None and hasattr(parent_toplevel, "lift"):
-            parent_toplevel.lower()
+        if parent_toplevel is not None:
+            try:
+                if parent_toplevel.winfo_exists():
+                    parent_toplevel.lower()
+            except TclError:
+                pass
 
     def _abrir_nueva_tarea_desde_ficha(self, id_cliente, parent_toplevel=None, on_guardado=None):
         aplicacion = self.winfo_toplevel()
@@ -601,6 +644,8 @@ class ClientesFrame(ctk.CTkFrame):
             "iva": self.IVA_OPCIONES,
             "tipo_factura": self.TIPO_FACTURA_OPCIONES,
             "monotributo_facturacion": emisores_fiscales,
+            "modalidad_comprobante": self.MODALIDAD_COMPROBANTE_OPCIONES,
+            "emisor_habitual": self.EMISOR_HABITUAL_OPCIONES,
         }
         for fila, (clave, etiqueta) in enumerate(self.CAMPOS_FORMULARIO, start=1):
             label = ctk.CTkLabel(contenedor, text=etiqueta, anchor="w")
@@ -625,6 +670,8 @@ class ClientesFrame(ctk.CTkFrame):
             self.set_campo("iva", "Otro")
             self.set_campo("tipo_factura", "No factura")
             self.set_campo("monotributo_facturacion", "No aplica")
+            self.set_campo("modalidad_comprobante", "Solo Resumen")
+            self.set_campo("emisor_habitual", "FM Master 98.3")
             self.set_campo("vencimiento", "1")
             self.set_campo("estado", "Activo")
         else:
@@ -657,6 +704,8 @@ class ClientesFrame(ctk.CTkFrame):
             "iva": cliente.iva or "Otro",
             "tipo_factura": cliente.tipo_factura or "No factura",
             "monotributo_facturacion": EmisorFiscalService.resolver_etiqueta(cliente.monotributo_facturacion),
+            "modalidad_comprobante": cliente.modalidad_comprobante or "Solo Resumen",
+            "emisor_habitual": cliente.emisor_habitual or "FM Master 98.3",
             "vencimiento": str(cliente.vencimiento or 1),
             "estado": cliente.estado or "Activo",
             "observaciones": cliente.observaciones,
@@ -695,6 +744,8 @@ class ClientesFrame(ctk.CTkFrame):
             monotributo_facturacion=EmisorFiscalService.codificar_seleccion(
                 self.obtener_campo("monotributo_facturacion") or "No aplica"
             ),
+            modalidad_comprobante=self.obtener_campo("modalidad_comprobante") or "Solo Resumen",
+            emisor_habitual=self.obtener_campo("emisor_habitual") or "FM Master 98.3",
             vencimiento=vencimiento,
             estado=self.obtener_campo("estado") or "Activo",
             observaciones=self.obtener_campo("observaciones"),
@@ -740,6 +791,8 @@ class ClientesFrame(ctk.CTkFrame):
             iva=valor(11) or "Otro",
             tipo_factura=valor(12) or "No factura",
             monotributo_facturacion=valor(13) or "No aplica",
+            modalidad_comprobante=valor(21) or "Solo Resumen",
+            emisor_habitual=valor(22) or "FM Master 98.3",
             vencimiento=valor(16, 1) or 1,
             estado=valor(17, "Activo") or "Activo",
             observaciones=valor(18) or "",

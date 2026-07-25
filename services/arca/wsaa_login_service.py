@@ -1,8 +1,10 @@
 from base64 import b64encode
 from pathlib import Path
+import json
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 
 from services.arca.certificado_service import CertificadoService
 
@@ -10,6 +12,65 @@ from services.arca.certificado_service import CertificadoService
 class WSAALoginService:
     WSAA_HOMOLOGACION_URL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms"
     TIMEOUT_SEGUNDOS = 20
+    
+    # Cache de TA en memoria (por sesión)
+    _ta_cache = {
+        "token": "",
+        "sign": "",
+        "expiration": "",
+        "timestamp": 0,
+    }
+    
+    # Archivo de caché en disco (persiste entre ejecuciones)
+    _TA_CACHE_FILENAME = "ta_cache_homologacion.json"
+
+    @staticmethod
+    def _ruta_cache_disco(ruta_tra):
+        """Devuelve la ruta del archivo de caché junto al TRA."""
+        try:
+            carpeta = Path(str(ruta_tra)).parent
+            return carpeta / WSAALoginService._TA_CACHE_FILENAME
+        except Exception:
+            return None
+
+    @staticmethod
+    def _leer_cache_disco(ruta_tra):
+        """Lee el TA guardado en disco. Devuelve dict o None."""
+        try:
+            ruta = WSAALoginService._ruta_cache_disco(ruta_tra)
+            if ruta and ruta.exists():
+                datos = json.loads(ruta.read_text(encoding="utf-8"))
+                return datos
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _guardar_cache_disco(ruta_tra, token, sign, expiration):
+        """Guarda el TA en disco para persistir entre ejecuciones."""
+        try:
+            ruta = WSAALoginService._ruta_cache_disco(ruta_tra)
+            if ruta:
+                datos = {"token": token, "sign": sign, "expiration": expiration}
+                ruta.write_text(json.dumps(datos, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"DEBUG WSAA - No se pudo guardar TA en disco: {e}")
+
+    @staticmethod
+    def _validar_ta(token, sign, expiration):
+        """Valida que el TA exista y no esté expirado. Devuelve True/False."""
+        if not token or not sign or not expiration:
+            return False
+        try:
+            ahora_utc = datetime.now(timezone.utc)
+            exp_text = expiration.replace("Z", "+00:00")
+            exp_dt = datetime.fromisoformat(exp_text)
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+            exp_utc = exp_dt.astimezone(timezone.utc)
+            return exp_utc > ahora_utc
+        except Exception:
+            return False
 
     @staticmethod
     def login_homologacion(ruta_tra, ruta_certificado, ruta_clave):
@@ -25,6 +86,60 @@ class WSAALoginService:
             "cuerpo_respuesta_sanitizado": "",
             "errores": [],
         }
+        
+        # DEBUG: Verificar si existe TA en caché válido
+        # 1. Verificar caché en memoria (misma sesión)
+        if WSAALoginService._validar_ta(
+            WSAALoginService._ta_cache["token"],
+            WSAALoginService._ta_cache["sign"],
+            WSAALoginService._ta_cache["expiration"],
+        ):
+            ahora_utc = datetime.now(timezone.utc)
+            exp_text = WSAALoginService._ta_cache["expiration"].replace("Z", "+00:00")
+            exp_dt = datetime.fromisoformat(exp_text)
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+            exp_utc = exp_dt.astimezone(timezone.utc)
+            print("DEBUG WSAA - TA válido en caché (memoria):")
+            print(f"  Ahora (UTC): {ahora_utc.isoformat()}")
+            print(f"  Expira (UTC): {exp_utc.isoformat()}")
+            print("  TA reutilizado: SÍ (memoria)")
+            resultado["ok"] = True
+            resultado["token"] = WSAALoginService._ta_cache["token"]
+            resultado["sign"] = WSAALoginService._ta_cache["sign"]
+            resultado["expiration"] = WSAALoginService._ta_cache["expiration"]
+            return resultado
+        
+        # 2. Verificar caché en disco (entre ejecuciones)
+        cache_disco = WSAALoginService._leer_cache_disco(ruta_tra)
+        if cache_disco:
+            token_d = cache_disco.get("token", "")
+            sign_d = cache_disco.get("sign", "")
+            exp_d = cache_disco.get("expiration", "")
+            if WSAALoginService._validar_ta(token_d, sign_d, exp_d):
+                ahora_utc = datetime.now(timezone.utc)
+                exp_text = exp_d.replace("Z", "+00:00")
+                exp_dt = datetime.fromisoformat(exp_text)
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                exp_utc = exp_dt.astimezone(timezone.utc)
+                print("DEBUG WSAA - TA válido en caché (disco):")
+                print(f"  Ahora (UTC): {ahora_utc.isoformat()}")
+                print(f"  Expira (UTC): {exp_utc.isoformat()}")
+                print("  TA reutilizado: SÍ (disco)")
+                # Cargar también en memoria
+                WSAALoginService._ta_cache["token"] = token_d
+                WSAALoginService._ta_cache["sign"] = sign_d
+                WSAALoginService._ta_cache["expiration"] = exp_d
+                resultado["ok"] = True
+                resultado["token"] = token_d
+                resultado["sign"] = sign_d
+                resultado["expiration"] = exp_d
+                return resultado
+            else:
+                print("DEBUG WSAA - TA en disco expirado o inválido")
+        
+        print("DEBUG WSAA - TA no existe o expiró, solicitando uno nuevo")
 
         firma = CertificadoService.firmar_tra_cms(
             ruta_tra=ruta_tra,
@@ -94,6 +209,38 @@ class WSAALoginService:
         parseo = WSAALoginService._parsear_respuesta_login(response_xml)
         resultado["cuerpo_respuesta_sanitizado"] = WSAALoginService._sanitizar_respuesta(response_xml)
         resultado["status_http"] = int(resultado.get("status_http") or 200)
+        
+        # DEBUG: Chequear si es "alreadyAuthenticated"
+        faultcode_str = str(parseo.get("faultcode", "")).lower()
+        if "alreadyauthenticated" in faultcode_str:
+            print("DEBUG WSAA - AFIP reportó 'alreadyAuthenticated'")
+            print(f"  FaultCode original: {parseo.get('faultcode', '')}")
+            # Intentar reutilizar TA del caché en memoria
+            if WSAALoginService._ta_cache.get("token"):
+                print("  Reutilizando TA del caché (memoria)")
+                resultado["ok"] = True
+                resultado["token"] = WSAALoginService._ta_cache["token"]
+                resultado["sign"] = WSAALoginService._ta_cache["sign"]
+                resultado["expiration"] = WSAALoginService._ta_cache["expiration"]
+                return resultado
+            # Intentar reutilizar TA del caché en disco
+            cache_disco = WSAALoginService._leer_cache_disco(ruta_tra)
+            if cache_disco and cache_disco.get("token"):
+                print("  Reutilizando TA del caché (disco)")
+                resultado["ok"] = True
+                resultado["token"] = cache_disco["token"]
+                resultado["sign"] = cache_disco["sign"]
+                resultado["expiration"] = cache_disco.get("expiration", "")
+                return resultado
+            # No hay TA en ningún caché - caso inusual
+            print("  AVISO: alreadyAuthenticated pero no hay TA disponible en caché")
+            resultado["ok"] = False
+            resultado["faultcode"] = parseo.get("faultcode", "")
+            resultado["faultstring"] = parseo.get("faultstring", "")
+            resultado["detail"] = parseo.get("detail", "")
+            resultado["errores"].append("AFIP respondió alreadyAuthenticated pero no hay TA disponible en caché")
+            return resultado
+        
         if not parseo.get("ok"):
             resultado["faultcode"] = parseo.get("faultcode", "")
             resultado["faultstring"] = parseo.get("faultstring", "")
@@ -105,6 +252,40 @@ class WSAALoginService:
         resultado["token"] = parseo.get("token", "")
         resultado["sign"] = parseo.get("sign", "")
         resultado["expiration"] = parseo.get("expiration", "")
+        
+        # DEBUG: Guardar TA en caché para reutilización
+        print("DEBUG WSAA - TA obtenido exitosamente, guardando en caché")
+        print(f"  Token: {resultado['token'][:30]}..." if len(resultado['token']) > 30 else f"  Token: {resultado['token']}")
+        print(f"  Expira (original): {resultado['expiration']}")
+        
+        # Normalizar fecha de expiración para caché
+        expiration_text = resultado["expiration"]
+        if expiration_text:
+            try:
+                expiration_text = expiration_text.replace("Z", "+00:00")
+                expiration_dt = datetime.fromisoformat(expiration_text)
+                if expiration_dt.tzinfo is None:
+                    expiration_dt = expiration_dt.replace(tzinfo=timezone.utc)
+                expiration_utc = expiration_dt.astimezone(timezone.utc)
+                print(f"  Expira (UTC): {expiration_utc.isoformat()}")
+                # Guardar en formato ISO con timezone explícito
+                resultado["expiration"] = expiration_utc.isoformat()
+            except Exception as e:
+                print(f"  AVISO: No se pudo normalizar fecha: {e}")
+        
+        # Guardar en caché en memoria
+        WSAALoginService._ta_cache["token"] = resultado["token"]
+        WSAALoginService._ta_cache["sign"] = resultado["sign"]
+        WSAALoginService._ta_cache["expiration"] = resultado["expiration"]
+        
+        # Guardar en caché en disco (persiste entre ejecuciones)
+        WSAALoginService._guardar_cache_disco(
+            ruta_tra,
+            resultado["token"],
+            resultado["sign"],
+            resultado["expiration"],
+        )
+        
         return resultado
 
     @staticmethod
@@ -162,6 +343,8 @@ class WSAALoginService:
             resultado["faultcode"] = faultcode
             resultado["faultstring"] = faultstring
             resultado["detail"] = detail
+            # DEBUG: Mostrar SOAP Fault recibido
+            print(f"DEBUG WSAA - SOAP Fault recibido: faultcode='{faultcode}'")
             if faultstring or faultcode:
                 resultado["errores"].append(f"WSAA respondió SOAP Fault: {faultcode or 'Sin código'} - {faultstring or 'Sin detalle'}")
             else:

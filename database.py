@@ -79,6 +79,8 @@ def crear_base():
         "iva": "TEXT",
         "tipo_factura": "TEXT DEFAULT 'No factura'",
         "monotributo_facturacion": "TEXT DEFAULT 'No aplica'",
+        "modalidad_comprobante": "TEXT DEFAULT 'Solo Resumen'",
+        "emisor_habitual": "TEXT DEFAULT 'FM Master 98.3'",
         "vencimiento": "INTEGER",
         "estado": "TEXT",
         "observaciones": "TEXT",
@@ -239,6 +241,7 @@ def crear_base():
         "activo": "INTEGER DEFAULT 1",
         "observaciones": "TEXT",
         "ambiente_arca": "TEXT DEFAULT 'Homologación'",
+        "domicilio": "TEXT DEFAULT ''",
         "ruta_certificado": "TEXT DEFAULT ''",
         "ruta_clave_privada": "TEXT DEFAULT ''",
         "carpeta_facturas": "TEXT DEFAULT ''",
@@ -257,6 +260,7 @@ def crear_base():
             "00002",
             1,
             "",
+            "",
         ),
         (
             "Ibarrondo Luis Angel",
@@ -267,6 +271,7 @@ def crear_base():
             "00002",
             1,
             "",
+            "",
         ),
         (
             "Ibarrondo Adrian Oscar e Ibarrondo Luis Angel S.H.",
@@ -276,6 +281,7 @@ def crear_base():
             "Factura A",
             "00002",
             1,
+            "",
             "",
         ),
     ]
@@ -292,8 +298,9 @@ def crear_base():
                     tipo_factura,
                     punto_venta,
                     activo,
-                    observaciones
-                ) VALUES(?,?,?,?,?,?,?,?)
+                    observaciones,
+                    domicilio
+                ) VALUES(?,?,?,?,?,?,?,?,?)
                 """,
                 emisor,
             )

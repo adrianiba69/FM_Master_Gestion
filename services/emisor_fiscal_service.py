@@ -78,6 +78,7 @@ class EmisorFiscalService:
                 activo,
                 observaciones,
                 ambiente_arca,
+                domicilio,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -109,6 +110,7 @@ class EmisorFiscalService:
                 activo,
                 observaciones,
                 ambiente_arca,
+                domicilio,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -139,6 +141,7 @@ class EmisorFiscalService:
                 activo,
                 observaciones,
                 ambiente_arca,
+                domicilio,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -163,6 +166,7 @@ class EmisorFiscalService:
         activo=1,
         observaciones="",
         ambiente_arca="Homologación",
+        domicilio="",
         ruta_certificado="",
         ruta_clave_privada="",
         carpeta_facturas="",
@@ -182,11 +186,12 @@ class EmisorFiscalService:
                 activo,
                 observaciones,
                 ambiente_arca,
+                domicilio,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
                 configuracion_arca_completa
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 razon_social,
@@ -198,6 +203,7 @@ class EmisorFiscalService:
                 activo,
                 observaciones,
                 ambiente_arca,
+                domicilio,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -221,6 +227,7 @@ class EmisorFiscalService:
         activo=1,
         observaciones="",
         ambiente_arca="Homologación",
+        domicilio="",
         ruta_certificado="",
         ruta_clave_privada="",
         carpeta_facturas="",
@@ -240,6 +247,7 @@ class EmisorFiscalService:
                 activo=?,
                 observaciones=?,
                 ambiente_arca=?,
+                domicilio=?,
                 ruta_certificado=?,
                 ruta_clave_privada=?,
                 carpeta_facturas=?,
@@ -256,6 +264,7 @@ class EmisorFiscalService:
                 activo,
                 observaciones,
                 ambiente_arca,
+                domicilio,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -278,7 +287,7 @@ class EmisorFiscalService:
         conn.close()
 
     @staticmethod
-    def validar_configuracion_arca(emisor_id):
+    def validar_configuracion_arca(emisor_id, ruta_certificado=None, ruta_clave_privada=None, carpeta_facturas=None, ambiente_arca=None):
         resultado = {
             "completa": False,
             "faltantes": [],
@@ -292,10 +301,28 @@ class EmisorFiscalService:
 
         cuit = str(emisor[3] or "").strip() if len(emisor) > 3 else ""
         punto_venta = str(emisor[6] or "").strip() if len(emisor) > 6 else ""
-        ambiente_arca = str(emisor[9] or "").strip() if len(emisor) > 9 else ""
-        ruta_certificado = str(emisor[10] or "").strip() if len(emisor) > 10 else ""
-        ruta_clave_privada = str(emisor[11] or "").strip() if len(emisor) > 11 else ""
-        carpeta_facturas = str(emisor[12] or "").strip() if len(emisor) > 12 else ""
+        
+        # Si se proporciona el ambiente actualmente visible, usar ése; sino, usar el de la BD
+        if ambiente_arca is None:
+            ambiente_arca = str(emisor[9] or "").strip() if len(emisor) > 9 else ""
+        else:
+            ambiente_arca = str(ambiente_arca or "").strip()
+        
+        # Si se proporcionan las rutas actualmente visibles, usar esas; sino, usar las de la BD
+        if ruta_certificado is None:
+            ruta_certificado = str(emisor[10] or "").strip() if len(emisor) > 10 else ""
+        else:
+            ruta_certificado = str(ruta_certificado or "").strip()
+            
+        if ruta_clave_privada is None:
+            ruta_clave_privada = str(emisor[11] or "").strip() if len(emisor) > 11 else ""
+        else:
+            ruta_clave_privada = str(ruta_clave_privada or "").strip()
+            
+        if carpeta_facturas is None:
+            carpeta_facturas = str(emisor[12] or "").strip() if len(emisor) > 12 else ""
+        else:
+            carpeta_facturas = str(carpeta_facturas or "").strip()
 
         if not cuit:
             resultado["faltantes"].append("Falta CUIT")

@@ -1,13 +1,17 @@
 import os
 from copy import deepcopy
+from pathlib import Path
 from tkinter import messagebox, ttk
 
 import customtkinter as ctk
 
 from config import COLOR_BLANCO, COLOR_NEGRO, COLOR_PRINCIPAL
+from pdf.nombre_archivos import nombre_factura_pdf
 from services.cliente_service import ClienteService
 from services.cobro_service import CobroService
 from services.contacto_service import ContactoService
+from services.arca.homologacion_service import HomologacionService
+from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.resumen_service import ResumenService
 from services.servicio_service import ServicioService
 from services.tarea_service import TareaService
@@ -25,6 +29,8 @@ class FichaClienteFrame(ctk.CTkFrame):
             "iva": "",
             "tipo_factura": "No factura",
             "monotributo_facturacion": "No aplica",
+            "modalidad_comprobante": "Solo Resumen",
+            "emisor_habitual": "FM Master 98.3",
             "telefono": "",
             "whatsapp": "",
             "email": "",
@@ -49,6 +55,7 @@ class FichaClienteFrame(ctk.CTkFrame):
         super().__init__(master, fg_color=COLOR_BLANCO, corner_radius=0)
         self.callbacks = callbacks if callbacks is not None else {}
         self.cliente_data = self._normalizar_cliente_data(cliente_data)
+        self.factura_emitida_temporal = {}
         self._crear_estilo_tablas()
         self._crear_interfaz()
         self.cargar_cliente(self.cliente_data)
@@ -84,6 +91,8 @@ class FichaClienteFrame(ctk.CTkFrame):
                     "monotributo_facturacion": EmisorFiscalService.resolver_etiqueta(
                         fila[13] if len(fila) > 13 else ""
                     ),
+                    "modalidad_comprobante": fila[21] if len(fila) > 21 and fila[21] else "Solo Resumen",
+                    "emisor_habitual": fila[22] if len(fila) > 22 and fila[22] else "FM Master 98.3",
                     "estado": fila[17] if len(fila) > 17 else "",
                 })
                 observaciones = fila[18] if len(fila) > 18 else ""
@@ -385,7 +394,8 @@ class FichaClienteFrame(ctk.CTkFrame):
             atributo_tabla="tabla_tareas",
             altura=5,
         ).grid(row=3, column=0, sticky="nsew", pady=(0, 12))
-        self._crear_tarjeta_observaciones(panel).grid(row=4, column=0, sticky="nsew")
+        self._crear_tarjeta_comprobantes(panel).grid(row=4, column=0, sticky="nsew", pady=(0, 12))
+        self._crear_tarjeta_observaciones(panel).grid(row=5, column=0, sticky="nsew")
 
     def _crear_tarjeta_datos_generales(self, parent):
         tarjeta = self._crear_tarjeta_base(parent, "DATOS GENERALES")
@@ -596,6 +606,45 @@ class FichaClienteFrame(ctk.CTkFrame):
         self.observaciones_box.configure(state="disabled")
         return tarjeta
 
+    def _crear_tarjeta_comprobantes(self, parent):
+        tarjeta = self._crear_tarjeta_base(parent, "COMPROBANTES")
+        cuerpo = ctk.CTkFrame(tarjeta, fg_color="#F7F7F7", corner_radius=8)
+        cuerpo.pack(fill="x", padx=18, pady=(0, 18))
+
+        ctk.CTkLabel(
+            cuerpo,
+            text="Modalidad",
+            font=("Arial", 12, "bold"),
+            text_color=COLOR_PRINCIPAL,
+        ).pack(anchor="w", padx=12, pady=(10, 2))
+        self.label_modalidad_comprobante = ctk.CTkLabel(
+            cuerpo,
+            text="-",
+            font=("Arial", 12),
+            text_color="#1F1F1F",
+            justify="left",
+            wraplength=320,
+        )
+        self.label_modalidad_comprobante.pack(anchor="w", padx=12, pady=(0, 8))
+
+        ctk.CTkLabel(
+            cuerpo,
+            text="Emisor habitual",
+            font=("Arial", 12, "bold"),
+            text_color=COLOR_PRINCIPAL,
+        ).pack(anchor="w", padx=12, pady=(4, 2))
+        self.label_emisor_habitual = ctk.CTkLabel(
+            cuerpo,
+            text="-",
+            font=("Arial", 12),
+            text_color="#1F1F1F",
+            justify="left",
+            wraplength=320,
+        )
+        self.label_emisor_habitual.pack(anchor="w", padx=12, pady=(0, 10))
+
+        return tarjeta
+
     def _crear_tarjeta_tabla(self, parent, titulo, columnas, encabezados, atributo_tabla, altura):
         mostrar_boton_emitir = atributo_tabla == "tabla_resumenes"
         tarjeta = self._crear_tarjeta_base(
@@ -732,6 +781,13 @@ class FichaClienteFrame(ctk.CTkFrame):
 
         for clave, label in self.labels_datos.items():
             label.configure(text=datos_generales.get(clave) or "-")
+
+        self.label_modalidad_comprobante.configure(
+            text=datos_generales.get("modalidad_comprobante") or "Solo Resumen"
+        )
+        self.label_emisor_habitual.configure(
+            text=datos_generales.get("emisor_habitual") or "FM Master 98.3"
+        )
 
         servicios_activos = self.cliente_data.get("servicios_activos", [])
         cuenta_corriente = self.cliente_data.get("cuenta_corriente", {})
@@ -980,54 +1036,39 @@ class FichaClienteFrame(ctk.CTkFrame):
             "error": "Falta / Incorrecto: el resumen ya figura como facturado",
         })
 
+        # Obtener explícitamente los datos del emisor para pasar al validador
+        # Recargar el emisor JUSTO AHORA para asegurar que tenemos la versión actualizada
         validacion_arca = {"completa": False, "faltantes": [], "errores": []}
+        configuracion_arca_ok = False
+        
         if emisor_id:
-            validacion_arca = EmisorFiscalService.validar_configuracion_arca(emisor_id)
-
-        faltantes_arca = set(validacion_arca.get("faltantes") or [])
-        errores_arca = set(validacion_arca.get("errores") or [])
-
-        certificado_ok = (
-            "Falta ruta del certificado digital" not in faltantes_arca
-            and "No existe el archivo del certificado digital." not in errores_arca
-            and emisor_id is not None
-        )
-        checklist.append({
-            "ok": certificado_ok,
-            "correcto": "Certificado ARCA",
-            "error": "Falta / Incorrecto: certificado ARCA",
-        })
-
-        clave_ok = (
-            "Falta ruta de la clave privada" not in faltantes_arca
-            and "No existe el archivo de la clave privada." not in errores_arca
-            and emisor_id is not None
-        )
-        checklist.append({
-            "ok": clave_ok,
-            "correcto": "Clave privada",
-            "error": "Falta / Incorrecto: clave privada",
-        })
-
-        carpeta_ok = (
-            "Falta carpeta de facturas" not in faltantes_arca
-            and "No existe la carpeta de facturas." not in errores_arca
-            and emisor_id is not None
-        )
-        checklist.append({
-            "ok": carpeta_ok,
-            "correcto": "Carpeta de facturas",
-            "error": "Falta / Incorrecto: carpeta de facturas",
-        })
-
-        configuracion_arca_ok = bool(validacion_arca.get("completa")) and emisor_id is not None
+            # Recargar el emisor actualizado desde la BD (no usar versión anterior)
+            emisor = EmisorFiscalService.obtener(emisor_id)
+            
+        if emisor_id and emisor:
+            ruta_certificado = str(emisor[10] if len(emisor) > 10 else "" or "").strip()
+            ruta_clave_privada = str(emisor[11] if len(emisor) > 11 else "" or "").strip()
+            carpeta_facturas = str(emisor[12] if len(emisor) > 12 else "" or "").strip()
+            ambiente_arca = str(emisor[9] if len(emisor) > 9 else "" or "").strip()
+            
+            # Reutilizar exactamente la misma validación que Emisores Fiscales
+            validacion_arca = EmisorFiscalService.validar_configuracion_arca(
+                emisor_id,
+                ruta_certificado=ruta_certificado,
+                ruta_clave_privada=ruta_clave_privada,
+                carpeta_facturas=carpeta_facturas,
+                ambiente_arca=ambiente_arca,
+            )
+            configuracion_arca_ok = bool(validacion_arca.get("completa"))
+        
+        # Agregar un solo ítem de validación ARCA que refleja el resultado completo
         checklist.append({
             "ok": configuracion_arca_ok,
             "correcto": "Configuración ARCA del emisor",
             "error": "Falta / Incorrecto: configuración ARCA del emisor",
         })
 
-        if not (certificado_ok and clave_ok and carpeta_ok and configuracion_arca_ok):
+        if not configuracion_arca_ok:
             faltantes_emisor = True
 
         cliente_validado = razon_social_ok and cuit_cliente_ok and iva_cliente_ok and tipo_factura_ok and emisor_asignado_ok
@@ -1041,6 +1082,8 @@ class FichaClienteFrame(ctk.CTkFrame):
             "faltantes_cliente": faltantes_cliente,
             "faltantes_emisor": faltantes_emisor,
             "detalle": {
+                "resumen_id": resumen.id if resumen is not None else None,
+                "emisor_id": emisor_id,
                 "cliente": razon_social or "-",
                 "cuit_cliente": cuit_cliente or "-",
                 "resumen_numero": str(resumen.numero) if resumen is not None else "-",
@@ -1280,7 +1323,7 @@ class FichaClienteFrame(ctk.CTkFrame):
             width=130,
             fg_color=COLOR_PRINCIPAL,
             hover_color="#990000",
-            command=self._informar_emision_no_habilitada,
+            command=lambda: self._emitir_factura_desde_confirmacion(modal, diagnostico),
         ).grid(row=0, column=2)
 
     def _volver_a_diagnostico_desde_confirmacion(self, modal_confirmacion, diagnostico):
@@ -1293,6 +1336,321 @@ class FichaClienteFrame(ctk.CTkFrame):
             "La conexión real con ARCA todavía no está habilitada.\n\nNo se realizó ninguna emisión.",
             parent=self.winfo_toplevel(),
         )
+
+    def _emitir_factura_desde_confirmacion(self, modal_confirmacion, diagnostico):
+        detalle = diagnostico.get("detalle", {})
+        resumen_id = detalle.get("resumen_id")
+        emisor_id = detalle.get("emisor_id")
+
+        if resumen_id is None or emisor_id is None:
+            messagebox.showerror(
+                "Emitir factura",
+                "Falta información del resumen o del emisor para continuar.",
+                parent=modal_confirmacion,
+            )
+            return
+
+        resumen = ResumenService.obtener(resumen_id)
+        if resumen is None:
+            messagebox.showerror(
+                "Emitir factura",
+                "No se encontró el resumen seleccionado.",
+                parent=modal_confirmacion,
+            )
+            return
+
+        cliente_fila = ClienteService.obtener(resumen.cliente_id)
+        emisor = EmisorFiscalService.obtener(emisor_id)
+        if cliente_fila is None or emisor is None:
+            messagebox.showerror(
+                "Emitir factura",
+                "No se pudieron recuperar los datos del cliente o del emisor.",
+                parent=modal_confirmacion,
+            )
+            return
+
+        tipo_factura = str(cliente_fila[12] if len(cliente_fila) > 12 else "" or "").strip()
+        if tipo_factura != "Factura C":
+            messagebox.showerror(
+                "Emitir factura",
+                "Esta integración solo emite Factura C en Homologación.",
+                parent=modal_confirmacion,
+            )
+            return
+
+        # IMPORTANTE: Usar fecha fiscal actual del sistema
+        from datetime import datetime
+        fecha_comprobante = datetime.now().strftime("%Y%m%d")
+
+        cuit_emisor = str(emisor[3] if len(emisor) > 3 else "" or "").strip()
+        punto_venta = emisor[6] if len(emisor) > 6 else ""
+        ruta_certificado = str(emisor[10] if len(emisor) > 10 else "" or "").strip()
+        ruta_clave = str(emisor[11] if len(emisor) > 11 else "" or "").strip()
+        carpeta_facturas = str(emisor[12] if len(emisor) > 12 else "" or "").strip()
+
+        cuit_emisor_normalizado = self._normalizar_cuit_emisor(cuit_emisor)
+        punto_venta_normalizado = self._normalizar_punto_venta(punto_venta)
+        
+        try:
+            # Validar que la normalización fue exitosa
+            if cuit_emisor_normalizado is None:
+                messagebox.showerror(
+                    "Emitir factura",
+                    f"CUIT del emisor inválido o mal formado: {repr(cuit_emisor)}",
+                    parent=modal_confirmacion,
+                )
+                return
+            
+            if punto_venta_normalizado is None:
+                messagebox.showerror(
+                    "Emitir factura",
+                    f"Punto de venta inválido o mal formado: {repr(punto_venta)}",
+                    parent=modal_confirmacion,
+                )
+                return
+
+            cuit_o_doc = str(cliente_fila[10] if len(cliente_fila) > 10 else "" or "").strip()
+            condicion_iva_receptor = str(cliente_fila[11] if len(cliente_fila) > 11 else "" or "").strip()
+            
+            # Normalizar condición IVA a minúsculas para comparación
+            condicion_iva_normalizada = str(condicion_iva_receptor or "").strip().lower()
+            
+            # Normalizar número a solo dígitos
+            documento_normalizado = ''.join(c for c in cuit_o_doc if c.isdigit())
+            
+            if documento_normalizado and len(documento_normalizado) == 11:
+                # Consumidor Final: extraer DNI central del CUIL y usar DocTipo 96
+                if condicion_iva_normalizada == "consumidor final":
+                    # Extraer dígitos centrales: posiciones 2 a 9 (11 dígitos totales)
+                    # Ejemplo: 27502653436 → 50265343
+                    tipo_documento = 96
+                    documento_receptor = int(documento_normalizado[2:-1])
+                else:
+                    # Otros: usar como CUIT (DocTipo 80)
+                    tipo_documento = 80
+                    documento_receptor = int(documento_normalizado)
+            else:
+                tipo_documento = 99
+                documento_receptor = 0
+
+            print("DEBUG RECEPTOR - condicion_iva_receptor repr:", repr(condicion_iva_normalizada))
+            print("DEBUG RECEPTOR - DocTipo:", tipo_documento)
+            print("DEBUG RECEPTOR - DocNro:", documento_receptor)
+
+            emision = HomologacionService.emitir_factura_c_prueba(
+                ruta_certificado=ruta_certificado,
+                ruta_clave=ruta_clave,
+                cuit_emisor=cuit_emisor_normalizado,
+                punto_venta=punto_venta_normalizado,
+                condicion_iva_receptor_id=5,
+                concepto=1,
+                tipo_documento=tipo_documento,
+                documento_receptor=documento_receptor,
+                importe_total=resumen.total,
+                importe_neto=resumen.total,
+                importe_iva=0.0,
+                importe_exento=0.0,
+                fecha_comprobante=fecha_comprobante,
+                carpeta_trabajo=carpeta_facturas,
+            )
+
+            if not emision.get("ok"):
+                messagebox.showerror(
+                    "Emitir factura",
+                    self._mensaje_errores_emision(emision),
+                    parent=modal_confirmacion,
+                )
+                return
+
+            numero_emitido = int(emision.get("numero_comprobante") or 0)
+            
+            consulta = HomologacionService.consultar_comprobante_emitido(
+                ruta_certificado=ruta_certificado,
+                ruta_clave=ruta_clave,
+                cuit_emisor=cuit_emisor_normalizado,
+                punto_venta=punto_venta_normalizado,
+                tipo_comprobante=11,
+                numero_comprobante=numero_emitido,
+                carpeta_trabajo=carpeta_facturas,
+            )
+
+            if not consulta.get("ok"):
+                messagebox.showerror(
+                    "Emitir factura",
+                    self._mensaje_errores_emision(consulta),
+                    parent=modal_confirmacion,
+                )
+                return
+
+            numero_comprobante = int(consulta.get("numero_comprobante") or numero_emitido)
+            punto_venta_num = int(consulta.get("punto_venta") or punto_venta or 0)
+
+            self.factura_emitida_temporal = {
+                "cae": str(consulta.get("cae") or emision.get("cae") or ""),
+                "vencimiento_cae": str(consulta.get("vencimiento_cae") or emision.get("vencimiento_cae") or ""),
+                "numero_comprobante": numero_comprobante,
+                "punto_venta": punto_venta_num,
+                "fecha_comprobante": str(consulta.get("fecha_comprobante") or fecha_comprobante or ""),
+            }
+
+            codigo_factura = self._formatear_codigo_factura(punto_venta_num, numero_comprobante)
+            ruta_sugerida_pdf = str(Path(carpeta_facturas) / nombre_factura_pdf(cliente_fila[0], tipo_factura, codigo_factura))
+
+            datos_emisor = {
+                "razon_social": str(emisor[1] if len(emisor) > 1 else "" or ""),
+                "nombre_fantasia": str(emisor[2] if len(emisor) > 2 else "" or ""),
+                "cuit": cuit_emisor,
+                "condicion_iva": str(emisor[4] if len(emisor) > 4 else "" or ""),
+                "domicilio": str(emisor[10] if len(emisor) > 10 else "" or ""),
+                "punto_venta": punto_venta_num,
+            }
+
+            datos_receptor = {
+                "razon_social": str(cliente_fila[2] if len(cliente_fila) > 2 else "" or ""),
+                "cuit": cuit_o_doc,
+                "documento": cuit_o_doc,
+                "condicion_iva": str(cliente_fila[11] if len(cliente_fila) > 11 else "" or ""),
+                "domicilio": self._combinar_domicilio_cliente(cliente_fila),
+            }
+
+            datos_comprobante = {
+                "tipo": "Factura C",
+                "numero": numero_comprobante,
+                "fecha": self.factura_emitida_temporal.get("fecha_comprobante", ""),
+                "concepto": "1 - Productos",
+                "periodo_servicio_desde": "",
+                "periodo_servicio_hasta": "",
+                "vencimiento_pago": self._a_fecha_arca_yyyymmdd(resumen.fecha_vencimiento),
+                "importe_total": float(consulta.get("importe_total") or resumen.total or 0.0),
+                "moneda": str(consulta.get("moneda") or "PES"),
+                "cae": self.factura_emitida_temporal.get("cae", ""),
+                "vencimiento_cae": self.factura_emitida_temporal.get("vencimiento_cae", ""),
+                "ambiente": str(emisor[9] if len(emisor) > 9 else "Homologación"),
+                "punto_venta": punto_venta_num,
+            }
+
+            pdf = PDFFiscalService.generar_factura_c(
+                ruta_destino=ruta_sugerida_pdf,
+                datos_emisor=datos_emisor,
+                datos_receptor=datos_receptor,
+                datos_comprobante=datos_comprobante,
+            )
+            if not pdf.get("ok"):
+                errores_pdf = "\n".join(pdf.get("errores") or ["No se pudo generar el PDF fiscal."])
+                messagebox.showerror(
+                    "Emitir factura",
+                    f"Factura autorizada, pero falló la generación del PDF fiscal.\n\n{errores_pdf}",
+                    parent=modal_confirmacion,
+                )
+                return
+
+            ruta_pdf = str(pdf.get("ruta_pdf") or "").strip()
+            if ruta_pdf:
+                try:
+                    os.startfile(ruta_pdf)
+                except OSError as error:
+                    messagebox.showwarning(
+                        "Emitir factura",
+                        f"La factura fue emitida y el PDF generado, pero no se pudo abrir automáticamente.\n\n{error}",
+                        parent=modal_confirmacion,
+                    )
+
+            modal_confirmacion.destroy()
+            messagebox.showinfo(
+                "Emitir factura",
+                (
+                    "Factura emitida correctamente.\n\n"
+                    "Factura C\n"
+                    f"{codigo_factura}\n\n"
+                    "CAE:\n"
+                    f"{self.factura_emitida_temporal.get('cae', '-') }"
+                ),
+                parent=self.winfo_toplevel(),
+            )
+        except Exception as error:
+            messagebox.showerror(
+                "Emitir factura",
+                f"Error inesperado durante la emisión de factura:\n\n{str(error)}",
+                parent=modal_confirmacion,
+            )
+
+    def _a_fecha_arca_yyyymmdd(self, valor):
+        texto = str(valor or "").strip()
+        if len(texto) == 8 and texto.isdigit():
+            return texto
+        if len(texto) == 10 and texto[4] == "-" and texto[7] == "-":
+            return texto.replace("-", "")
+        return texto
+
+    def _normalizar_cuit_emisor(self, cuit):
+        """Normaliza CUIT: quita guiones y caracteres no numéricos, valida 11 dígitos."""
+        # Convertir a string y quitar espacios
+        cuit_texto = str(cuit or "").strip()
+        # Quitar todos los caracteres no numéricos
+        cuit_limpio = "".join(c for c in cuit_texto if c.isdigit())
+        # Validar exactamente 11 dígitos
+        if len(cuit_limpio) != 11:
+            return None  # Inválido
+        return cuit_limpio
+
+    def _normalizar_punto_venta(self, punto_venta):
+        """Normaliza punto de venta: convierte a int y valida > 0."""
+        try:
+            pv_int = int(punto_venta or 0)
+            if pv_int > 0:
+                return pv_int
+        except (TypeError, ValueError):
+            pass
+        return None  # Inválido
+
+    def _formatear_codigo_factura(self, punto_venta, numero):
+        try:
+            pv = int(punto_venta)
+        except (TypeError, ValueError):
+            pv = 0
+        try:
+            nro = int(numero)
+        except (TypeError, ValueError):
+            nro = 0
+        return f"{pv:05d}-{nro:08d}"
+
+    def _combinar_domicilio_cliente(self, cliente_fila):
+        direccion = str(cliente_fila[5] if len(cliente_fila) > 5 else "" or "").strip()
+        localidad = str(cliente_fila[6] if len(cliente_fila) > 6 else "" or "").strip()
+        if direccion and localidad:
+            return f"{direccion} - {localidad}"
+        return direccion or localidad
+
+    def _mensaje_errores_emision(self, resultado):
+        errores = list(resultado.get("errores") or [])
+        
+        # Agregar errores de ARCA con formato "CODIGO - MENSAJE"
+        errores_arca = resultado.get("errores_arca") or []
+        for item in errores_arca:
+            if isinstance(item, dict):
+                codigo = str(item.get("codigo") or "").strip()
+                mensaje = str(item.get("mensaje") or "").strip()
+                if codigo or mensaje:
+                    errores.append(f"{codigo} - {mensaje}".strip() if codigo else mensaje)
+            elif str(item or "").strip():
+                errores.append(str(item))
+
+        # Agregar observaciones con formato "CODIGO - MENSAJE"
+        observaciones = resultado.get("observaciones") or []
+        for item in observaciones:
+            if isinstance(item, dict):
+                codigo = str(item.get("codigo") or "").strip()
+                mensaje = str(item.get("mensaje") or "").strip()
+                obs_formato = f"{codigo} - {mensaje}".strip() if codigo else mensaje
+                if obs_formato:
+                    errores.append(f"(Observación) {obs_formato}")
+            elif str(item or "").strip():
+                errores.append(f"(Observación) {str(item)}")
+
+        if not errores:
+            return "No se pudo completar la operación con ARCA."
+
+        return "No se pudo completar la emisión.\n\n" + "\n".join(errores)
 
     def _abrir_edicion_cliente_desde_diagnostico(self, modal):
         modal.destroy()

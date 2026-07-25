@@ -49,6 +49,8 @@ class ClienteService:
                 iva,
                 tipo_factura,
                 monotributo_facturacion,
+                modalidad_comprobante,
+                emisor_habitual,
                 emisor_id,
                 emisor_recomendado_id,
                 vencimiento,
@@ -57,7 +59,7 @@ class ClienteService:
                 fecha_alta,
                 fecha_modificacion
             )
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             cliente.razon_social,
             cliente.codigo,
@@ -73,6 +75,8 @@ class ClienteService:
             cliente.iva,
             cliente.tipo_factura,
             cliente.monotributo_facturacion,
+            cliente.modalidad_comprobante,
+            cliente.emisor_habitual,
             cliente.emisor_id,
             cliente.emisor_recomendado_id,
             cliente.vencimiento,
@@ -115,7 +119,9 @@ class ClienteService:
                 estado,
                 observaciones,
                 fecha_alta,
-                fecha_modificacion
+                fecha_modificacion,
+                COALESCE(modalidad_comprobante, 'Solo Resumen') AS modalidad_comprobante,
+                COALESCE(emisor_habitual, 'FM Master 98.3') AS emisor_habitual
             FROM clientes
             WHERE id=?
         """, (id_cliente,))
@@ -148,6 +154,8 @@ class ClienteService:
                 iva=?,
                 tipo_factura=?,
                 monotributo_facturacion=?,
+                modalidad_comprobante=?,
+                emisor_habitual=?,
                 emisor_id=?,
                 emisor_recomendado_id=?,
                 vencimiento=?,
@@ -170,6 +178,8 @@ class ClienteService:
             cliente.iva,
             cliente.tipo_factura,
             cliente.monotributo_facturacion,
+            cliente.modalidad_comprobante,
+            cliente.emisor_habitual,
             cliente.emisor_id,
             cliente.emisor_recomendado_id,
             cliente.vencimiento,

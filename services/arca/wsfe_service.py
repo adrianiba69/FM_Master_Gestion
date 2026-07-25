@@ -191,6 +191,9 @@ class WSFEService:
                 "errores": errores,
             }
 
+        print("DOC TIPO FINAL =", doc_tipo)
+        print("DOC NRO FINAL =", doc_nro)
+
         detalle = {
             "Concepto": concepto_val,
             "DocTipo": doc_tipo,
@@ -480,6 +483,22 @@ class WSFEService:
             cuit=cuit_texto,
             fe_cae_req=fe_cae_req,
         )
+
+        # DEBUG deshabilitado: Descomentar solo si se necesita inspeccionar SOAP
+        # try:
+        #     import os
+        #     carpeta_debug = r"C:\FM_Master_Certificados"
+        #     os.makedirs(carpeta_debug, exist_ok=True)
+        #     archivo_debug = os.path.join(carpeta_debug, "debug_fecae.xml")
+        #     soap_sanitizado = WSFEService.construir_soap_cae_sanitizado(
+        #         cuit=cuit_texto,
+        #         solicitud=solicitud,
+        #     )
+        #     with open(archivo_debug, "w", encoding="utf-8") as f:
+        #         f.write(soap_sanitizado)
+        #     print(f"DEBUG ARCA SOAP - Guardado en: {archivo_debug}")
+        # except Exception as e:
+        #     print(f"DEBUG ARCA SOAP - Error al guardar: {e}")
 
         request = urllib.request.Request(
             url=WSFEService.WSFE_HOMOLOGACION_URL,
@@ -1038,6 +1057,22 @@ class WSFEService:
         resultado["observaciones"] = WSFEService._colectar_codigo_mensaje(nodo_resultado, "Obs")
         resultado["errores_arca"] = WSFEService._colectar_codigo_mensaje(nodo_resultado, "Err")
         resultado["eventos"] = WSFEService._colectar_codigo_mensaje(nodo_resultado, "Evt")
+
+        # DEBUG: Imprimir respuesta completa de ARCA para diagnóstico
+        if resultado["errores_arca"] or resultado["observaciones"]:
+            print("DEBUG ARCA - Respuesta completa de FECAESolicitar:")
+            if resultado["errores_arca"]:
+                print("  Errors:")
+                for error in resultado["errores_arca"]:
+                    codigo = str(error.get("codigo") or "").strip()
+                    mensaje = str(error.get("mensaje") or "").strip()
+                    print(f"    [{codigo}] {mensaje}")
+            if resultado["observaciones"]:
+                print("  Observaciones:")
+                for obs in resultado["observaciones"]:
+                    codigo = str(obs.get("codigo") or "").strip()
+                    mensaje = str(obs.get("mensaje") or "").strip()
+                    print(f"    [{codigo}] {mensaje}")
 
         aprobado = (resultado["resultado"] == "A" or resultado_detalle == "A") and bool(resultado["cae"])
         if aprobado:

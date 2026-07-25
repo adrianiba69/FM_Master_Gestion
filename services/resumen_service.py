@@ -154,13 +154,7 @@ class ResumenService:
                 WHERE s.cliente_id=? AND s.activo=1
                   AND s.fecha_inicio<=?
                   AND s.fecha_fin>=?
-                  AND NOT EXISTS (
-                      SELECT 1 FROM resumen_conceptos rc
-                      WHERE rc.servicio_id=s.id
-                        AND rc.fecha_inicio=s.fecha_inicio
-                        AND rc.fecha_fin=s.fecha_fin
-                  )
-                ORDER BY s.concepto
+                ORDER BY s.concepto, s.id
             """, (
                 cliente_id,
                 fecha_emision.isoformat(),

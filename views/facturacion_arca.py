@@ -6,9 +6,11 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 
 from services.cliente_service import ClienteService
+from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
 from services.resumen_service import ResumenService
+from services.arca.homologacion_service import HomologacionService
 from models.factura_arca import FacturaArca
 
 
@@ -70,7 +72,7 @@ class FacturacionArcaFrame(ctk.CTkFrame):
 
         acciones = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         acciones.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
-        acciones.grid_columnconfigure(4, weight=1)
+        acciones.grid_columnconfigure(5, weight=1)
 
         ctk.CTkButton(
             acciones,
@@ -111,6 +113,16 @@ class FacturacionArcaFrame(ctk.CTkFrame):
             hover_color="#550000",
             command=lambda: self.cambiar_estado_seleccion("Anulada"),
         ).grid(row=0, column=3, padx=8)
+
+        ctk.CTkButton(
+            acciones,
+            text="Consultar último comprobante",
+            width=220,
+            height=38,
+            fg_color="#2E5A88",
+            hover_color="#23476C",
+            command=self.consultar_ultimo_comprobante,
+        ).grid(row=0, column=4, padx=8)
 
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
@@ -160,8 +172,9 @@ class FacturacionArcaFrame(ctk.CTkFrame):
         self.selector_cliente.configure(values=list(self.clientes.keys()))
 
         self.emisores = {"": None}
-        for fila in EmisorService.listar(False):
-            self.emisores[f"{fila[1]} - {fila[2]}"] = fila[0]
+        for fila in EmisorFiscalService.listar():
+            etiqueta = self._etiqueta_emisor_para_filtro(fila)
+            self.emisores[etiqueta] = fila[0]
         self.selector_emisor.configure(values=list(self.emisores.keys()))
 
         self.resumenes = {"": None}
@@ -171,6 +184,17 @@ class FacturacionArcaFrame(ctk.CTkFrame):
             self.resumenes[etiqueta] = fila[0]
             resumenes.append(etiqueta)
         self.selector_resumen.configure(values=resumenes)
+
+    @staticmethod
+    def _etiqueta_emisor_para_filtro(emisor):
+        # Estructura EmisorFiscalService.listar: id, razon_social, nombre_fantasia, cuit, ...
+        nombre_comercial = str(emisor[2] if len(emisor) > 2 else "" or "").strip()
+        razon_social = str(emisor[1] if len(emisor) > 1 else "" or "").strip()
+        cuit = str(emisor[3] if len(emisor) > 3 else "" or "").strip()
+
+        nombre_visible = nombre_comercial or razon_social or f"Emisor {emisor[0]}"
+        cuit_visible = cuit or "CUIT sin informar"
+        return f"{nombre_visible} - {cuit_visible}"
 
     def cargar_facturas(self):
         self.tabla.delete(*self.tabla.get_children())
@@ -190,12 +214,12 @@ class FacturacionArcaFrame(ctk.CTkFrame):
             if resumen_id and fila[3] != resumen_id:
                 continue
             cliente = ClienteService.obtener(fila[1])
-            emisor = EmisorService.obtener(fila[2])
+            emisor = EmisorFiscalService.obtener(fila[2])
             resumen = ResumenService.obtener(fila[3])
             self.tabla.insert("", "end", values=(
                 fila[0],
                 cliente[2] if cliente else "",
-                emisor[1] if emisor else "",
+                self._etiqueta_emisor_para_filtro(emisor) if emisor else f"Emisor fiscal #{fila[2]}",
                 f"{resumen.numero:06d}" if resumen else "",
                 self.formatear_fecha(fila[4]),
                 fila[5],
@@ -209,6 +233,83 @@ class FacturacionArcaFrame(ctk.CTkFrame):
 
     def actualizar_facturas(self):
         self.cargar_facturas()
+
+    def consultar_ultimo_comprobante(self):
+        emisor_id = self.emisores.get(self.selector_emisor.get())
+        if not emisor_id:
+            messagebox.showwarning(
+                "Facturación ARCA",
+                "Seleccione un emisor para consultar el último comprobante.",
+                parent=self,
+            )
+            return
+
+        emisor = EmisorFiscalService.obtener(emisor_id)
+        if not emisor:
+            messagebox.showerror(
+                "Facturación ARCA",
+                "No se encontró el emisor seleccionado.",
+                parent=self,
+            )
+            return
+
+        nombre_emisor = EmisorFiscalService.etiqueta_visible(emisor)
+        cuit = str(emisor[3] if len(emisor) > 3 else "" or "").strip()
+        punto_venta = str(emisor[6] if len(emisor) > 6 else "" or "").strip()
+        tipo_factura = str(emisor[5] if len(emisor) > 5 else "" or "").strip()
+        ruta_certificado = str(emisor[11] if len(emisor) > 11 else "" or "").strip()
+        ruta_clave = str(emisor[12] if len(emisor) > 12 else "" or "").strip()
+        carpeta_facturas = str(emisor[13] if len(emisor) > 13 else "" or "").strip()
+
+        tipo_comprobante = self._tipo_comprobante_desde_tipo_factura(tipo_factura)
+        if tipo_comprobante is None:
+            messagebox.showerror(
+                "Facturación ARCA",
+                "No se pudo determinar el tipo de comprobante para el emisor seleccionado.",
+                parent=self,
+            )
+            return
+
+        resultado = HomologacionService.consultar_ultimo_comprobante(
+            ruta_certificado=ruta_certificado,
+            ruta_clave=ruta_clave,
+            cuit=cuit,
+            punto_venta=punto_venta,
+            tipo_comprobante=tipo_comprobante,
+            carpeta_trabajo=carpeta_facturas,
+        )
+
+        if not resultado.get("ok"):
+            errores = list(resultado.get("errores") or [])
+            detalle = "\n- ".join(errores) if errores else "Error desconocido al consultar ARCA."
+            messagebox.showerror(
+                "Facturación ARCA",
+                "No se pudo consultar el último comprobante autorizado.\n\n- " + detalle,
+                parent=self,
+            )
+            return
+
+        ultimo_numero = int(resultado.get("ultimo_numero") or 0)
+        messagebox.showinfo(
+            "Facturación ARCA",
+            (
+                "Último comprobante autorizado:\n"
+                f"{tipo_factura or 'Comprobante'}\n"
+                f"Emisor: {nombre_emisor}\n"
+                f"Punto de venta {int(punto_venta or 0):05d}\n"
+                f"Número {ultimo_numero:08d}"
+            ),
+            parent=self,
+        )
+
+    @staticmethod
+    def _tipo_comprobante_desde_tipo_factura(tipo_factura):
+        texto = str(tipo_factura or "").strip().upper()
+        if texto == "FACTURA C":
+            return 11
+        if texto == "FACTURA A":
+            return 1
+        return None
 
     def crear_factura_pendiente(self):
         resumen_texto = self.selector_resumen.get().strip()

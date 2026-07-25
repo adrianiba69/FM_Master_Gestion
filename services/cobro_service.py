@@ -4,6 +4,46 @@ from database import conectar
 class CobroService:
 
     @staticmethod
+    def _recalcular_estado_resumenes_cliente(cur, cliente_id):
+        cur.execute(
+            """
+            SELECT id, total
+            FROM resumenes
+            WHERE cliente_id=?
+            ORDER BY fecha ASC, numero ASC, id ASC
+            """,
+            (cliente_id,),
+        )
+        resumenes = cur.fetchall()
+        if not resumenes:
+            return
+
+        cur.execute(
+            "SELECT COALESCE(SUM(importe), 0) FROM cobros WHERE cliente_id=?",
+            (cliente_id,),
+        )
+        cobrado_total = float(cur.fetchone()[0] or 0)
+
+        restante = cobrado_total
+        for resumen_id, total in resumenes:
+            total_resumen = float(total or 0)
+            aplicado = min(max(restante, 0), total_resumen)
+            saldo = max(total_resumen - aplicado, 0)
+
+            if aplicado <= 0:
+                estado = "Pendiente"
+            elif aplicado < total_resumen:
+                estado = "Parcial"
+            else:
+                estado = "Cobrado"
+
+            cur.execute(
+                "UPDATE resumenes SET saldo=?, estado=? WHERE id=?",
+                (saldo, estado, resumen_id),
+            )
+            restante -= aplicado
+
+    @staticmethod
     def listar(cliente_id=None):
         conn = conectar()
         cur = conn.cursor()
@@ -64,6 +104,7 @@ class CobroService:
             cobro.comprobante,
             cobro.observaciones,
         ))
+        CobroService._recalcular_estado_resumenes_cliente(cur, cobro.cliente_id)
         cobro_id = cur.lastrowid
         conn.commit()
         conn.close()

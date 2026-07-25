@@ -26,6 +26,7 @@ class ServiciosWindow(ctk.CTkToplevel):
         self.renovable_var = ctk.IntVar(value=1)
         self._catalogo_map = {}
         self.catalogo_values = []
+        self._fecha_fin_editada_manual = False
 
         self.title(f"Servicios - {cliente_nombre}")
         self.geometry("1180x700")
@@ -163,7 +164,9 @@ class ServiciosWindow(ctk.CTkToplevel):
         self.campos_formulario["fecha_inicio"].bind(
             "<FocusOut>", lambda _evento: self.actualizar_fecha_fin_formulario()
         )
-        self.campos_formulario["fecha_fin"].configure(state="disabled")
+        self.campos_formulario["fecha_fin"].bind(
+            "<KeyRelease>", lambda _evento: self._marcar_fecha_fin_manual()
+        )
 
         self.check_activo = ctk.CTkCheckBox(
             formulario,
@@ -425,6 +428,7 @@ class ServiciosWindow(ctk.CTkToplevel):
         }
         for clave, valor in valores.items():
             self.establecer_campo(clave, valor)
+        self._fecha_fin_editada_manual = False
         self.activo_var.set(1 if fila[7] else 0)
         self.renovable_var.set(1 if fila[10] else 0)
         self.boton_renovar.configure(state="normal" if fila[10] else "disabled")
@@ -432,11 +436,12 @@ class ServiciosWindow(ctk.CTkToplevel):
     def limpiar_formulario(self, limpiar_seleccion=True):
         for clave in self.campos_formulario:
             self.establecer_campo(clave, "")
+        self._fecha_fin_editada_manual = False
         self.establecer_campo("cantidad", "1")
         self.establecer_campo("importe", "0")
         self.establecer_campo("descuento", "0")
         self.establecer_campo("fecha_inicio", date.today().strftime("%d/%m/%Y"))
-        self.actualizar_fecha_fin_formulario()
+        self.actualizar_fecha_fin_formulario(forzar=True)
         self.activo_var.set(1)
         self.renovable_var.set(1)
         self.boton_renovar.configure(state="disabled")
@@ -549,6 +554,10 @@ class ServiciosWindow(ctk.CTkToplevel):
                 self.campos_formulario["fecha_inicio"].get().strip(),
                 "%d/%m/%Y",
             ).date()
+            fecha_fin = datetime.strptime(
+                self.campos_formulario["fecha_fin"].get().strip(),
+                "%d/%m/%Y",
+            ).date()
         except ValueError:
             messagebox.showerror(
                 "Error",
@@ -575,12 +584,14 @@ class ServiciosWindow(ctk.CTkToplevel):
             descuento=descuento,
             activo=self.activo_var.get(),
             fecha_inicio=fecha_inicio.isoformat(),
-            fecha_fin=ServicioService.sumar_un_mes(fecha_inicio).isoformat(),
+            fecha_fin=fecha_fin.isoformat(),
             renovable=self.renovable_var.get(),
             estado_periodo="Activo",
         )
 
-    def actualizar_fecha_fin_formulario(self):
+    def actualizar_fecha_fin_formulario(self, forzar=False):
+        if self._fecha_fin_editada_manual and not forzar:
+            return
         try:
             inicio = datetime.strptime(
                 self.campos_formulario["fecha_inicio"].get().strip(),
@@ -591,6 +602,9 @@ class ServiciosWindow(ctk.CTkToplevel):
             return
         fin = ServicioService.sumar_un_mes(inicio)
         self.establecer_campo("fecha_fin", fin.strftime("%d/%m/%Y"))
+
+    def _marcar_fecha_fin_manual(self):
+        self._fecha_fin_editada_manual = True
 
     def establecer_campo(self, clave, valor):
         entrada = self.campos_formulario[clave]

@@ -17,6 +17,8 @@ class Cliente:
     iva: str = ""
     tipo_factura: str = "No factura"
     monotributo_facturacion: str = "No aplica"
+    modalidad_comprobante: str = "Solo Resumen"
+    emisor_habitual: str = "FM Master 98.3"
     emisor_id: int = None
     emisor_recomendado_id: int = None
     servicio: str = ""
