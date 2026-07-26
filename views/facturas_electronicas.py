@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from tkinter import StringVar, messagebox, ttk
+from tkinter import Menu, StringVar, TclError, messagebox, ttk
 
 import customtkinter as ctk
 
@@ -11,6 +11,7 @@ from pdf.nombre_archivos import nombre_factura_pdf
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
+from views.cliente_ficha import FichaClienteFrame
 
 
 class FacturasElectronicasFrame(ctk.CTkFrame):
@@ -110,6 +111,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         )
         self.tabla = ttk.Treeview(tabla_frame, columns=columnas, show="headings", height=16)
         self.tabla.bind("<Double-1>", self._abrir_pdf_desde_doble_clic)
+        self.tabla.bind("<Button-3>", self._mostrar_menu_contextual)
+        self.menu_contextual = Menu(self, tearoff=0)
+        self.menu_contextual.add_command(label="Abrir PDF", command=self._abrir_pdf_desde_menu)
+        self.menu_contextual.add_command(label="Abrir cliente", command=self._abrir_cliente_desde_menu)
         encabezados = {
             "fecha": ("Fecha", 110),
             "cliente": ("Cliente", 290),
@@ -362,6 +367,78 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 f"No se pudo abrir el PDF asociado a esta factura.\n\n{error}",
                 parent=self,
             )
+
+    def _mostrar_menu_contextual(self, event):
+        fila = self.tabla.identify_row(event.y)
+        if not fila:
+            return
+
+        self.tabla.selection_set(fila)
+        self.tabla.focus(fila)
+        try:
+            self.menu_contextual.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.menu_contextual.grab_release()
+
+    def _abrir_pdf_desde_menu(self):
+        self._abrir_pdf_desde_doble_clic()
+
+    def _abrir_cliente_desde_menu(self):
+        factura = self._obtener_factura_seleccionada()
+        if not factura:
+            return
+
+        cliente_id = factura.get("cliente_id")
+        if not cliente_id:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se pudo identificar el cliente asociado a esta factura.",
+                parent=self,
+            )
+            return
+
+        self._abrir_ficha_cliente(cliente_id)
+
+    def _obtener_factura_seleccionada(self):
+        seleccion = self.tabla.selection()
+        if not seleccion:
+            return None
+
+        try:
+            factura_id = int(seleccion[0])
+        except (TypeError, ValueError):
+            return None
+
+        return self._facturas_por_id.get(factura_id)
+
+    def _abrir_ficha_cliente(self, cliente_id):
+        try:
+            cliente_id = int(cliente_id)
+        except (TypeError, ValueError):
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se pudo identificar el cliente asociado a esta factura.",
+                parent=self,
+            )
+            return
+
+        ventana = ctk.CTkToplevel(self)
+        ventana.title("Ficha Única del Cliente")
+        ventana.geometry("1320x820")
+        ventana.minsize(1080, 700)
+        ventana.transient(self.winfo_toplevel())
+
+        callbacks = {}
+        ficha = FichaClienteFrame(ventana, cliente_data=cliente_id, callbacks=callbacks)
+        ficha.pack(fill="both", expand=True)
+
+        try:
+            if ventana.state() == "iconic":
+                ventana.deiconify()
+        except TclError:
+            pass
+        ventana.lift()
+        ventana.focus_force()
 
     def _resolver_emisor_fiscal_desde_factura(self, emisor_id):
         if not emisor_id:
