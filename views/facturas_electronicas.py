@@ -7,7 +7,7 @@ import customtkinter as ctk
 
 from config import COLOR_PRINCIPAL
 from database import conectar
-from pdf.nombre_archivos import nombre_factura_pdf
+from pdf.nombre_archivos import nombre_cliente_archivo, nombre_factura_pdf
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
@@ -106,7 +106,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         tabla_frame.grid_columnconfigure(0, weight=1)
 
         panel_detalle = ctk.CTkFrame(contenido_frame, fg_color="#F7F7F7", corner_radius=8)
-        panel_detalle.grid(row=0, column=1, sticky="ns")
+        panel_detalle.grid(row=0, column=1, sticky="nsew")
+        panel_detalle.grid_columnconfigure(0, weight=1)
+        panel_detalle.grid_rowconfigure(1, weight=1)
 
         columnas = (
             "fecha",
@@ -169,7 +171,15 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             text="Detalle de factura",
             font=("Arial", 15, "bold"),
             text_color="#202020",
-        ).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 10))
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 6))
+
+        detalle_frame = ctk.CTkScrollableFrame(
+            panel_detalle,
+            fg_color="transparent",
+            corner_radius=0,
+        )
+        detalle_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 6))
+        detalle_frame.grid_columnconfigure(0, weight=1)
 
         self._detalle_labels = {}
         campos_detalle = [
@@ -179,30 +189,60 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             ("numero", "Número"),
             ("fecha", "Fecha"),
             ("importe", "Importe"),
-            ("estado", "Estado"),
             ("cae", "CAE"),
             ("vencimiento_cae", "Vencimiento del CAE"),
             ("emisor", "Emisor"),
             ("resumen", "Resumen relacionado"),
+            ("estado", "Estado"),
         ]
         for indice, (clave, titulo) in enumerate(campos_detalle, start=1):
             ctk.CTkLabel(
-                panel_detalle,
+                detalle_frame,
                 text=titulo,
                 font=("Arial", 12, "bold"),
                 text_color="#303030",
-            ).grid(row=indice * 2 - 1, column=0, sticky="w", padx=12, pady=(0, 1))
+            ).grid(row=indice * 2 - 1, column=0, sticky="w", padx=6, pady=(0, 0))
 
             valor_label = ctk.CTkLabel(
-                panel_detalle,
+                detalle_frame,
                 text="-",
                 font=("Arial", 12),
                 text_color="#505050",
                 wraplength=300,
                 justify="left",
             )
-            valor_label.grid(row=indice * 2, column=0, sticky="w", padx=12, pady=(0, 8))
+            valor_label.grid(row=indice * 2, column=0, sticky="w", padx=6, pady=(0, 4))
             self._detalle_labels[clave] = valor_label
+
+        acciones_panel = ctk.CTkFrame(panel_detalle, fg_color="transparent", corner_radius=0)
+        acciones_panel.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 10))
+
+        self.boton_abrir_pdf_panel = ctk.CTkButton(
+            acciones_panel,
+            text="Abrir PDF",
+            command=self._abrir_pdf_desde_menu,
+            state="disabled",
+            width=180,
+        )
+        self.boton_abrir_pdf_panel.pack(fill="x", pady=(0, 6))
+
+        self.boton_abrir_cliente_panel = ctk.CTkButton(
+            acciones_panel,
+            text="Abrir cliente",
+            command=self._abrir_cliente_desde_menu,
+            state="disabled",
+            width=180,
+        )
+        self.boton_abrir_cliente_panel.pack(fill="x", pady=6)
+
+        self.boton_abrir_resumen_panel = ctk.CTkButton(
+            acciones_panel,
+            text="Abrir resumen",
+            command=self._abrir_resumen_desde_menu,
+            state="disabled",
+            width=180,
+        )
+        self.boton_abrir_resumen_panel.pack(fill="x", pady=(6, 0))
 
     def cargar_facturas(self):
         filas = FacturaArcaService.listar()
@@ -380,9 +420,18 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         for clave, label in self._detalle_labels.items():
             label.configure(text=detalle.get(clave, "-"))
 
+        self._actualizar_estado_botones_panel(True)
+
     def _limpiar_panel_detalle(self):
         for label in self._detalle_labels.values():
             label.configure(text="-")
+        self._actualizar_estado_botones_panel(False)
+
+    def _actualizar_estado_botones_panel(self, habilitado):
+        estado = "normal" if habilitado else "disabled"
+        self.boton_abrir_pdf_panel.configure(state=estado)
+        self.boton_abrir_cliente_panel.configure(state=estado)
+        self.boton_abrir_resumen_panel.configure(state=estado)
 
     def _resolver_nombre_emisor_para_panel(self, emisor_id):
         if not emisor_id:
@@ -432,6 +481,15 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             )
             return
 
+        valores_fila = self.tabla.item(seleccion[0], "values")
+        if not valores_fila or len(valores_fila) < 8:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se pudo leer la fila seleccionada para ubicar el PDF.",
+                parent=self,
+            )
+            return
+
         emisor_fiscal = self._resolver_emisor_fiscal_desde_factura(factura.get("emisor_id"))
         if not emisor_fiscal:
             messagebox.showwarning(
@@ -451,13 +509,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             return
 
         cliente_id = factura.get("cliente_id")
-        tipo_factura = str(factura.get("tipo_factura") or "").strip() or str(
-            emisor_fiscal[5] if len(emisor_fiscal) > 5 else "" or ""
-        ).strip()
-        codigo_factura = self._reconstruir_codigo_factura(
-            factura.get("numero_factura_raw"),
-            factura.get("punto_venta_raw"),
-        )
+        tipo_factura = self._tipo_factura_desde_fila(str(valores_fila[2] or "").strip())
+        punto_venta = str(valores_fila[3] or "").strip()
+        numero_factura = str(valores_fila[4] or "").strip()
+        codigo_factura = self._reconstruir_codigo_factura(numero_factura, punto_venta)
 
         if not cliente_id or not tipo_factura or not codigo_factura:
             messagebox.showwarning(
@@ -469,6 +524,24 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
         nombre_pdf = nombre_factura_pdf(cliente_id, tipo_factura, codigo_factura)
         ruta_pdf = Path(carpeta_facturas) / nombre_pdf
+        if not ruta_pdf.is_file():
+            coincidencias = self._buscar_pdf_historico_compatible(
+                carpeta_facturas=carpeta_facturas,
+                cliente_id=cliente_id,
+                tipo_factura=tipo_factura,
+                codigo_factura=codigo_factura,
+            )
+            if len(coincidencias) == 1:
+                ruta_pdf = coincidencias[0]
+            elif len(coincidencias) > 1:
+                messagebox.showwarning(
+                    "Facturas electrónicas",
+                    "Se encontraron varios PDFs posibles para esta factura."
+                    "\nRevise la carpeta del emisor para abrir el archivo correcto.",
+                    parent=self,
+                )
+                return
+
         if not ruta_pdf.is_file():
             messagebox.showwarning(
                 "Facturas electrónicas",
@@ -650,6 +723,75 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             return f"{pv:05d}-{nro:08d}"
         except (TypeError, ValueError):
             return numero_texto
+
+    @staticmethod
+    def _tipo_factura_desde_fila(tipo):
+        texto = str(tipo or "").strip().upper()
+        if texto == "A":
+            return "Factura A"
+        if texto == "C":
+            return "Factura C"
+        return str(tipo or "").strip()
+
+    @staticmethod
+    def _buscar_pdf_historico_compatible(carpeta_facturas, cliente_id, tipo_factura, codigo_factura):
+        carpeta = Path(str(carpeta_facturas or "").strip())
+        if not carpeta.is_dir():
+            return []
+
+        codigo = str(codigo_factura or "").strip()
+        if "-" not in codigo:
+            return []
+
+        punto_venta, numero = codigo.split("-", 1)
+        punto_venta = punto_venta.strip()
+        numero = numero.strip()
+        if not punto_venta or not numero:
+            return []
+
+        codigo_guion = f"{punto_venta}-{numero}".lower()
+        codigo_guion_bajo = f"{punto_venta}_{numero}".lower()
+        tipo_normalizado = FacturasElectronicasFrame._normalizar_texto_archivo(tipo_factura)
+        cliente_normalizado = FacturasElectronicasFrame._normalizar_texto_archivo(
+            nombre_cliente_archivo(cliente_id)
+        )
+
+        candidatos = []
+        for archivo in carpeta.glob("*.pdf"):
+            nombre = archivo.name.lower()
+            if codigo_guion not in nombre and codigo_guion_bajo not in nombre:
+                continue
+            if tipo_normalizado and tipo_normalizado not in nombre:
+                continue
+            candidatos.append(archivo)
+
+        if len(candidatos) <= 1:
+            return candidatos
+
+        if cliente_normalizado:
+            refinados = [
+                archivo
+                for archivo in candidatos
+                if cliente_normalizado in FacturasElectronicasFrame._normalizar_texto_archivo(archivo.stem)
+            ]
+            if refinados:
+                return refinados
+
+        return candidatos
+
+    @staticmethod
+    def _normalizar_texto_archivo(texto):
+        valor = str(texto or "").strip().lower()
+        limpio = []
+        for caracter in valor:
+            if caracter.isalnum():
+                limpio.append(caracter)
+            elif caracter in {" ", "-", "_"}:
+                limpio.append("_")
+        normalizado = "".join(limpio)
+        while "__" in normalizado:
+            normalizado = normalizado.replace("__", "_")
+        return normalizado.strip("_")
 
     def _resolver_nombre_cliente(self, cliente_id):
         if not cliente_id:
