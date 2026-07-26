@@ -14,6 +14,7 @@ from views.cobros import CobrosFrame
 from views.cierre_mensual import CierreMensualFrame
 from views.configuracion import ConfiguracionFrame
 from views.estadisticas import EstadisticasFrame
+from views.facturas_electronicas import FacturasElectronicasFrame
 from views.facturacion_arca import FacturacionArcaFrame
 from views.inicio import InicioFrame
 from views.informes import InformesFrame
@@ -136,6 +137,7 @@ class FMMasterApp(ctk.CTk):
             ("Clientes", self.mostrar_clientes),
             ("Agenda", self.mostrar_agenda),
             ("Resúmenes", self.mostrar_resumenes),
+            ("Facturas Electrónicas", self.mostrar_facturas_electronicas),
             ("Cobros", self.mostrar_cobros),
             ("Renovaciones", self.mostrar_renovaciones),
             ("Informes", self.mostrar_informes),
@@ -413,6 +415,21 @@ class FMMasterApp(ctk.CTk):
             error_label = ctk.CTkLabel(
                 self.panel,
                 text="Error al cargar Facturación ARCA.",
+                text_color="#C00000",
+                font=("Arial", 14, "bold"),
+            )
+            error_label.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+
+    def mostrar_facturas_electronicas(self):
+        self.limpiar_panel()
+        try:
+            facturas = FacturasElectronicasFrame(self.panel)
+            facturas.grid(row=0, column=0, sticky="nsew")
+        except Exception as error:
+            messagebox.showerror("Error", f"No se pudo cargar Facturas Electrónicas.\n{error}", parent=self)
+            error_label = ctk.CTkLabel(
+                self.panel,
+                text="Error al cargar Facturas Electrónicas.",
                 text_color="#C00000",
                 font=("Arial", 14, "bold"),
             )
