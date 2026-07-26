@@ -23,6 +23,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self._cache_clientes = {}
         self._facturas_en_memoria = []
         self._facturas_por_id = {}
+        self._cache_emisores = {}
         self._busqueda_var = StringVar()
         self._estado_var = StringVar(value="Todos")
         self._columnas_ordenables = {
@@ -94,10 +95,18 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         )
         self.combo_estado.grid(row=0, column=3, sticky="e")
 
-        tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        tabla_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        contenido_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
+        contenido_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        contenido_frame.grid_rowconfigure(0, weight=1)
+        contenido_frame.grid_columnconfigure(0, weight=1)
+
+        tabla_frame = ctk.CTkFrame(contenido_frame, fg_color="white", corner_radius=0)
+        tabla_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         tabla_frame.grid_rowconfigure(0, weight=1)
         tabla_frame.grid_columnconfigure(0, weight=1)
+
+        panel_detalle = ctk.CTkFrame(contenido_frame, fg_color="#F7F7F7", corner_radius=8)
+        panel_detalle.grid(row=0, column=1, sticky="ns")
 
         columnas = (
             "fecha",
@@ -112,6 +121,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self.tabla = ttk.Treeview(tabla_frame, columns=columnas, show="headings", height=16)
         self.tabla.bind("<Double-1>", self._abrir_pdf_desde_doble_clic)
         self.tabla.bind("<Button-3>", self._mostrar_menu_contextual)
+        self.tabla.bind("<<TreeviewSelect>>", self._on_seleccion_factura)
         self.menu_contextual = Menu(self, tearoff=0)
         self.menu_contextual.add_command(label="Abrir PDF", command=self._abrir_pdf_desde_menu)
         self.menu_contextual.add_command(label="Abrir cliente", command=self._abrir_cliente_desde_menu)
@@ -154,6 +164,46 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             text_color="#6A6A6A",
         )
 
+        ctk.CTkLabel(
+            panel_detalle,
+            text="Detalle de factura",
+            font=("Arial", 15, "bold"),
+            text_color="#202020",
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 10))
+
+        self._detalle_labels = {}
+        campos_detalle = [
+            ("cliente", "Cliente"),
+            ("tipo", "Tipo de comprobante"),
+            ("punto_venta", "Punto de venta"),
+            ("numero", "Número"),
+            ("fecha", "Fecha"),
+            ("importe", "Importe"),
+            ("estado", "Estado"),
+            ("cae", "CAE"),
+            ("vencimiento_cae", "Vencimiento del CAE"),
+            ("emisor", "Emisor"),
+            ("resumen", "Resumen relacionado"),
+        ]
+        for indice, (clave, titulo) in enumerate(campos_detalle, start=1):
+            ctk.CTkLabel(
+                panel_detalle,
+                text=titulo,
+                font=("Arial", 12, "bold"),
+                text_color="#303030",
+            ).grid(row=indice * 2 - 1, column=0, sticky="w", padx=12, pady=(0, 1))
+
+            valor_label = ctk.CTkLabel(
+                panel_detalle,
+                text="-",
+                font=("Arial", 12),
+                text_color="#505050",
+                wraplength=300,
+                justify="left",
+            )
+            valor_label.grid(row=indice * 2, column=0, sticky="w", padx=12, pady=(0, 8))
+            self._detalle_labels[clave] = valor_label
+
     def cargar_facturas(self):
         filas = FacturaArcaService.listar()
         self._facturas_en_memoria = [self._normalizar_fila(fila) for fila in filas]
@@ -182,6 +232,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "cliente_id": cliente_id,
             "emisor_id": emisor_id,
             "resumen_id": resumen_id,
+            "vencimiento_cae": str(fila[11] or "").strip(),
             "tipo_factura": tipo_factura,
             "punto_venta_raw": punto_venta_raw,
             "numero_factura_raw": numero_factura_raw,
@@ -292,6 +343,70 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 iid=str(factura["factura_id"]),
                 values=factura["valores_tabla"],
             )
+
+        seleccion_actual = self.tabla.selection()
+        if seleccion_actual:
+            self._actualizar_panel_detalle()
+        else:
+            self._limpiar_panel_detalle()
+
+    def _on_seleccion_factura(self, _event=None):
+        self._actualizar_panel_detalle()
+
+    def _actualizar_panel_detalle(self):
+        factura = self._obtener_factura_seleccionada()
+        if not factura:
+            self._limpiar_panel_detalle()
+            return
+
+        emisor = self._resolver_nombre_emisor_para_panel(factura.get("emisor_id"))
+        resumen_id = factura.get("resumen_id")
+        resumen_texto = f"ID {resumen_id}" if resumen_id else "-"
+
+        detalle = {
+            "cliente": self._valor_o_guion(factura["valores_tabla"][1]),
+            "tipo": self._valor_o_guion(factura.get("tipo_factura")),
+            "punto_venta": self._valor_o_guion(factura["valores_tabla"][3]),
+            "numero": self._valor_o_guion(factura.get("numero_factura_raw") or factura["valores_tabla"][4]),
+            "fecha": self._valor_o_guion(factura["valores_tabla"][0]),
+            "importe": self._valor_o_guion(factura["valores_tabla"][5]),
+            "estado": self._valor_o_guion(factura["valores_tabla"][7]),
+            "cae": self._valor_o_guion(factura["valores_tabla"][6]),
+            "vencimiento_cae": self._valor_o_guion(self._formatear_fecha(factura.get("vencimiento_cae"))),
+            "emisor": self._valor_o_guion(emisor),
+            "resumen": resumen_texto,
+        }
+
+        for clave, label in self._detalle_labels.items():
+            label.configure(text=detalle.get(clave, "-"))
+
+    def _limpiar_panel_detalle(self):
+        for label in self._detalle_labels.values():
+            label.configure(text="-")
+
+    def _resolver_nombre_emisor_para_panel(self, emisor_id):
+        if not emisor_id:
+            return ""
+        if emisor_id in self._cache_emisores:
+            return self._cache_emisores[emisor_id]
+
+        emisor_fiscal = self._resolver_emisor_fiscal_desde_factura(emisor_id)
+        if emisor_fiscal:
+            nombre = EmisorFiscalService.etiqueta_visible(emisor_fiscal)
+        else:
+            emisor_interno = EmisorService.obtener(emisor_id)
+            if emisor_interno:
+                nombre = str(emisor_interno[1] or emisor_interno[3] or "").strip()
+            else:
+                nombre = ""
+
+        self._cache_emisores[emisor_id] = nombre
+        return nombre
+
+    @staticmethod
+    def _valor_o_guion(valor):
+        texto = str(valor or "").strip()
+        return texto if texto else "-"
 
     def _abrir_pdf_desde_doble_clic(self, _event=None):
         seleccion = self.tabla.selection()
