@@ -1,10 +1,15 @@
+import os
 from datetime import datetime
-from tkinter import StringVar, ttk
+from pathlib import Path
+from tkinter import StringVar, messagebox, ttk
 
 import customtkinter as ctk
 
 from config import COLOR_PRINCIPAL
 from database import conectar
+from pdf.nombre_archivos import nombre_factura_pdf
+from services.emisor_fiscal_service import EmisorFiscalService
+from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
 
 
@@ -16,6 +21,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self._cache_clientes = {}
         self._facturas_en_memoria = []
+        self._facturas_por_id = {}
         self._busqueda_var = StringVar()
         self._estado_var = StringVar(value="Todos")
         self._columnas_ordenables = {
@@ -103,6 +109,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "estado",
         )
         self.tabla = ttk.Treeview(tabla_frame, columns=columnas, show="headings", height=16)
+        self.tabla.bind("<Double-1>", self._abrir_pdf_desde_doble_clic)
         encabezados = {
             "fecha": ("Fecha", 110),
             "cliente": ("Cliente", 290),
@@ -144,6 +151,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
     def cargar_facturas(self):
         filas = FacturaArcaService.listar()
         self._facturas_en_memoria = [self._normalizar_fila(fila) for fila in filas]
+        self._facturas_por_id = {
+            factura["factura_id"]: factura for factura in self._facturas_en_memoria
+        }
         self._aplicar_filtro()
 
     def _normalizar_fila(self, fila):
@@ -154,7 +164,19 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         cae = str(fila[10] or "").strip()
         estado = str(fila[8] or "").strip()
         clase_estado = self._clasificar_estado(cae, estado)
+        factura_id = int(fila[0])
+        cliente_id = fila[1]
+        emisor_id = fila[2]
+        tipo_factura = str(fila[6] or "").strip()
+        punto_venta_raw = str(fila[5] or "").strip()
+        numero_factura_raw = str(fila[9] or "").strip()
         return {
+            "factura_id": factura_id,
+            "cliente_id": cliente_id,
+            "emisor_id": emisor_id,
+            "tipo_factura": tipo_factura,
+            "punto_venta_raw": punto_venta_raw,
+            "numero_factura_raw": numero_factura_raw,
             "valores_tabla": (
                 self._formatear_fecha(fila[4]),
                 cliente,
@@ -256,7 +278,137 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
         self.mensaje_vacio.grid_remove()
         for factura in facturas:
-            self.tabla.insert("", "end", values=factura["valores_tabla"])
+            self.tabla.insert(
+                "",
+                "end",
+                iid=str(factura["factura_id"]),
+                values=factura["valores_tabla"],
+            )
+
+    def _abrir_pdf_desde_doble_clic(self, _event=None):
+        seleccion = self.tabla.selection()
+        if not seleccion:
+            return
+
+        try:
+            factura_id = int(seleccion[0])
+        except (TypeError, ValueError):
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se pudo identificar la factura seleccionada.",
+                parent=self,
+            )
+            return
+
+        factura = self._facturas_por_id.get(factura_id)
+        if not factura:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se encontró la información de la factura seleccionada.",
+                parent=self,
+            )
+            return
+
+        emisor_fiscal = self._resolver_emisor_fiscal_desde_factura(factura.get("emisor_id"))
+        if not emisor_fiscal:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se pudo identificar el emisor fiscal para esta factura.",
+                parent=self,
+            )
+            return
+
+        carpeta_facturas = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
+        if not carpeta_facturas:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "El emisor fiscal no tiene configurada la carpeta de facturas.",
+                parent=self,
+            )
+            return
+
+        cliente_id = factura.get("cliente_id")
+        tipo_factura = str(factura.get("tipo_factura") or "").strip() or str(
+            emisor_fiscal[5] if len(emisor_fiscal) > 5 else "" or ""
+        ).strip()
+        codigo_factura = self._reconstruir_codigo_factura(
+            factura.get("numero_factura_raw"),
+            factura.get("punto_venta_raw"),
+        )
+
+        if not cliente_id or not tipo_factura or not codigo_factura:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "Faltan datos para ubicar el PDF asociado a esta factura.",
+                parent=self,
+            )
+            return
+
+        nombre_pdf = nombre_factura_pdf(cliente_id, tipo_factura, codigo_factura)
+        ruta_pdf = Path(carpeta_facturas) / nombre_pdf
+        if not ruta_pdf.is_file():
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se encontró el PDF asociado a esta factura.",
+                parent=self,
+            )
+            return
+
+        try:
+            os.startfile(str(ruta_pdf))
+        except OSError as error:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                f"No se pudo abrir el PDF asociado a esta factura.\n\n{error}",
+                parent=self,
+            )
+
+    def _resolver_emisor_fiscal_desde_factura(self, emisor_id):
+        if not emisor_id:
+            return None
+
+        emisor_fiscal = EmisorFiscalService.obtener(emisor_id)
+        if emisor_fiscal:
+            return emisor_fiscal
+
+        emisor_interno = EmisorService.obtener(emisor_id)
+        if not emisor_interno:
+            return None
+
+        cuit_interno = self._normalizar_cuit(emisor_interno[4] if len(emisor_interno) > 4 else "")
+        if not cuit_interno:
+            return None
+
+        for emisor in EmisorFiscalService.listar():
+            cuit_fiscal = self._normalizar_cuit(emisor[3] if len(emisor) > 3 else "")
+            if cuit_fiscal and cuit_fiscal == cuit_interno:
+                return emisor
+
+        return None
+
+    @staticmethod
+    def _normalizar_cuit(valor):
+        digitos = "".join(char for char in str(valor or "") if char.isdigit())
+        return digitos if len(digitos) == 11 else None
+
+    @staticmethod
+    def _reconstruir_codigo_factura(numero_factura, punto_venta):
+        numero_texto = str(numero_factura or "").strip()
+        pv_texto = str(punto_venta or "").strip()
+
+        if numero_texto and "-" in numero_texto:
+            pv_parte, nro_parte = numero_texto.split("-", 1)
+            try:
+                return f"{int(pv_parte):05d}-{int(nro_parte):08d}"
+            except (TypeError, ValueError):
+                return numero_texto
+
+        try:
+            pv = int(pv_texto)
+            nro = int(numero_texto)
+            return f"{pv:05d}-{nro:08d}"
+        except (TypeError, ValueError):
+            return numero_texto
 
     def _resolver_nombre_cliente(self, cliente_id):
         if not cliente_id:
