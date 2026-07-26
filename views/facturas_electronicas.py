@@ -17,8 +17,21 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self._cache_clientes = {}
         self._facturas_en_memoria = []
         self._busqueda_var = StringVar()
+        self._estado_var = StringVar(value="Todos")
+        self._columnas_ordenables = {
+            "fecha",
+            "cliente",
+            "tipo",
+            "punto_venta",
+            "numero",
+            "total",
+            "estado",
+        }
+        self._orden_columna = None
+        self._orden_descendente = False
         self.crear_interfaz()
         self._busqueda_var.trace_add("write", self._on_busqueda_cambiada)
+        self._estado_var.trace_add("write", self._on_busqueda_cambiada)
         self.cargar_facturas()
 
     def crear_interfaz(self):
@@ -55,7 +68,24 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             textvariable=self._busqueda_var,
             placeholder_text="Cliente, punto de venta, número, CAE, tipo o estado",
         )
-        self.entrada_busqueda.grid(row=0, column=1, sticky="ew")
+        self.entrada_busqueda.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+
+        etiqueta_estado = ctk.CTkLabel(
+            buscador_frame,
+            text="Estado:",
+            font=("Arial", 13, "bold"),
+            text_color="#303030",
+        )
+        etiqueta_estado.grid(row=0, column=2, sticky="w", padx=(0, 8))
+
+        self.combo_estado = ctk.CTkComboBox(
+            buscador_frame,
+            values=["Todos", "Emitidas", "Pendientes"],
+            variable=self._estado_var,
+            state="readonly",
+            width=140,
+        )
+        self.combo_estado.grid(row=0, column=3, sticky="e")
 
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
@@ -84,7 +114,14 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "estado": ("Estado", 160),
         }
         for columna, (texto, ancho) in encabezados.items():
-            self.tabla.heading(columna, text=texto)
+            if columna in self._columnas_ordenables:
+                self.tabla.heading(
+                    columna,
+                    text=texto,
+                    command=lambda c=columna: self._on_ordenar_columna(c),
+                )
+            else:
+                self.tabla.heading(columna, text=texto)
             self.tabla.column(
                 columna,
                 width=ancho,
@@ -116,6 +153,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         numero = self._formatear_numero(fila[9])
         cae = str(fila[10] or "").strip()
         estado = str(fila[8] or "").strip()
+        clase_estado = self._clasificar_estado(cae, estado)
         return {
             "valores_tabla": (
                 self._formatear_fecha(fila[4]),
@@ -137,6 +175,16 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                     estado,
                 ]
             ).lower(),
+            "clase_estado": clase_estado,
+            "orden": {
+                "fecha": self._clave_fecha(fila[4]),
+                "cliente": cliente.lower(),
+                "tipo": tipo.lower(),
+                "punto_venta": self._clave_entero(fila[5]),
+                "numero": self._clave_numero_factura(fila[9]),
+                "total": self._clave_float(fila[7]),
+                "estado": estado.lower(),
+            },
         }
 
     def _on_busqueda_cambiada(self, *_):
@@ -144,16 +192,54 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
     def _aplicar_filtro(self):
         termino = self._busqueda_var.get().strip().lower()
-        if not termino:
-            facturas_filtradas = self._facturas_en_memoria
-        else:
-            facturas_filtradas = [
-                factura
-                for factura in self._facturas_en_memoria
-                if termino in factura["texto_busqueda"]
-            ]
+        estado_filtro = self._estado_var.get().strip()
+        facturas_filtradas = []
+
+        for factura in self._facturas_en_memoria:
+            coincide_busqueda = not termino or termino in factura["texto_busqueda"]
+            coincide_estado = (
+                estado_filtro == "Todos" or factura["clase_estado"] == estado_filtro
+            )
+            if coincide_busqueda and coincide_estado:
+                facturas_filtradas.append(factura)
+
+        facturas_filtradas = self._ordenar_facturas(facturas_filtradas)
 
         self._renderizar_facturas(facturas_filtradas)
+
+    def _on_ordenar_columna(self, columna):
+        if self._orden_columna == columna:
+            self._orden_descendente = not self._orden_descendente
+        else:
+            self._orden_columna = columna
+            self._orden_descendente = False
+        self._aplicar_filtro()
+
+    def _ordenar_facturas(self, facturas):
+        if not self._orden_columna:
+            return facturas
+
+        return sorted(
+            facturas,
+            key=lambda factura: factura["orden"][self._orden_columna],
+            reverse=self._orden_descendente,
+        )
+
+    @staticmethod
+    def _clasificar_estado(cae, estado):
+        cae_texto = str(cae or "").strip()
+        estado_texto = str(estado or "").strip().lower()
+
+        if cae_texto:
+            return "Emitidas"
+
+        if any(palabra in estado_texto for palabra in ("facturada", "emitida", "autorizada")):
+            return "Emitidas"
+
+        if "pendiente" in estado_texto:
+            return "Pendientes"
+
+        return "Pendientes"
 
     def _renderizar_facturas(self, facturas):
         self.tabla.delete(*self.tabla.get_children())
@@ -250,3 +336,35 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         if "FACTURA C" in texto:
             return "C"
         return texto
+
+    @staticmethod
+    def _clave_fecha(valor):
+        texto = str(valor or "").strip()
+        try:
+            return datetime.strptime(texto[:10], "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return datetime.min
+
+    @staticmethod
+    def _clave_entero(valor):
+        try:
+            return int(str(valor or "").strip())
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _clave_float(valor):
+        try:
+            return float(valor or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _clave_numero_factura(valor):
+        texto = str(valor or "").strip()
+        if texto and "-" in texto:
+            texto = texto.split("-", 1)[-1].strip()
+        try:
+            return int(texto or 0)
+        except (TypeError, ValueError):
+            return 0
