@@ -115,6 +115,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self.menu_contextual = Menu(self, tearoff=0)
         self.menu_contextual.add_command(label="Abrir PDF", command=self._abrir_pdf_desde_menu)
         self.menu_contextual.add_command(label="Abrir cliente", command=self._abrir_cliente_desde_menu)
+        self.menu_contextual.add_command(label="Abrir resumen", command=self._abrir_resumen_desde_menu)
         encabezados = {
             "fecha": ("Fecha", 110),
             "cliente": ("Cliente", 290),
@@ -172,6 +173,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         factura_id = int(fila[0])
         cliente_id = fila[1]
         emisor_id = fila[2]
+        resumen_id = fila[3]
         tipo_factura = str(fila[6] or "").strip()
         punto_venta_raw = str(fila[5] or "").strip()
         numero_factura_raw = str(fila[9] or "").strip()
@@ -179,6 +181,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "factura_id": factura_id,
             "cliente_id": cliente_id,
             "emisor_id": emisor_id,
+            "resumen_id": resumen_id,
             "tipo_factura": tipo_factura,
             "punto_venta_raw": punto_venta_raw,
             "numero_factura_raw": numero_factura_raw,
@@ -398,6 +401,52 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             return
 
         self._abrir_ficha_cliente(cliente_id)
+
+    def _abrir_resumen_desde_menu(self):
+        factura = self._obtener_factura_seleccionada()
+        if not factura:
+            return
+
+        resumen_id = factura.get("resumen_id")
+        if not resumen_id:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se pudo identificar el resumen asociado a esta factura.",
+                parent=self,
+            )
+            return
+
+        cliente_id = factura.get("cliente_id")
+        aplicacion = self.winfo_toplevel()
+        if hasattr(aplicacion, "mostrar_resumenes"):
+            aplicacion.mostrar_resumenes(cliente_id=cliente_id)
+            self._seleccionar_resumen_en_vista(aplicacion, resumen_id)
+            aplicacion.lift()
+            aplicacion.focus_force()
+
+    def _seleccionar_resumen_en_vista(self, aplicacion, resumen_id):
+        panel = getattr(aplicacion, "panel", None)
+        if panel is None:
+            return
+
+        for child in panel.winfo_children():
+            tabla = getattr(child, "tabla", None)
+            if tabla is None:
+                continue
+
+            for item in tabla.get_children():
+                valores = tabla.item(item, "values")
+                if not valores:
+                    continue
+                try:
+                    item_resumen_id = int(valores[0])
+                except (TypeError, ValueError):
+                    continue
+                if item_resumen_id == int(resumen_id):
+                    tabla.selection_set(item)
+                    tabla.focus(item)
+                    tabla.see(item)
+                    return
 
     def _obtener_factura_seleccionada(self):
         seleccion = self.tabla.selection()
