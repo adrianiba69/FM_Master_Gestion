@@ -1,5 +1,5 @@
 from datetime import datetime
-from tkinter import ttk
+from tkinter import StringVar, ttk
 
 import customtkinter as ctk
 
@@ -12,10 +12,13 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
     def __init__(self, master):
         super().__init__(master, fg_color="white", corner_radius=0)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)
         self.grid_columnconfigure(0, weight=1)
         self._cache_clientes = {}
+        self._facturas_en_memoria = []
+        self._busqueda_var = StringVar()
         self.crear_interfaz()
+        self._busqueda_var.trace_add("write", self._on_busqueda_cambiada)
         self.cargar_facturas()
 
     def crear_interfaz(self):
@@ -35,8 +38,27 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         )
         descripcion.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
 
+        buscador_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
+        buscador_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 8))
+        buscador_frame.grid_columnconfigure(1, weight=1)
+
+        etiqueta_buscar = ctk.CTkLabel(
+            buscador_frame,
+            text="Buscar:",
+            font=("Arial", 13, "bold"),
+            text_color="#303030",
+        )
+        etiqueta_buscar.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        self.entrada_busqueda = ctk.CTkEntry(
+            buscador_frame,
+            textvariable=self._busqueda_var,
+            placeholder_text="Cliente, punto de venta, número, CAE, tipo o estado",
+        )
+        self.entrada_busqueda.grid(row=0, column=1, sticky="ew")
+
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        tabla_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        tabla_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
         tabla_frame.grid_rowconfigure(0, weight=1)
         tabla_frame.grid_columnconfigure(0, weight=1)
 
@@ -83,29 +105,72 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         )
 
     def cargar_facturas(self):
-        self.tabla.delete(*self.tabla.get_children())
         filas = FacturaArcaService.listar()
+        self._facturas_en_memoria = [self._normalizar_fila(fila) for fila in filas]
+        self._aplicar_filtro()
 
-        if not filas:
+    def _normalizar_fila(self, fila):
+        cliente = self._resolver_nombre_cliente(fila[1])
+        tipo = self._formatear_tipo(fila[6])
+        punto_venta = self._formatear_punto_venta(fila[5])
+        numero = self._formatear_numero(fila[9])
+        cae = str(fila[10] or "").strip()
+        estado = str(fila[8] or "").strip()
+        return {
+            "valores_tabla": (
+                self._formatear_fecha(fila[4]),
+                cliente,
+                tipo,
+                punto_venta,
+                numero,
+                self._formatear_moneda(fila[7]),
+                cae,
+                estado,
+            ),
+            "texto_busqueda": " ".join(
+                [
+                    cliente,
+                    punto_venta,
+                    numero,
+                    cae,
+                    tipo,
+                    estado,
+                ]
+            ).lower(),
+        }
+
+    def _on_busqueda_cambiada(self, *_):
+        self._aplicar_filtro()
+
+    def _aplicar_filtro(self):
+        termino = self._busqueda_var.get().strip().lower()
+        if not termino:
+            facturas_filtradas = self._facturas_en_memoria
+        else:
+            facturas_filtradas = [
+                factura
+                for factura in self._facturas_en_memoria
+                if termino in factura["texto_busqueda"]
+            ]
+
+        self._renderizar_facturas(facturas_filtradas)
+
+    def _renderizar_facturas(self, facturas):
+        self.tabla.delete(*self.tabla.get_children())
+
+        if not self._facturas_en_memoria:
             self.mensaje_vacio.grid(row=0, column=0)
+            self.mensaje_vacio.configure(text="No hay facturas electrónicas registradas.")
+            return
+
+        if not facturas:
+            self.mensaje_vacio.grid(row=0, column=0)
+            self.mensaje_vacio.configure(text="No se encontraron facturas para la búsqueda.")
             return
 
         self.mensaje_vacio.grid_remove()
-        for fila in filas:
-            self.tabla.insert(
-                "",
-                "end",
-                values=(
-                    self._formatear_fecha(fila[4]),
-                    self._resolver_nombre_cliente(fila[1]),
-                    self._formatear_tipo(fila[6]),
-                    self._formatear_punto_venta(fila[5]),
-                    self._formatear_numero(fila[9]),
-                    self._formatear_moneda(fila[7]),
-                    str(fila[10] or "").strip(),
-                    str(fila[8] or "").strip(),
-                ),
-            )
+        for factura in facturas:
+            self.tabla.insert("", "end", values=factura["valores_tabla"])
 
     def _resolver_nombre_cliente(self, cliente_id):
         if not cliente_id:
