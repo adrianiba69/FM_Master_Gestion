@@ -56,7 +56,8 @@ class CobroService:
                 co.forma_pago,
                 co.comprobante,
                 co.observaciones,
-                COALESCE(NULLIF(cl.razon_social, ''), cl.nombre) AS cliente
+                COALESCE(NULLIF(cl.razon_social, ''), cl.nombre) AS cliente,
+                co.factura_arca_id
             FROM cobros co
             JOIN clientes cl ON cl.id=co.cliente_id
         """
@@ -76,7 +77,7 @@ class CobroService:
         cur = conn.cursor()
         cur.execute("""
             SELECT id, cliente_id, fecha, importe, forma_pago,
-                   comprobante, observaciones
+                   comprobante, factura_arca_id, observaciones
             FROM cobros
             WHERE id=?
         """, (cobro_id,))
@@ -94,14 +95,15 @@ class CobroService:
         cur.execute("""
             INSERT INTO cobros(
                 cliente_id, fecha, importe, forma_pago,
-                comprobante, observaciones
-            ) VALUES(?,?,?,?,?,?)
+                comprobante, factura_arca_id, observaciones
+            ) VALUES(?,?,?,?,?,?,?)
         """, (
             cobro.cliente_id,
             cobro.fecha,
             cobro.importe,
             cobro.forma_pago,
             cobro.comprobante,
+            cobro.factura_arca_id,
             cobro.observaciones,
         ))
         CobroService._recalcular_estado_resumenes_cliente(cur, cobro.cliente_id)
@@ -121,13 +123,14 @@ class CobroService:
         cur = conn.cursor()
         cur.execute("""
             UPDATE cobros
-            SET fecha=?, importe=?, forma_pago=?, comprobante=?, observaciones=?
+            SET fecha=?, importe=?, forma_pago=?, comprobante=?, factura_arca_id=?, observaciones=?
             WHERE id=? AND cliente_id=?
         """, (
             cobro.fecha,
             cobro.importe,
             cobro.forma_pago,
             cobro.comprobante,
+            cobro.factura_arca_id,
             cobro.observaciones,
             cobro.id,
             cobro.cliente_id,
@@ -146,6 +149,65 @@ class CobroService:
         conn.commit()
         conn.close()
         return eliminado
+
+    @staticmethod
+    def listar_por_factura(factura_arca_id):
+        if factura_arca_id is None:
+            return []
+
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                co.id,
+                co.cliente_id,
+                co.fecha,
+                co.importe,
+                co.forma_pago,
+                co.comprobante,
+                co.observaciones,
+                COALESCE(NULLIF(cl.razon_social, ''), cl.nombre) AS cliente,
+                co.factura_arca_id
+            FROM cobros co
+            JOIN clientes cl ON cl.id=co.cliente_id
+            WHERE co.factura_arca_id=?
+            ORDER BY co.fecha DESC, co.id DESC
+            """,
+            (factura_arca_id,),
+        )
+        datos = cur.fetchall()
+        conn.close()
+        return datos
+
+    @staticmethod
+    def totales_por_factura_ids(factura_ids):
+        ids_limpios = []
+        for factura_id in factura_ids or []:
+            try:
+                ids_limpios.append(int(factura_id))
+            except (TypeError, ValueError):
+                continue
+
+        if not ids_limpios:
+            return {}
+
+        marcadores = ",".join(["?"] * len(ids_limpios))
+        consulta = f"""
+            SELECT factura_arca_id, COALESCE(SUM(importe), 0)
+            FROM cobros
+            WHERE factura_arca_id IS NOT NULL
+              AND factura_arca_id IN ({marcadores})
+            GROUP BY factura_arca_id
+        """
+
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(consulta, tuple(ids_limpios))
+        filas = cur.fetchall()
+        conn.close()
+
+        return {int(factura_id): float(total or 0) for factura_id, total in filas}
 
     @staticmethod
     def resumenes_cliente(cliente_id):

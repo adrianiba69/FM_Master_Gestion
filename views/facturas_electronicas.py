@@ -9,6 +9,7 @@ from config import COLOR_PRINCIPAL
 from database import conectar
 from pdf.nombre_archivos import nombre_cliente_archivo, nombre_factura_pdf
 from views.clientes import ClientesFrame
+from services.cobro_service import CobroService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
@@ -36,6 +37,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "numero",
             "total",
             "estado",
+            "estado_cobro",
         }
         self._orden_columna = None
         self._orden_descendente = False
@@ -121,6 +123,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "total",
             "cae",
             "estado",
+            "estado_cobro",
         )
         self.tabla = ttk.Treeview(tabla_frame, columns=columnas, show="headings", height=16)
         self.tabla.bind("<Double-1>", self._abrir_pdf_desde_doble_clic)
@@ -139,6 +142,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "total": ("Total", 120),
             "cae": ("CAE", 130),
             "estado": ("Estado", 160),
+            "estado_cobro": ("Estado de cobro", 170),
         }
         for columna, (texto, ancho) in encabezados.items():
             if columna in self._columnas_ordenables:
@@ -191,6 +195,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             ("numero", "Número"),
             ("fecha", "Fecha"),
             ("importe", "Importe"),
+            ("cobrado", "Cobrado"),
+            ("saldo", "Saldo"),
+            ("estado_cobro", "Estado de cobro"),
             ("cae", "CAE"),
             ("vencimiento_cae", "Vencimiento del CAE"),
             ("emisor", "Emisor"),
@@ -248,13 +255,27 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
     def cargar_facturas(self):
         filas = FacturaArcaService.listar()
-        self._facturas_en_memoria = [self._normalizar_fila(fila) for fila in filas]
+        factura_ids = []
+        for fila in filas:
+            try:
+                factura_ids.append(int(fila[0]))
+            except (TypeError, ValueError, IndexError):
+                continue
+
+        totales_cobrados = CobroService.totales_por_factura_ids(factura_ids)
+        self._facturas_en_memoria = [
+            self._normalizar_fila(
+                fila,
+                totales_cobrados.get(int(fila[0]), 0.0),
+            )
+            for fila in filas
+        ]
         self._facturas_por_id = {
             factura["factura_id"]: factura for factura in self._facturas_en_memoria
         }
         self._aplicar_filtro()
 
-    def _normalizar_fila(self, fila):
+    def _normalizar_fila(self, fila, cobrado_total):
         cliente = self._resolver_nombre_cliente(fila[1])
         tipo = self._formatear_tipo(fila[6])
         punto_venta = self._formatear_punto_venta(fila[5])
@@ -262,6 +283,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         cae = str(fila[10] or "").strip()
         estado = str(fila[8] or "").strip()
         clase_estado = self._clasificar_estado(cae, estado)
+        importe_total = self._clave_float(fila[7])
+        cobrado = self._clave_float(cobrado_total)
+        saldo = max(importe_total - cobrado, 0.0)
+        estado_cobro = self._calcular_estado_cobro(cobrado, importe_total)
         factura_id = int(fila[0])
         cliente_id = fila[1]
         emisor_id = fila[2]
@@ -274,6 +299,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "cliente_id": cliente_id,
             "emisor_id": emisor_id,
             "resumen_id": resumen_id,
+            "importe_total": importe_total,
+            "cobrado_total": cobrado,
+            "saldo_cobro": saldo,
+            "estado_cobro": estado_cobro,
             "vencimiento_cae": str(fila[11] or "").strip(),
             "tipo_factura": tipo_factura,
             "punto_venta_raw": punto_venta_raw,
@@ -284,9 +313,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 tipo,
                 punto_venta,
                 numero,
-                self._formatear_moneda(fila[7]),
+                self._formatear_moneda(importe_total),
                 cae,
                 estado,
+                estado_cobro,
             ),
             "texto_busqueda": " ".join(
                 [
@@ -296,6 +326,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                     cae,
                     tipo,
                     estado,
+                    estado_cobro,
                 ]
             ).lower(),
             "clase_estado": clase_estado,
@@ -305,10 +336,31 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 "tipo": tipo.lower(),
                 "punto_venta": self._clave_entero(fila[5]),
                 "numero": self._clave_numero_factura(fila[9]),
-                "total": self._clave_float(fila[7]),
+                "total": importe_total,
                 "estado": estado.lower(),
+                "estado_cobro": self._clave_estado_cobro(estado_cobro),
             },
         }
+
+    @staticmethod
+    def _calcular_estado_cobro(cobrado, importe_total):
+        cobrado_valor = float(cobrado or 0)
+        importe_valor = float(importe_total or 0)
+
+        if cobrado_valor <= 0:
+            return "Sin cobrar"
+        if cobrado_valor < importe_valor:
+            return "Parcialmente cobrada"
+        return "Cobrada"
+
+    @staticmethod
+    def _clave_estado_cobro(estado_cobro):
+        orden = {
+            "Sin cobrar": 0,
+            "Parcialmente cobrada": 1,
+            "Cobrada": 2,
+        }
+        return orden.get(str(estado_cobro or "").strip(), 99)
 
     def _on_busqueda_cambiada(self, *_):
         self._aplicar_filtro()
@@ -411,7 +463,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "punto_venta": self._valor_o_guion(factura["valores_tabla"][3]),
             "numero": self._valor_o_guion(factura.get("numero_factura_raw") or factura["valores_tabla"][4]),
             "fecha": self._valor_o_guion(factura["valores_tabla"][0]),
-            "importe": self._valor_o_guion(factura["valores_tabla"][5]),
+            "importe": self._valor_o_guion(self._formatear_moneda(factura.get("importe_total"))),
+            "cobrado": self._valor_o_guion(self._formatear_moneda(factura.get("cobrado_total"))),
+            "saldo": self._valor_o_guion(self._formatear_moneda(factura.get("saldo_cobro"))),
+            "estado_cobro": self._valor_o_guion(factura.get("estado_cobro")),
             "estado": self._valor_o_guion(factura["valores_tabla"][7]),
             "cae": self._valor_o_guion(factura["valores_tabla"][6]),
             "vencimiento_cae": self._valor_o_guion(self._formatear_fecha(factura.get("vencimiento_cae"))),
