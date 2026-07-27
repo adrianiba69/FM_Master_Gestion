@@ -3,6 +3,7 @@ from tkinter import messagebox, ttk
 
 import customtkinter as ctk
 
+from database import conectar
 from models.cobro import Cobro
 from services.cliente_service import ClienteService
 from services.cobro_service import CobroService
@@ -17,6 +18,7 @@ class CobrosFrame(ctk.CTkFrame):
         self.on_cambio = on_cambio
         self.clientes_por_nombre = {}
         self.campos_formulario = {}
+        self.facturas_formulario_por_opcion = {}
         self.crear_interfaz()
         self.cargar_clientes()
 
@@ -330,11 +332,21 @@ class CobrosFrame(ctk.CTkFrame):
         self.forma_pago_combo = ctk.CTkComboBox(contenido, values=self.FORMAS_PAGO)
         self.forma_pago_combo.grid(row=8, column=0, sticky="ew")
 
-        ctk.CTkLabel(contenido, text="Observaciones", anchor="w").grid(
+        ctk.CTkLabel(contenido, text="Factura electrónica", anchor="w").grid(
             row=9, column=0, sticky="ew", pady=(8, 0)
         )
+        self.factura_combo = ctk.CTkComboBox(contenido, values=["(Sin asociar)"])
+        self.factura_combo.grid(row=10, column=0, sticky="ew")
+
+        ctk.CTkLabel(contenido, text="Observaciones", anchor="w").grid(
+            row=11, column=0, sticky="ew", pady=(8, 0)
+        )
         self.observaciones_texto = ctk.CTkTextbox(contenido, height=75)
-        self.observaciones_texto.grid(row=10, column=0, sticky="ew")
+        self.observaciones_texto.grid(row=12, column=0, sticky="ew")
+
+        cliente_id_formulario = cobro.cliente_id if cobro is not None else self.cliente_id_actual()
+        factura_actual = cobro.factura_arca_id if cobro is not None else None
+        self._cargar_facturas_cliente_para_formulario(cliente_id_formulario, factura_actual)
 
         if cobro is None:
             self.campos_formulario["fecha"].insert(0, date.today().strftime("%d/%m/%Y"))
@@ -348,7 +360,7 @@ class CobrosFrame(ctk.CTkFrame):
             self.observaciones_texto.insert("1.0", cobro.observaciones or "")
 
         botones = ctk.CTkFrame(contenido, fg_color="white", corner_radius=0)
-        botones.grid(row=11, column=0, sticky="ew", pady=(18, 0))
+        botones.grid(row=13, column=0, sticky="ew", pady=(18, 0))
         botones.grid_columnconfigure(0, weight=1)
         ctk.CTkButton(
             botones,
@@ -395,6 +407,7 @@ class CobrosFrame(ctk.CTkFrame):
             importe=importe,
             forma_pago=self.forma_pago_combo.get().strip(),
             comprobante=self.campos_formulario["comprobante"].get().strip(),
+            factura_arca_id=self._factura_id_seleccionada_formulario(),
             observaciones=self.observaciones_texto.get("1.0", "end").strip(),
         )
         if cobro_original:
@@ -413,6 +426,69 @@ class CobrosFrame(ctk.CTkFrame):
             else "Cobro registrado correctamente.",
             parent=self,
         )
+
+    def _cargar_facturas_cliente_para_formulario(self, cliente_id, factura_arca_id_actual=None):
+        self.facturas_formulario_por_opcion = {"(Sin asociar)": None}
+        opciones = ["(Sin asociar)"]
+
+        if cliente_id:
+            conn = conectar()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, fecha, punto_venta, numero_factura, importe_total
+                FROM factura_arca
+                WHERE cliente_id=?
+                ORDER BY fecha DESC, id DESC
+                """,
+                (cliente_id,),
+            )
+            facturas = cur.fetchall()
+            conn.close()
+
+            for factura_id, fecha, punto_venta, numero_factura, importe_total in facturas:
+                codigo = self._formatear_codigo_factura_opcion(punto_venta, numero_factura)
+                fecha_texto = self.formatear_fecha(str(fecha or "")[:10])
+                importe_texto = self._formatear_moneda_sin_espacio(importe_total)
+                etiqueta = f"{codigo}\n{fecha_texto}\n{importe_texto}"
+                opciones.append(etiqueta)
+                self.facturas_formulario_por_opcion[etiqueta] = int(factura_id)
+
+        self.factura_combo.configure(values=opciones)
+
+        seleccion = "(Sin asociar)"
+        if factura_arca_id_actual is not None:
+            for etiqueta, factura_id in self.facturas_formulario_por_opcion.items():
+                if factura_id == factura_arca_id_actual:
+                    seleccion = etiqueta
+                    break
+        self.factura_combo.set(seleccion)
+
+    def _factura_id_seleccionada_formulario(self):
+        seleccion = self.factura_combo.get().strip()
+        return self.facturas_formulario_por_opcion.get(seleccion)
+
+    @staticmethod
+    def _formatear_codigo_factura_opcion(punto_venta, numero_factura):
+        texto_numero = str(numero_factura or "").strip()
+        if texto_numero and "-" in texto_numero:
+            partes = texto_numero.split("-", 1)
+            try:
+                return f"{int(partes[0]):05d}-{int(partes[1]):08d}"
+            except (TypeError, ValueError):
+                return texto_numero
+
+        try:
+            pv = int(str(punto_venta or "").strip())
+            nro = int(texto_numero or "0")
+            return f"{pv:05d}-{nro:08d}"
+        except (TypeError, ValueError):
+            return texto_numero or "-"
+
+    @staticmethod
+    def _formatear_moneda_sin_espacio(valor):
+        numero = f"{float(valor or 0):,.2f}"
+        return "$" + numero.replace(",", "X").replace(".", ",").replace("X", ".")
 
     def obtener_cobro_seleccionado(self):
         seleccion = self.tabla_cobros.selection()
