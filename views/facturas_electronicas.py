@@ -8,6 +8,7 @@ import customtkinter as ctk
 from config import COLOR_PRINCIPAL
 from database import conectar
 from pdf.nombre_archivos import nombre_cliente_archivo, nombre_factura_pdf
+from views.clientes import ClientesFrame
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
@@ -24,6 +25,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self._facturas_en_memoria = []
         self._facturas_por_id = {}
         self._cache_emisores = {}
+        self._clientes_bridge = None
         self._busqueda_var = StringVar()
         self._estado_var = StringVar(value="Todos")
         self._columnas_ordenables = {
@@ -665,8 +667,43 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         ventana.minsize(1080, 700)
         ventana.transient(self.winfo_toplevel())
 
+        bridge = self._obtener_clientes_bridge()
+
         callbacks = {}
         ficha = FichaClienteFrame(ventana, cliente_data=cliente_id, callbacks=callbacks)
+
+        def refrescar_ficha_si_disponible():
+            try:
+                if not ficha.winfo_exists():
+                    return
+                toplevel_ficha = ficha.winfo_toplevel()
+                if toplevel_ficha is None or not toplevel_ficha.winfo_exists():
+                    return
+            except TclError:
+                return
+            ficha.cargar_cliente(cliente_id)
+
+        callbacks["nuevo_resumen"] = lambda _cliente_data: bridge._abrir_resumenes_desde_ficha(
+            cliente_id,
+            parent_toplevel=ficha.winfo_toplevel(),
+            on_cambio=refrescar_ficha_si_disponible,
+        )
+        callbacks["editar_cliente"] = lambda _cliente_data: bridge._editar_cliente_desde_ficha(
+            cliente_id,
+            on_guardado=lambda: ficha.cargar_cliente(cliente_id),
+        )
+        callbacks["registrar_cobro"] = lambda _cliente_data: bridge._abrir_cobros_desde_ficha(
+            cliente_id,
+            parent_toplevel=ficha.winfo_toplevel(),
+            on_cambio=lambda: ficha.cargar_cliente(cliente_id),
+        )
+        callbacks["nueva_tarea"] = lambda _cliente_data: bridge._abrir_nueva_tarea_desde_ficha(
+            cliente_id,
+            parent_toplevel=ficha.winfo_toplevel(),
+            on_guardado=lambda: ficha.cargar_cliente(cliente_id),
+        )
+        callbacks["whatsapp"] = lambda _cliente_data: bridge._abrir_whatsapp_desde_ficha(cliente_id)
+
         ficha.pack(fill="both", expand=True)
 
         try:
@@ -676,6 +713,17 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             pass
         ventana.lift()
         ventana.focus_force()
+
+    def _obtener_clientes_bridge(self):
+        try:
+            if self._clientes_bridge is not None and self._clientes_bridge.winfo_exists():
+                return self._clientes_bridge
+        except TclError:
+            self._clientes_bridge = None
+
+        # Reutiliza la implementación de callbacks de Clientes sin duplicar lógica.
+        self._clientes_bridge = ClientesFrame(self.winfo_toplevel())
+        return self._clientes_bridge
 
     def _resolver_emisor_fiscal_desde_factura(self, emisor_id):
         if not emisor_id:
