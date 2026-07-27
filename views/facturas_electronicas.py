@@ -34,6 +34,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self._clientes_bridge = None
         self._busqueda_var = StringVar()
         self._estado_var = StringVar(value="Todos")
+        self._estado_cobro_var = StringVar(value="Todos")
         self._columnas_ordenables = {
             "fecha",
             "cliente",
@@ -49,6 +50,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self.crear_interfaz()
         self._busqueda_var.trace_add("write", self._on_busqueda_cambiada)
         self._estado_var.trace_add("write", self._on_busqueda_cambiada)
+        self._estado_cobro_var.trace_add("write", self._on_busqueda_cambiada)
         self.cargar_facturas()
 
     def crear_interfaz(self):
@@ -103,6 +105,23 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             width=140,
         )
         self.combo_estado.grid(row=0, column=3, sticky="e")
+
+        etiqueta_estado_cobro = ctk.CTkLabel(
+            buscador_frame,
+            text="Estado de cobro:",
+            font=("Arial", 13, "bold"),
+            text_color="#303030",
+        )
+        etiqueta_estado_cobro.grid(row=0, column=4, sticky="w", padx=(14, 8))
+
+        self.combo_estado_cobro = ctk.CTkComboBox(
+            buscador_frame,
+            values=["Todos", "Sin cobrar", "Parcialmente cobradas", "Cobradas"],
+            variable=self._estado_cobro_var,
+            state="readonly",
+            width=210,
+        )
+        self.combo_estado_cobro.grid(row=0, column=5, sticky="e")
 
         contenido_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         contenido_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
@@ -380,14 +399,26 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
     def _aplicar_filtro(self):
         termino = self._busqueda_var.get().strip().lower()
         estado_filtro = self._estado_var.get().strip()
+        estado_cobro_filtro = self._estado_cobro_var.get().strip()
         facturas_filtradas = []
+
+        mapa_estado_cobro = {
+            "Sin cobrar": "Sin cobrar",
+            "Parcialmente cobradas": "Parcialmente cobrada",
+            "Cobradas": "Cobrada",
+        }
+        estado_cobro_normalizado = mapa_estado_cobro.get(estado_cobro_filtro, "")
 
         for factura in self._facturas_en_memoria:
             coincide_busqueda = not termino or termino in factura["texto_busqueda"]
             coincide_estado = (
                 estado_filtro == "Todos" or factura["clase_estado"] == estado_filtro
             )
-            if coincide_busqueda and coincide_estado:
+            coincide_estado_cobro = (
+                estado_cobro_filtro == "Todos"
+                or factura.get("estado_cobro") == estado_cobro_normalizado
+            )
+            if coincide_busqueda and coincide_estado and coincide_estado_cobro:
                 facturas_filtradas.append(factura)
 
         facturas_filtradas = self._ordenar_facturas(facturas_filtradas)
