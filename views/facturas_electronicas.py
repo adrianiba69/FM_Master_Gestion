@@ -18,6 +18,11 @@ from views.cliente_ficha import FichaClienteFrame
 
 class FacturasElectronicasFrame(ctk.CTkFrame):
 
+    COLOR_ESTADO_COBRO_SIN = "#B43A3A"
+    COLOR_ESTADO_COBRO_PARCIAL = "#B36A00"
+    COLOR_ESTADO_COBRO_COBRADA = "#1E7E46"
+    COLOR_DETALLE_TEXTO_DEFAULT = "#505050"
+
     def __init__(self, master):
         super().__init__(master, fg_color="white", corner_radius=0)
         self.grid_rowconfigure(3, weight=1)
@@ -125,7 +130,13 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "estado",
             "estado_cobro",
         )
-        self.tabla = ttk.Treeview(tabla_frame, columns=columnas, show="headings", height=16)
+        self.tabla = ttk.Treeview(
+            tabla_frame,
+            columns=columnas,
+            show="headings",
+            height=16,
+            style="FacturasElectronicas.Treeview",
+        )
         self.tabla.bind("<Double-1>", self._abrir_pdf_desde_doble_clic)
         self.tabla.bind("<Button-3>", self._mostrar_menu_contextual)
         self.tabla.bind("<<TreeviewSelect>>", self._on_seleccion_factura)
@@ -162,6 +173,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
         scroll_y = ttk.Scrollbar(tabla_frame, orient="vertical", command=self.tabla.yview)
         self.tabla.configure(yscrollcommand=scroll_y.set)
+        self._configurar_estilo_tabla_estado_cobro()
         self.tabla.grid(row=0, column=0, sticky="nsew")
         scroll_y.grid(row=0, column=1, sticky="ns")
 
@@ -216,7 +228,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 detalle_frame,
                 text="-",
                 font=("Arial", 12),
-                text_color="#505050",
+                text_color=self.COLOR_DETALLE_TEXTO_DEFAULT,
                 wraplength=300,
                 justify="left",
             )
@@ -431,11 +443,13 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
         self.mensaje_vacio.grid_remove()
         for factura in facturas:
+            tag_estado_cobro = self._tag_estado_cobro_fila(factura.get("estado_cobro"))
             self.tabla.insert(
                 "",
                 "end",
                 iid=str(factura["factura_id"]),
                 values=factura["valores_tabla"],
+                tags=(tag_estado_cobro,),
             )
 
         seleccion_actual = self.tabla.selection()
@@ -475,14 +489,63 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         }
 
         for clave, label in self._detalle_labels.items():
+            label.configure(text_color=self.COLOR_DETALLE_TEXTO_DEFAULT)
             label.configure(text=detalle.get(clave, "-"))
+
+        self._detalle_labels["estado_cobro"].configure(
+            text_color=self._color_texto_estado_cobro(detalle.get("estado_cobro"))
+        )
 
         self._actualizar_estado_botones_panel(True)
 
     def _limpiar_panel_detalle(self):
         for label in self._detalle_labels.values():
-            label.configure(text="-")
+            label.configure(text="-", text_color=self.COLOR_DETALLE_TEXTO_DEFAULT)
         self._actualizar_estado_botones_panel(False)
+
+    def _configurar_estilo_tabla_estado_cobro(self):
+        estilo = ttk.Style(self)
+        estilo.map(
+            "FacturasElectronicas.Treeview",
+            background=[("selected", "#1F6AA5")],
+            foreground=[("selected", "#FFFFFF")],
+        )
+
+        # Si no hay soporte estable por celda en Treeview, coloreamos la fila completa por tag.
+        self.tabla.tag_configure(
+            "estado_cobro_sin",
+            background="#FDEDED",
+            foreground="#5A2222",
+        )
+        self.tabla.tag_configure(
+            "estado_cobro_parcial",
+            background="#FFF3DF",
+            foreground="#6A4A1A",
+        )
+        self.tabla.tag_configure(
+            "estado_cobro_cobrada",
+            background="#EAF7EE",
+            foreground="#1E4D32",
+        )
+
+    @staticmethod
+    def _tag_estado_cobro_fila(estado_cobro):
+        texto = str(estado_cobro or "").strip()
+        if texto == "Cobrada":
+            return "estado_cobro_cobrada"
+        if texto == "Parcialmente cobrada":
+            return "estado_cobro_parcial"
+        return "estado_cobro_sin"
+
+    def _color_texto_estado_cobro(self, estado_cobro):
+        texto = str(estado_cobro or "").strip()
+        if texto == "Cobrada":
+            return self.COLOR_ESTADO_COBRO_COBRADA
+        if texto == "Parcialmente cobrada":
+            return self.COLOR_ESTADO_COBRO_PARCIAL
+        if texto == "Sin cobrar":
+            return self.COLOR_ESTADO_COBRO_SIN
+        return self.COLOR_DETALLE_TEXTO_DEFAULT
 
     def _actualizar_estado_botones_panel(self, habilitado):
         estado = "normal" if habilitado else "disabled"
