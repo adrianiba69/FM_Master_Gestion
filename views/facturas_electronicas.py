@@ -25,7 +25,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
     def __init__(self, master):
         super().__init__(master, fg_color="white", corner_radius=0)
-        self.grid_rowconfigure(3, weight=1)
+        self.grid_rowconfigure(4, weight=1)
         self.grid_columnconfigure(0, weight=1)
         self._cache_clientes = {}
         self._facturas_en_memoria = []
@@ -35,6 +35,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self._busqueda_var = StringVar()
         self._estado_var = StringVar(value="Todos")
         self._estado_cobro_var = StringVar(value="Todos")
+        self._vista_pendientes_activa = False
+        self._usar_orden_pendientes_default = False
         self._columnas_ordenables = {
             "fecha",
             "cliente",
@@ -123,8 +125,36 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         )
         self.combo_estado_cobro.grid(row=0, column=5, sticky="e")
 
+        self.boton_pendientes_cobro = ctk.CTkButton(
+            buscador_frame,
+            text="Ver pendientes de cobro",
+            width=210,
+            command=self._alternar_vista_pendientes,
+        )
+        self.boton_pendientes_cobro.grid(row=0, column=6, sticky="e", padx=(12, 0))
+
+        resumen_frame = ctk.CTkFrame(self, fg_color="#F4F4F4", corner_radius=8)
+        resumen_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 8))
+        for columna in range(4):
+            resumen_frame.grid_columnconfigure(columna, weight=1, uniform="resumen")
+
+        self._resumen_visible_labels = {
+            "facturas": self._crear_indicador_resumen_visible(
+                resumen_frame, 0, "Facturas visibles", "0"
+            ),
+            "facturado": self._crear_indicador_resumen_visible(
+                resumen_frame, 1, "Total facturado", self._formatear_moneda(0)
+            ),
+            "cobrado": self._crear_indicador_resumen_visible(
+                resumen_frame, 2, "Total cobrado", self._formatear_moneda(0)
+            ),
+            "saldo": self._crear_indicador_resumen_visible(
+                resumen_frame, 3, "Saldo pendiente", self._formatear_moneda(0)
+            ),
+        }
+
         contenido_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
-        contenido_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        contenido_frame.grid(row=4, column=0, sticky="nsew", padx=20, pady=(0, 20))
         contenido_frame.grid_rowconfigure(0, weight=1)
         contenido_frame.grid_columnconfigure(0, weight=1)
 
@@ -396,6 +426,58 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
     def _on_busqueda_cambiada(self, *_):
         self._aplicar_filtro()
 
+    def _alternar_vista_pendientes(self):
+        self._vista_pendientes_activa = not self._vista_pendientes_activa
+        if self._vista_pendientes_activa:
+            self._usar_orden_pendientes_default = True
+            self._orden_columna = None
+            self._orden_descendente = False
+            # Evita conflicto entre el atajo de pendientes y el combo de estado de cobro.
+            self._estado_cobro_var.set("Todos")
+        else:
+            self._usar_orden_pendientes_default = False
+
+        self._actualizar_texto_boton_pendientes()
+        self._aplicar_filtro()
+
+    def _actualizar_texto_boton_pendientes(self):
+        if self._vista_pendientes_activa:
+            self.boton_pendientes_cobro.configure(text="Mostrar todas")
+        else:
+            self.boton_pendientes_cobro.configure(text="Ver pendientes de cobro")
+
+    @staticmethod
+    def _crear_indicador_resumen_visible(master, columna, titulo, valor):
+        bloque = ctk.CTkFrame(master, fg_color="transparent", corner_radius=0)
+        bloque.grid(row=0, column=columna, sticky="ew", padx=10, pady=8)
+
+        ctk.CTkLabel(
+            bloque,
+            text=titulo,
+            font=("Arial", 11, "bold"),
+            text_color="#4A4A4A",
+        ).pack(anchor="w")
+
+        valor_label = ctk.CTkLabel(
+            bloque,
+            text=valor,
+            font=("Arial", 17, "bold"),
+            text_color="#1F1F1F",
+        )
+        valor_label.pack(anchor="w", pady=(2, 0))
+        return valor_label
+
+    def _actualizar_resumen_visible(self, facturas_visibles):
+        cantidad = len(facturas_visibles)
+        total_facturado = sum(float(factura.get("importe_total") or 0) for factura in facturas_visibles)
+        total_cobrado = sum(float(factura.get("cobrado_total") or 0) for factura in facturas_visibles)
+        total_saldo = sum(float(factura.get("saldo_cobro") or 0) for factura in facturas_visibles)
+
+        self._resumen_visible_labels["facturas"].configure(text=str(cantidad))
+        self._resumen_visible_labels["facturado"].configure(text=self._formatear_moneda(total_facturado))
+        self._resumen_visible_labels["cobrado"].configure(text=self._formatear_moneda(total_cobrado))
+        self._resumen_visible_labels["saldo"].configure(text=self._formatear_moneda(total_saldo))
+
     def _aplicar_filtro(self):
         termino = self._busqueda_var.get().strip().lower()
         estado_filtro = self._estado_var.get().strip()
@@ -414,18 +496,31 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             coincide_estado = (
                 estado_filtro == "Todos" or factura["clase_estado"] == estado_filtro
             )
+            coincide_pendientes_rapido = (
+                not self._vista_pendientes_activa
+                or factura.get("estado_cobro") in {"Sin cobrar", "Parcialmente cobrada"}
+            )
             coincide_estado_cobro = (
                 estado_cobro_filtro == "Todos"
                 or factura.get("estado_cobro") == estado_cobro_normalizado
             )
-            if coincide_busqueda and coincide_estado and coincide_estado_cobro:
+            if (
+                coincide_busqueda
+                and coincide_estado
+                and coincide_pendientes_rapido
+                and coincide_estado_cobro
+            ):
                 facturas_filtradas.append(factura)
 
-        facturas_filtradas = self._ordenar_facturas(facturas_filtradas)
+        if self._vista_pendientes_activa and self._usar_orden_pendientes_default:
+            facturas_filtradas = self._ordenar_pendientes_por_defecto(facturas_filtradas)
+        else:
+            facturas_filtradas = self._ordenar_facturas(facturas_filtradas)
 
         self._renderizar_facturas(facturas_filtradas)
 
     def _on_ordenar_columna(self, columna):
+        self._usar_orden_pendientes_default = False
         if self._orden_columna == columna:
             self._orden_descendente = not self._orden_descendente
         else:
@@ -441,6 +536,17 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             facturas,
             key=lambda factura: factura["orden"][self._orden_columna],
             reverse=self._orden_descendente,
+        )
+
+    @staticmethod
+    def _ordenar_pendientes_por_defecto(facturas):
+        return sorted(
+            facturas,
+            key=lambda factura: (
+                factura["orden"]["fecha"],
+                factura["orden"]["cliente"],
+                factura["orden"]["numero"],
+            ),
         )
 
     @staticmethod
@@ -461,6 +567,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
     def _renderizar_facturas(self, facturas):
         self.tabla.delete(*self.tabla.get_children())
+        self._actualizar_resumen_visible(facturas)
 
         if not self._facturas_en_memoria:
             self.mensaje_vacio.grid(row=0, column=0)
