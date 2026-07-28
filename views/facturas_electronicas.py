@@ -13,6 +13,7 @@ from services.cobro_service import CobroService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
+from services.whatsapp_service import WhatsAppService
 from views.cliente_ficha import FichaClienteFrame
 
 
@@ -21,6 +22,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
     COLOR_ESTADO_COBRO_SIN = "#B43A3A"
     COLOR_ESTADO_COBRO_PARCIAL = "#B36A00"
     COLOR_ESTADO_COBRO_COBRADA = "#1E7E46"
+    COLOR_PRIORIDAD_ALTA = "#B43A3A"
+    COLOR_PRIORIDAD_MEDIA = "#B36A00"
+    COLOR_PRIORIDAD_BAJA = "#8A6D00"
+    COLOR_PRIORIDAD_SIN_ACCION = "#2F6F3E"
     COLOR_DETALLE_TEXTO_DEFAULT = "#505050"
 
     def __init__(self, master):
@@ -46,6 +51,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "total",
             "estado",
             "estado_cobro",
+            "dias_atraso",
+            "prioridad",
         }
         self._orden_columna = None
         self._orden_descendente = False
@@ -178,6 +185,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "cae",
             "estado",
             "estado_cobro",
+            "dias_atraso",
+            "prioridad",
         )
         self.tabla = ttk.Treeview(
             tabla_frame,
@@ -191,6 +200,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self.tabla.bind("<<TreeviewSelect>>", self._on_seleccion_factura)
         self.menu_contextual = Menu(self, tearoff=0)
         self.menu_contextual.add_command(label="Abrir PDF", command=self._abrir_pdf_desde_menu)
+        self.menu_contextual.add_command(
+            label="Enviar por WhatsApp",
+            command=self._enviar_whatsapp_desde_menu,
+        )
         self.menu_contextual.add_command(label="Abrir cliente", command=self._abrir_cliente_desde_menu)
         self.menu_contextual.add_command(label="Abrir resumen", command=self._abrir_resumen_desde_menu)
         encabezados = {
@@ -203,6 +216,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "cae": ("CAE", 130),
             "estado": ("Estado", 160),
             "estado_cobro": ("Estado de cobro", 170),
+            "dias_atraso": ("Días de atraso", 120),
+            "prioridad": ("Prioridad", 120),
         }
         for columna, (texto, ancho) in encabezados.items():
             if columna in self._columnas_ordenables:
@@ -216,7 +231,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             self.tabla.column(
                 columna,
                 width=ancho,
-                anchor="e" if columna in ("punto_venta", "numero", "total") else "w",
+                anchor="e" if columna in ("punto_venta", "numero", "total", "dias_atraso") else "w",
                 stretch=columna == "cliente",
             )
 
@@ -260,7 +275,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             ("saldo", "Saldo"),
             ("estado_cobro", "Estado de cobro"),
             ("cae", "CAE"),
-            ("vencimiento_cae", "Vencimiento del CAE"),
+            ("vencimiento", "Vencimiento"),
+            ("dias_atraso", "Días de atraso"),
+            ("prioridad", "Prioridad de cobranza"),
             ("emisor", "Emisor"),
             ("resumen", "Resumen relacionado"),
             ("estado", "Estado"),
@@ -296,6 +313,15 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         )
         self.boton_abrir_pdf_panel.pack(fill="x", pady=(0, 6))
 
+        self.boton_whatsapp_panel = ctk.CTkButton(
+            acciones_panel,
+            text="Enviar por WhatsApp",
+            command=self._enviar_whatsapp_desde_menu,
+            state="disabled",
+            width=180,
+        )
+        self.boton_whatsapp_panel.pack(fill="x", pady=6)
+
         self.boton_abrir_cliente_panel = ctk.CTkButton(
             acciones_panel,
             text="Abrir cliente",
@@ -303,7 +329,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             state="disabled",
             width=180,
         )
-        self.boton_abrir_cliente_panel.pack(fill="x", pady=6)
+        self.boton_abrir_cliente_panel.pack(fill="x", pady=(6, 6))
 
         self.boton_abrir_resumen_panel = ctk.CTkButton(
             acciones_panel,
@@ -348,6 +374,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         cobrado = self._clave_float(cobrado_total)
         saldo = max(importe_total - cobrado, 0.0)
         estado_cobro = self._calcular_estado_cobro(cobrado, importe_total)
+        vencimiento_texto = str(fila[11] or "").strip()
+        dias_atraso = self._calcular_dias_atraso(vencimiento_texto, estado_cobro)
+        prioridad = self._calcular_prioridad_cobranza(estado_cobro, dias_atraso, saldo)
         factura_id = int(fila[0])
         cliente_id = fila[1]
         emisor_id = fila[2]
@@ -364,7 +393,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "cobrado_total": cobrado,
             "saldo_cobro": saldo,
             "estado_cobro": estado_cobro,
-            "vencimiento_cae": str(fila[11] or "").strip(),
+            "vencimiento": vencimiento_texto,
+            "dias_atraso": dias_atraso,
+            "prioridad": prioridad,
             "tipo_factura": tipo_factura,
             "punto_venta_raw": punto_venta_raw,
             "numero_factura_raw": numero_factura_raw,
@@ -378,6 +409,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 cae,
                 estado,
                 estado_cobro,
+                self._formatear_dias_atraso_columna(dias_atraso, estado_cobro),
+                prioridad,
             ),
             "texto_busqueda": " ".join(
                 [
@@ -388,6 +421,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                     tipo,
                     estado,
                     estado_cobro,
+                    prioridad,
                 ]
             ).lower(),
             "clase_estado": clase_estado,
@@ -400,8 +434,69 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 "total": importe_total,
                 "estado": estado.lower(),
                 "estado_cobro": self._clave_estado_cobro(estado_cobro),
+                "dias_atraso": dias_atraso,
+                "prioridad": self._clave_prioridad_cobranza(prioridad),
             },
         }
+
+    @staticmethod
+    def _calcular_prioridad_cobranza(estado_cobro, dias_atraso, saldo_pendiente):
+        estado = str(estado_cobro or "").strip()
+        dias = int(dias_atraso or 0)
+        saldo = float(saldo_pendiente or 0)
+
+        if estado == "Cobrada" or saldo <= 0:
+            return "SIN ACCIÓN"
+        if estado == "Parcialmente cobrada" and dias > 0:
+            return "ALTA"
+        if estado == "Sin cobrar" and dias > 30:
+            return "ALTA"
+        if estado == "Sin cobrar" and 8 <= dias <= 30:
+            return "MEDIA"
+        return "BAJA"
+
+    @staticmethod
+    def _clave_prioridad_cobranza(prioridad):
+        orden = {
+            "ALTA": 0,
+            "MEDIA": 1,
+            "BAJA": 2,
+            "SIN ACCIÓN": 3,
+        }
+        return orden.get(str(prioridad or "").strip(), 99)
+
+    def _calcular_dias_atraso(self, vencimiento_texto, estado_cobro):
+        if str(estado_cobro or "").strip() == "Cobrada":
+            return 0
+
+        fecha_vencimiento = self._parsear_fecha(vencimiento_texto)
+        if not fecha_vencimiento:
+            return 0
+
+        hoy = datetime.now().date()
+        diferencia = (hoy - fecha_vencimiento.date()).days
+        if diferencia <= 0:
+            return 0
+        return diferencia
+
+    @staticmethod
+    def _parsear_fecha(valor):
+        texto = str(valor or "").strip()
+        if not texto:
+            return None
+
+        for formato in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(texto[:10], formato)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _formatear_dias_atraso_columna(dias_atraso, estado_cobro):
+        if str(estado_cobro or "").strip() == "Cobrada":
+            return "-"
+        return str(int(dias_atraso or 0))
 
     @staticmethod
     def _calcular_estado_cobro(cobrado, importe_total):
@@ -582,12 +677,13 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self.mensaje_vacio.grid_remove()
         for factura in facturas:
             tag_estado_cobro = self._tag_estado_cobro_fila(factura.get("estado_cobro"))
+            tag_prioridad = self._tag_prioridad_fila(factura.get("prioridad"))
             self.tabla.insert(
                 "",
                 "end",
                 iid=str(factura["factura_id"]),
                 values=factura["valores_tabla"],
-                tags=(tag_estado_cobro,),
+                tags=(tag_estado_cobro, tag_prioridad),
             )
 
         seleccion_actual = self.tabla.selection()
@@ -621,7 +717,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "estado_cobro": self._valor_o_guion(factura.get("estado_cobro")),
             "estado": self._valor_o_guion(factura["valores_tabla"][7]),
             "cae": self._valor_o_guion(factura["valores_tabla"][6]),
-            "vencimiento_cae": self._valor_o_guion(self._formatear_fecha(factura.get("vencimiento_cae"))),
+            "vencimiento": self._valor_o_guion(self._formatear_fecha(factura.get("vencimiento"))),
+            "dias_atraso": f"{int(factura.get('dias_atraso') or 0)} días",
+            "prioridad": self._valor_o_guion(factura.get("prioridad")),
             "emisor": self._valor_o_guion(emisor),
             "resumen": resumen_texto,
         }
@@ -632,6 +730,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
         self._detalle_labels["estado_cobro"].configure(
             text_color=self._color_texto_estado_cobro(detalle.get("estado_cobro"))
+        )
+        self._detalle_labels["prioridad"].configure(
+            text_color=self._color_texto_prioridad(detalle.get("prioridad"))
         )
 
         self._actualizar_estado_botones_panel(True)
@@ -665,6 +766,13 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             background="#EAF7EE",
             foreground="#1E4D32",
         )
+        self.tabla.tag_configure("prioridad_alta", foreground=self.COLOR_PRIORIDAD_ALTA)
+        self.tabla.tag_configure("prioridad_media", foreground=self.COLOR_PRIORIDAD_MEDIA)
+        self.tabla.tag_configure("prioridad_baja", foreground=self.COLOR_PRIORIDAD_BAJA)
+        self.tabla.tag_configure(
+            "prioridad_sin_accion",
+            foreground=self.COLOR_PRIORIDAD_SIN_ACCION,
+        )
 
     @staticmethod
     def _tag_estado_cobro_fila(estado_cobro):
@@ -685,9 +793,33 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             return self.COLOR_ESTADO_COBRO_SIN
         return self.COLOR_DETALLE_TEXTO_DEFAULT
 
+    @staticmethod
+    def _tag_prioridad_fila(prioridad):
+        texto = str(prioridad or "").strip()
+        if texto == "ALTA":
+            return "prioridad_alta"
+        if texto == "MEDIA":
+            return "prioridad_media"
+        if texto == "BAJA":
+            return "prioridad_baja"
+        return "prioridad_sin_accion"
+
+    def _color_texto_prioridad(self, prioridad):
+        texto = str(prioridad or "").strip()
+        if texto == "ALTA":
+            return self.COLOR_PRIORIDAD_ALTA
+        if texto == "MEDIA":
+            return self.COLOR_PRIORIDAD_MEDIA
+        if texto == "BAJA":
+            return self.COLOR_PRIORIDAD_BAJA
+        if texto == "SIN ACCIÓN":
+            return self.COLOR_PRIORIDAD_SIN_ACCION
+        return self.COLOR_DETALLE_TEXTO_DEFAULT
+
     def _actualizar_estado_botones_panel(self, habilitado):
         estado = "normal" if habilitado else "disabled"
         self.boton_abrir_pdf_panel.configure(state=estado)
+        self.boton_whatsapp_panel.configure(state=estado)
         self.boton_abrir_cliente_panel.configure(state=estado)
         self.boton_abrir_resumen_panel.configure(state=estado)
 
@@ -716,9 +848,28 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         return texto if texto else "-"
 
     def _abrir_pdf_desde_doble_clic(self, _event=None):
+        datos = self._resolver_pdf_factura_seleccionada()
+        if not datos:
+            return
+
+        try:
+            os.startfile(str(datos["ruta_pdf"]))
+        except OSError as error:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                f"No se pudo abrir el PDF asociado a esta factura.\n\n{error}",
+                parent=self,
+            )
+
+    def _resolver_pdf_factura_seleccionada(self):
         seleccion = self.tabla.selection()
         if not seleccion:
-            return
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "Seleccione una factura para continuar.",
+                parent=self,
+            )
+            return None
 
         try:
             factura_id = int(seleccion[0])
@@ -728,7 +879,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 "No se pudo identificar la factura seleccionada.",
                 parent=self,
             )
-            return
+            return None
 
         factura = self._facturas_por_id.get(factura_id)
         if not factura:
@@ -737,7 +888,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 "No se encontró la información de la factura seleccionada.",
                 parent=self,
             )
-            return
+            return None
 
         valores_fila = self.tabla.item(seleccion[0], "values")
         if not valores_fila or len(valores_fila) < 8:
@@ -746,7 +897,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 "No se pudo leer la fila seleccionada para ubicar el PDF.",
                 parent=self,
             )
-            return
+            return None
 
         emisor_fiscal = self._resolver_emisor_fiscal_desde_factura(factura.get("emisor_id"))
         if not emisor_fiscal:
@@ -755,7 +906,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 "No se pudo identificar el emisor fiscal para esta factura.",
                 parent=self,
             )
-            return
+            return None
 
         carpeta_facturas = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
         if not carpeta_facturas:
@@ -764,7 +915,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 "El emisor fiscal no tiene configurada la carpeta de facturas.",
                 parent=self,
             )
-            return
+            return None
 
         cliente_id = factura.get("cliente_id")
         tipo_factura = self._tipo_factura_desde_fila(str(valores_fila[2] or "").strip())
@@ -778,7 +929,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 "Faltan datos para ubicar el PDF asociado a esta factura.",
                 parent=self,
             )
-            return
+            return None
 
         nombre_pdf = nombre_factura_pdf(cliente_id, tipo_factura, codigo_factura)
         ruta_pdf = Path(carpeta_facturas) / nombre_pdf
@@ -798,7 +949,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                     "\nRevise la carpeta del emisor para abrir el archivo correcto.",
                     parent=self,
                 )
-                return
+                return None
 
         if not ruta_pdf.is_file():
             messagebox.showwarning(
@@ -806,16 +957,13 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 "No se encontró el PDF asociado a esta factura.",
                 parent=self,
             )
-            return
+            return None
 
-        try:
-            os.startfile(str(ruta_pdf))
-        except OSError as error:
-            messagebox.showwarning(
-                "Facturas electrónicas",
-                f"No se pudo abrir el PDF asociado a esta factura.\n\n{error}",
-                parent=self,
-            )
+        return {
+            "factura": factura,
+            "valores_fila": valores_fila,
+            "ruta_pdf": ruta_pdf,
+        }
 
     def _mostrar_menu_contextual(self, event):
         fila = self.tabla.identify_row(event.y)
@@ -831,6 +979,130 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
     def _abrir_pdf_desde_menu(self):
         self._abrir_pdf_desde_doble_clic()
+
+    def _enviar_whatsapp_desde_menu(self):
+        datos = self._resolver_pdf_factura_seleccionada()
+        if not datos:
+            return
+
+        factura = datos["factura"]
+        cliente_id = factura.get("cliente_id")
+        contacto = self._obtener_contacto_cliente_para_whatsapp(cliente_id)
+        if not contacto:
+            messagebox.showwarning(
+                "WhatsApp",
+                "No se encontró el cliente asociado a esta factura.",
+                parent=self,
+            )
+            return
+
+        numero_destino = contacto["numero_destino"]
+        if not numero_destino:
+            messagebox.showwarning(
+                "WhatsApp",
+                "El cliente no tiene WhatsApp ni teléfono cargado.",
+                parent=self,
+            )
+            return
+
+        valores_fila = datos["valores_fila"]
+        mensaje = self._crear_mensaje_whatsapp_factura(
+            nombre_cliente=contacto["nombre"],
+            tipo_factura=str(valores_fila[2] or "").strip(),
+            numero_factura=str(valores_fila[4] or "").strip(),
+            importe=str(valores_fila[5] or "").strip(),
+        )
+
+        try:
+            resultado = WhatsAppService.abrir_whatsapp_factura(
+                numero=numero_destino,
+                mensaje=mensaje,
+                pdf_path=str(datos["ruta_pdf"]),
+            )
+        except (ValueError, OSError) as error:
+            messagebox.showerror("WhatsApp", str(error), parent=self)
+            return
+
+        origen = "WhatsApp" if contacto["fuente"] == "whatsapp" else "Teléfono"
+        canal_resultado = str(resultado.get("canal") or "")
+        if canal_resultado == "desktop+web":
+            canal = "WhatsApp Desktop + fallback Web"
+        elif canal_resultado == "web":
+            canal = "WhatsApp Web"
+        else:
+            canal = "WhatsApp Desktop"
+
+        url_usada = str(resultado.get("url") or "")
+        diagnostico = (
+            "Diagnóstico temporal de envío por WhatsApp\n\n"
+            f"1. Ruta absoluta del PDF:\n{resultado.get('pdf_path', '')}\n\n"
+            f"2. os.path.exists(pdf): {resultado.get('pdf_exists')}\n"
+            f"3. os.path.isfile(pdf): {resultado.get('pdf_isfile')}\n\n"
+            f"4. Comando enviado a Explorer:\n{resultado.get('explorer_command', '')}\n\n"
+            f"5. URL completa enviada a WhatsApp:\n{url_usada}"
+        )
+        print("[WhatsAppFactura][DiagUI] " + diagnostico.replace("\n", " | "))
+        messagebox.showinfo("Diagnóstico WhatsApp", diagnostico, parent=self)
+
+        messagebox.showinfo(
+            "WhatsApp",
+            f"Se abrió {canal} con el mensaje preparado.\n"
+            f"Número utilizado: {origen}.\n"
+            f"URL usada: {url_usada}\n"
+            "Se abrió también el Explorador con el PDF seleccionado para adjuntarlo manualmente.",
+            parent=self,
+        )
+
+        advertencia_explorador = str(resultado.get("explorador_advertencia") or "").strip()
+        if advertencia_explorador:
+            messagebox.showwarning("WhatsApp", advertencia_explorador, parent=self)
+
+    def _obtener_contacto_cliente_para_whatsapp(self, cliente_id):
+        if not cliente_id:
+            return None
+
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(razon_social, ''), ''),
+                COALESCE(NULLIF(nombre_comercial, ''), ''),
+                COALESCE(whatsapp, ''),
+                COALESCE(telefono, '')
+            FROM clientes
+            WHERE id=?
+            """,
+            (cliente_id,),
+        )
+        fila = cur.fetchone()
+        conn.close()
+
+        if not fila:
+            return None
+
+        nombre = str(fila[0] or "").strip() or str(fila[1] or "").strip() or "Cliente"
+        whatsapp = str(fila[2] or "").strip()
+        telefono = str(fila[3] or "").strip()
+        if whatsapp:
+            return {"nombre": nombre, "numero_destino": whatsapp, "fuente": "whatsapp"}
+        if telefono:
+            return {"nombre": nombre, "numero_destino": telefono, "fuente": "telefono"}
+        return {"nombre": nombre, "numero_destino": "", "fuente": ""}
+
+    @staticmethod
+    def _crear_mensaje_whatsapp_factura(nombre_cliente, tipo_factura, numero_factura, importe):
+        nombre = str(nombre_cliente or "Cliente").strip()
+        tipo = str(tipo_factura or "Factura").strip()
+        numero = str(numero_factura or "").strip()
+        importe_texto = str(importe or "-").strip()
+        return (
+            f"Hola {nombre}.\n\n"
+            f"Te enviamos la Factura {tipo} {numero} correspondiente.\n\n"
+            f"Importe: {importe_texto}\n\n"
+            "Muchas gracias.\n\n"
+            "FM Master 98.3"
+        )
 
     def _abrir_cliente_desde_menu(self):
         factura = self._obtener_factura_seleccionada()
