@@ -9,4 +9,5 @@ class Cobro:
     importe: float = 0
     forma_pago: str = ""
     comprobante: str = ""
+    factura_arca_id: int = None
     observaciones: str = ""

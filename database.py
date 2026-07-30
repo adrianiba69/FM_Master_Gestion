@@ -497,6 +497,7 @@ def crear_base():
         importe REAL NOT NULL DEFAULT 0,
         forma_pago TEXT,
         comprobante TEXT,
+        factura_arca_id INTEGER,
         observaciones TEXT,
 
         FOREIGN KEY(cliente_id)
@@ -511,6 +512,7 @@ def crear_base():
         "importe": "REAL DEFAULT 0",
         "forma_pago": "TEXT",
         "comprobante": "TEXT",
+        "factura_arca_id": "INTEGER",
         "observaciones": "TEXT"
     }
 

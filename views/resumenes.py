@@ -1281,41 +1281,160 @@ class ResumenesFrame(ctk.CTkFrame):
         )
 
     def abrir_pdf_seleccionado(self):
-        seleccion = self.tabla.selection()
-        if not seleccion:
-            messagebox.showwarning("Atencion", "Seleccione un resumen para abrir.")
+        resumen_id = self._obtener_resumen_id_seleccionado(
+            titulo="Atencion",
+            mensaje="Seleccione un resumen para abrir.",
+        )
+        if resumen_id is None:
             return
 
-        valores = self.tabla.item(seleccion[0], "values")
-        resumen_id = int(valores[0])
-        ruta = valores[8] if len(valores) > 8 else ""
+        resumen = ResumenService.obtener(resumen_id)
+        if resumen is None:
+            messagebox.showwarning("Atencion", "No se encontró el resumen seleccionado.")
+            return
 
         try:
-            if not ruta or not Path(ruta).exists():
-                ruta = ResumenPDF.generar(resumen_id)
-                self.cargar_resumenes()
-            os.startfile(str(Path(ruta).resolve()))
+            ruta_pdf = self._resolver_pdf_resumen(resumen)
+            os.startfile(str(ruta_pdf))
         except (OSError, ValueError) as error:
             messagebox.showerror("Error", f"No se pudo abrir el PDF: {error}")
 
-    def enviar_whatsapp_seleccionado(self):
+    def _obtener_resumen_id_seleccionado(self, titulo, mensaje):
         seleccion = self.tabla.selection()
         if not seleccion:
-            messagebox.showwarning("Atencion", "Seleccione un resumen para enviar.")
-            return
+            messagebox.showwarning(titulo, mensaje, parent=self)
+            return None
 
         valores = self.tabla.item(seleccion[0], "values")
-        resumen_id = int(valores[0])
         try:
-            datos = WhatsAppService.abrir_whatsapp_resumen(resumen_id)
+            return int(valores[0])
+        except (TypeError, ValueError, IndexError):
+            messagebox.showwarning(titulo, "No se pudo identificar el resumen seleccionado.", parent=self)
+            return None
+
+    def _resolver_pdf_resumen(self, resumen):
+        if resumen is None:
+            raise ValueError("No se encontró el resumen seleccionado.")
+
+        ruta_guardada = str(getattr(resumen, "pdf_path", "") or "").strip()
+        ruta_pdf = self._normalizar_ruta_pdf(ruta_guardada) if ruta_guardada else None
+
+        if ruta_pdf is None or not ruta_pdf.is_file():
+            ruta_regenerada = ResumenPDF.generar(resumen.id)
+            self.cargar_resumenes()
+            ruta_pdf = self._normalizar_ruta_pdf(ruta_regenerada)
+
+        if ruta_pdf is None or not ruta_pdf.is_file():
+            raise ValueError("No se encontró el archivo PDF del resumen.")
+
+        return ruta_pdf
+
+    @staticmethod
+    def _normalizar_ruta_pdf(ruta_pdf):
+        ruta = Path(str(ruta_pdf or "").strip())
+        if not str(ruta):
+            return None
+        if not ruta.is_absolute():
+            ruta = PDF_DIR.parent / ruta
+        return ruta.resolve()
+
+    @staticmethod
+    def _obtener_contacto_cliente_para_whatsapp(cliente):
+        nombre = str(cliente[2] if len(cliente) > 2 else "" or "").strip()
+        nombre_comercial = str(cliente[3] if len(cliente) > 3 else "" or "").strip()
+        nombre_cliente = nombre or nombre_comercial or "Cliente"
+        whatsapp = str(cliente[8] if len(cliente) > 8 else "" or "").strip()
+        telefono = str(cliente[7] if len(cliente) > 7 else "" or "").strip()
+
+        if whatsapp:
+            return {"nombre": nombre_cliente, "numero_destino": whatsapp, "fuente": "whatsapp"}
+        if telefono:
+            return {"nombre": nombre_cliente, "numero_destino": telefono, "fuente": "telefono"}
+        return {"nombre": nombre_cliente, "numero_destino": "", "fuente": ""}
+
+    def _crear_mensaje_whatsapp_resumen(self, nombre_cliente, numero_resumen, importe, vencimiento):
+        nombre = str(nombre_cliente or "Cliente").strip()
+        importe_texto = self.formatear_moneda(importe)
+        vencimiento_texto = self.formatear_fecha(vencimiento)
+        return (
+            f"Hola {nombre}.\n\n"
+            f"Te enviamos el Resumen N.º {numero_resumen} correspondiente.\n\n"
+            f"Importe: {importe_texto}\n"
+            f"Vencimiento: {vencimiento_texto}\n\n"
+            "Muchas gracias.\n\n"
+            "FM Master 98.3"
+        )
+
+    def enviar_whatsapp_seleccionado(self):
+        resumen_id = self._obtener_resumen_id_seleccionado(
+            titulo="Atencion",
+            mensaje="Seleccione un resumen para enviar.",
+        )
+        if resumen_id is None:
+            return
+
+        resumen = ResumenService.obtener(resumen_id)
+        if resumen is None:
+            messagebox.showwarning("WhatsApp", "No se encontró el resumen seleccionado.", parent=self)
+            return
+
+        cliente = ClienteService.obtener(resumen.cliente_id)
+        if cliente is None:
+            messagebox.showwarning("WhatsApp", "No se encontró el cliente asociado al resumen.", parent=self)
+            return
+
+        contacto = self._obtener_contacto_cliente_para_whatsapp(cliente)
+        if not contacto["numero_destino"]:
+            messagebox.showwarning(
+                "WhatsApp",
+                "El cliente no tiene WhatsApp ni teléfono cargado.",
+                parent=self,
+            )
+            return
+
+        try:
+            numero_normalizado = WhatsAppService.normalizar_numero(contacto["numero_destino"])
+        except ValueError as error:
+            messagebox.showwarning("WhatsApp", str(error), parent=self)
+            return
+
+        try:
+            ruta_pdf = self._resolver_pdf_resumen(resumen)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("WhatsApp", str(error), parent=self)
+            return
+
+        numero_resumen = f"{int(resumen.numero or 0):06d}" if resumen.numero else "-"
+        mensaje = self._crear_mensaje_whatsapp_resumen(
+            nombre_cliente=contacto["nombre"],
+            numero_resumen=numero_resumen,
+            importe=float(resumen.total or 0),
+            vencimiento=str(resumen.fecha_vencimiento or ""),
+        )
+
+        try:
+            resultado = WhatsAppService.abrir_whatsapp_factura(
+                numero=numero_normalizado,
+                mensaje=mensaje,
+                pdf_path=str(ruta_pdf),
+            )
         except (ValueError, OSError) as error:
             messagebox.showerror("WhatsApp", str(error), parent=self)
             return
 
+        origen = "WhatsApp" if contacto["fuente"] == "whatsapp" else "Teléfono"
+        advertencia_explorador = str(resultado.get("explorador_advertencia") or "").strip()
+        texto_final = (
+            "Se abrió WhatsApp Desktop con el mensaje preparado.\n"
+            f"Número utilizado: {origen}.\n"
+            "Adjuntá manualmente el PDF seleccionado en el Explorador."
+        )
+        if advertencia_explorador:
+            texto_final += f"\n\n{advertencia_explorador}"
+
         messagebox.showinfo(
-            "WhatsApp Web",
-            "WhatsApp se abrió con el mensaje preparado. "
-            "Adjuntá manualmente el PDF que se abrió en la carpeta.",
+            "WhatsApp",
+            texto_final,
             parent=self,
         )
 

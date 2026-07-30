@@ -62,12 +62,14 @@ class WhatsAppService:
     @classmethod
     def abrir_whatsapp_resumen(cls, resumen_id):
         datos = cls.preparar_envio_resumen(resumen_id)
-        webbrowser.open(datos["url"], new=0)
-        cls.mostrar_pdf_en_explorador(datos["pdf_path"])
-        return datos
+        return cls.abrir_whatsapp_con_adjunto(
+            numero=datos["numero"],
+            mensaje=cls.MENSAJE,
+            pdf_path=datos["pdf_path"],
+        )
 
     @classmethod
-    def abrir_whatsapp_factura(cls, numero, mensaje, pdf_path):
+    def abrir_whatsapp_con_adjunto(cls, numero, mensaje, pdf_path):
         numero_normalizado = cls.normalizar_numero(numero)
         ruta_pdf_abs = os.path.abspath(os.path.normpath(str(pdf_path or "")))
         if not os.path.exists(ruta_pdf_abs) or not os.path.isfile(ruta_pdf_abs):
@@ -84,6 +86,10 @@ class WhatsAppService:
             "explorador_seleccion_ok": bool(resultado_explorador.get("seleccion_ok")),
             "explorador_advertencia": resultado_explorador.get("advertencia", ""),
         }
+
+    @classmethod
+    def abrir_whatsapp_factura(cls, numero, mensaje, pdf_path):
+        return cls.abrir_whatsapp_con_adjunto(numero=numero, mensaje=mensaje, pdf_path=pdf_path)
 
     @staticmethod
     def abrir_chat_con_fallback(numero_normalizado, mensaje):
