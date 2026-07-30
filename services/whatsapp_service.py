@@ -70,29 +70,17 @@ class WhatsAppService:
     def abrir_whatsapp_factura(cls, numero, mensaje, pdf_path):
         numero_normalizado = cls.normalizar_numero(numero)
         ruta_pdf_abs = os.path.abspath(os.path.normpath(str(pdf_path or "")))
-        existe = os.path.exists(ruta_pdf_abs)
-        es_archivo = os.path.isfile(ruta_pdf_abs)
-        print(f"[WhatsAppFactura][Diag] Ruta absoluta PDF: {ruta_pdf_abs}")
-        print(f"[WhatsAppFactura][Diag] os.path.exists(pdf): {existe}")
-        print(f"[WhatsAppFactura][Diag] os.path.isfile(pdf): {es_archivo}")
-        if not existe or not es_archivo:
+        if not os.path.exists(ruta_pdf_abs) or not os.path.isfile(ruta_pdf_abs):
             raise ValueError("No se encontró el archivo PDF para adjuntar.")
 
         resultado_chat = cls.abrir_chat_con_fallback(numero_normalizado, mensaje)
         resultado_explorador = cls.mostrar_pdf_en_explorador(ruta_pdf_abs)
-        comando_explorer = str(resultado_explorador.get("comando", ""))
-        url_usada = str(resultado_chat["url"])
-        print(f"[WhatsAppFactura][Diag] Comando Explorer enviado: {comando_explorer}")
-        print(f"[WhatsAppFactura][Diag] URL WhatsApp usada: {url_usada}")
         return {
             "numero": numero_normalizado,
             "canal": resultado_chat["canal"],
-            "url": url_usada,
+            "url": str(resultado_chat["url"]),
             "url_desktop": resultado_chat.get("url_desktop", ""),
             "pdf_path": ruta_pdf_abs,
-            "pdf_exists": existe,
-            "pdf_isfile": es_archivo,
-            "explorer_command": comando_explorer,
             "explorador_seleccion_ok": bool(resultado_explorador.get("seleccion_ok")),
             "explorador_advertencia": resultado_explorador.get("advertencia", ""),
         }
@@ -107,17 +95,13 @@ class WhatsAppService:
         mensaje_codificado = quote(texto, safe="")
         url_desktop = f"whatsapp://send?phone={numero}&text={mensaje_codificado}"
 
-        print(f"[WhatsAppFactura] URL desktop generada: {url_desktop}")
-
         try:
             if hasattr(os, "startfile"):
                 os.startfile(url_desktop)
-                print(f"[WhatsAppFactura] URL usada: {url_desktop}")
                 return {"canal": "desktop", "url": url_desktop, "url_desktop": url_desktop}
             else:
                 desktop_abierto = bool(webbrowser.open(url_desktop, new=0, autoraise=True))
                 if desktop_abierto:
-                    print(f"[WhatsAppFactura] URL usada: {url_desktop}")
                     return {"canal": "desktop", "url": url_desktop, "url_desktop": url_desktop}
         except (OSError, webbrowser.Error):
             pass
@@ -131,7 +115,6 @@ class WhatsAppService:
             raise ValueError("No se encontro el archivo PDF para mostrar.")
 
         comando_select = f'explorer /select,"{os.path.normpath(ruta_pdf)}"'
-        print(f"[WhatsAppFactura] Comando Explorer: {comando_select}")
 
         try:
             subprocess.Popen(
@@ -142,12 +125,10 @@ class WhatsAppService:
             return {
                 "seleccion_ok": True,
                 "advertencia": "",
-                "comando": str(comando_select),
             }
         except OSError:
             carpeta = os.path.dirname(ruta_pdf) or ruta_pdf
             comando_carpeta = ["explorer", os.path.normpath(carpeta)]
-            print(f"[WhatsAppFactura] Fallback Explorer carpeta: {comando_carpeta}")
             try:
                 subprocess.Popen(
                     comando_carpeta,
@@ -159,7 +140,6 @@ class WhatsAppService:
                         "No se pudo seleccionar el PDF automáticamente en Explorer.\n"
                         f"Ruta del archivo: {ruta_pdf}"
                     ),
-                    "comando": str(comando_select),
                 }
             except (AttributeError, OSError) as error:
                 raise OSError(

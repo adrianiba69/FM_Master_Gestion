@@ -1033,17 +1033,6 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             canal = "WhatsApp Desktop"
 
         url_usada = str(resultado.get("url") or "")
-        diagnostico = (
-            "Diagnóstico temporal de envío por WhatsApp\n\n"
-            f"1. Ruta absoluta del PDF:\n{resultado.get('pdf_path', '')}\n\n"
-            f"2. os.path.exists(pdf): {resultado.get('pdf_exists')}\n"
-            f"3. os.path.isfile(pdf): {resultado.get('pdf_isfile')}\n\n"
-            f"4. Comando enviado a Explorer:\n{resultado.get('explorer_command', '')}\n\n"
-            f"5. URL completa enviada a WhatsApp:\n{url_usada}"
-        )
-        print("[WhatsAppFactura][DiagUI] " + diagnostico.replace("\n", " | "))
-        messagebox.showinfo("Diagnóstico WhatsApp", diagnostico, parent=self)
-
         messagebox.showinfo(
             "WhatsApp",
             f"Se abrió {canal} con el mensaje preparado.\n"
