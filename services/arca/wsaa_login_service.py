@@ -1,4 +1,5 @@
 from base64 import b64encode
+import hashlib
 from pathlib import Path
 import json
 import urllib.error
@@ -13,31 +14,34 @@ class WSAALoginService:
     WSAA_HOMOLOGACION_URL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms"
     TIMEOUT_SEGUNDOS = 20
     
-    # Cache de TA en memoria (por sesión)
-    _ta_cache = {
-        "token": "",
-        "sign": "",
-        "expiration": "",
-        "timestamp": 0,
-    }
+    # Cache de TA en memoria (por sesión), segmentado por identidad de emisor.
+    _ta_cache = {}
     
     # Archivo de caché en disco (persiste entre ejecuciones)
-    _TA_CACHE_FILENAME = "ta_cache_homologacion.json"
+    _TA_CACHE_FILENAME_PREFIX = "ta_cache_homologacion"
 
     @staticmethod
-    def _ruta_cache_disco(ruta_tra):
+    def _cache_key(ruta_certificado, ruta_clave):
+        cert = str(Path(str(ruta_certificado or "")).resolve()) if str(ruta_certificado or "").strip() else ""
+        clave = str(Path(str(ruta_clave or "")).resolve()) if str(ruta_clave or "").strip() else ""
+        base = f"{cert}|{clave}|{WSAALoginService.WSAA_HOMOLOGACION_URL}"
+        return hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+    @staticmethod
+    def _ruta_cache_disco(ruta_tra, cache_key):
         """Devuelve la ruta del archivo de caché junto al TRA."""
         try:
             carpeta = Path(str(ruta_tra)).parent
-            return carpeta / WSAALoginService._TA_CACHE_FILENAME
+            nombre = f"{WSAALoginService._TA_CACHE_FILENAME_PREFIX}_{cache_key}.json"
+            return carpeta / nombre
         except Exception:
             return None
 
     @staticmethod
-    def _leer_cache_disco(ruta_tra):
+    def _leer_cache_disco(ruta_tra, cache_key):
         """Lee el TA guardado en disco. Devuelve dict o None."""
         try:
-            ruta = WSAALoginService._ruta_cache_disco(ruta_tra)
+            ruta = WSAALoginService._ruta_cache_disco(ruta_tra, cache_key)
             if ruta and ruta.exists():
                 datos = json.loads(ruta.read_text(encoding="utf-8"))
                 return datos
@@ -46,10 +50,10 @@ class WSAALoginService:
         return None
 
     @staticmethod
-    def _guardar_cache_disco(ruta_tra, token, sign, expiration):
+    def _guardar_cache_disco(ruta_tra, cache_key, token, sign, expiration):
         """Guarda el TA en disco para persistir entre ejecuciones."""
         try:
-            ruta = WSAALoginService._ruta_cache_disco(ruta_tra)
+            ruta = WSAALoginService._ruta_cache_disco(ruta_tra, cache_key)
             if ruta:
                 datos = {"token": token, "sign": sign, "expiration": expiration}
                 ruta.write_text(json.dumps(datos, indent=2), encoding="utf-8")
@@ -86,16 +90,19 @@ class WSAALoginService:
             "cuerpo_respuesta_sanitizado": "",
             "errores": [],
         }
+
+        cache_key = WSAALoginService._cache_key(ruta_certificado, ruta_clave)
+        cache_memoria = WSAALoginService._ta_cache.get(cache_key, {})
         
         # DEBUG: Verificar si existe TA en caché válido
         # 1. Verificar caché en memoria (misma sesión)
         if WSAALoginService._validar_ta(
-            WSAALoginService._ta_cache["token"],
-            WSAALoginService._ta_cache["sign"],
-            WSAALoginService._ta_cache["expiration"],
+            cache_memoria.get("token", ""),
+            cache_memoria.get("sign", ""),
+            cache_memoria.get("expiration", ""),
         ):
             ahora_utc = datetime.now(timezone.utc)
-            exp_text = WSAALoginService._ta_cache["expiration"].replace("Z", "+00:00")
+            exp_text = str(cache_memoria.get("expiration", "")).replace("Z", "+00:00")
             exp_dt = datetime.fromisoformat(exp_text)
             if exp_dt.tzinfo is None:
                 exp_dt = exp_dt.replace(tzinfo=timezone.utc)
@@ -105,13 +112,13 @@ class WSAALoginService:
             print(f"  Expira (UTC): {exp_utc.isoformat()}")
             print("  TA reutilizado: SÍ (memoria)")
             resultado["ok"] = True
-            resultado["token"] = WSAALoginService._ta_cache["token"]
-            resultado["sign"] = WSAALoginService._ta_cache["sign"]
-            resultado["expiration"] = WSAALoginService._ta_cache["expiration"]
+            resultado["token"] = cache_memoria.get("token", "")
+            resultado["sign"] = cache_memoria.get("sign", "")
+            resultado["expiration"] = cache_memoria.get("expiration", "")
             return resultado
         
         # 2. Verificar caché en disco (entre ejecuciones)
-        cache_disco = WSAALoginService._leer_cache_disco(ruta_tra)
+        cache_disco = WSAALoginService._leer_cache_disco(ruta_tra, cache_key)
         if cache_disco:
             token_d = cache_disco.get("token", "")
             sign_d = cache_disco.get("sign", "")
@@ -128,9 +135,11 @@ class WSAALoginService:
                 print(f"  Expira (UTC): {exp_utc.isoformat()}")
                 print("  TA reutilizado: SÍ (disco)")
                 # Cargar también en memoria
-                WSAALoginService._ta_cache["token"] = token_d
-                WSAALoginService._ta_cache["sign"] = sign_d
-                WSAALoginService._ta_cache["expiration"] = exp_d
+                WSAALoginService._ta_cache[cache_key] = {
+                    "token": token_d,
+                    "sign": sign_d,
+                    "expiration": exp_d,
+                }
                 resultado["ok"] = True
                 resultado["token"] = token_d
                 resultado["sign"] = sign_d
@@ -216,15 +225,16 @@ class WSAALoginService:
             print("DEBUG WSAA - AFIP reportó 'alreadyAuthenticated'")
             print(f"  FaultCode original: {parseo.get('faultcode', '')}")
             # Intentar reutilizar TA del caché en memoria
-            if WSAALoginService._ta_cache.get("token"):
+            cache_memoria = WSAALoginService._ta_cache.get(cache_key, {})
+            if cache_memoria.get("token"):
                 print("  Reutilizando TA del caché (memoria)")
                 resultado["ok"] = True
-                resultado["token"] = WSAALoginService._ta_cache["token"]
-                resultado["sign"] = WSAALoginService._ta_cache["sign"]
-                resultado["expiration"] = WSAALoginService._ta_cache["expiration"]
+                resultado["token"] = cache_memoria.get("token", "")
+                resultado["sign"] = cache_memoria.get("sign", "")
+                resultado["expiration"] = cache_memoria.get("expiration", "")
                 return resultado
             # Intentar reutilizar TA del caché en disco
-            cache_disco = WSAALoginService._leer_cache_disco(ruta_tra)
+            cache_disco = WSAALoginService._leer_cache_disco(ruta_tra, cache_key)
             if cache_disco and cache_disco.get("token"):
                 print("  Reutilizando TA del caché (disco)")
                 resultado["ok"] = True
@@ -274,13 +284,16 @@ class WSAALoginService:
                 print(f"  AVISO: No se pudo normalizar fecha: {e}")
         
         # Guardar en caché en memoria
-        WSAALoginService._ta_cache["token"] = resultado["token"]
-        WSAALoginService._ta_cache["sign"] = resultado["sign"]
-        WSAALoginService._ta_cache["expiration"] = resultado["expiration"]
+        WSAALoginService._ta_cache[cache_key] = {
+            "token": resultado["token"],
+            "sign": resultado["sign"],
+            "expiration": resultado["expiration"],
+        }
         
         # Guardar en caché en disco (persiste entre ejecuciones)
         WSAALoginService._guardar_cache_disco(
             ruta_tra,
+            cache_key,
             resultado["token"],
             resultado["sign"],
             resultado["expiration"],

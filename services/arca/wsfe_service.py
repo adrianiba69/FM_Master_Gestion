@@ -335,7 +335,7 @@ class WSFEService:
 
         token_texto = str(token or "").strip()
         sign_texto = str(sign or "").strip()
-        cuit_texto = str(cuit or "").strip()
+        cuit_texto = "".join(ch for ch in str(cuit or "").strip() if ch.isdigit())
 
         if not token_texto:
             resultado["errores"].append("Token no informado.")
@@ -345,6 +345,9 @@ class WSFEService:
             return resultado
         if not cuit_texto:
             resultado["errores"].append("CUIT no informado.")
+            return resultado
+        if len(cuit_texto) != 11:
+            resultado["errores"].append("CUIT inválido.")
             return resultado
 
         try:
