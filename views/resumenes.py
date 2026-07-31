@@ -586,6 +586,25 @@ class ResumenesFrame(ctk.CTkFrame):
             tipo_documento = 99
             documento_receptor = 0
 
+        pre_guardado = FacturaArcaService.validar_pre_guardado(
+            cliente_id=cliente[0],
+            emisor_id=emisor_facturacion_id,
+            resumen_id=resumen.id,
+            fecha=date.today().isoformat(),
+            punto_venta=str(punto_venta_normalizado),
+            tipo_comprobante="Factura C",
+            importe_total=total_factura,
+            estado="Facturada manualmente",
+        )
+        if not pre_guardado.get("ok"):
+            errores_pre = "\n- ".join(pre_guardado.get("errores") or ["Validación local fallida."])
+            messagebox.showerror(
+                "Emitir factura",
+                "No se puede emitir en ARCA porque la factura no se puede persistir localmente.\n\n- " + errores_pre,
+                parent=self,
+            )
+            return
+
         try:
             nombre_emisor = EmisorFiscalService.etiqueta_visible(emisor_fiscal)
             print("DIAGNOSTICO EMISION RESUMENES")
@@ -633,6 +652,8 @@ class ResumenesFrame(ctk.CTkFrame):
                 tipo_comprobante=11,
                 numero_comprobante=numero_emitido,
                 carpeta_trabajo=carpeta_facturas,
+                token=emision.get("token"),
+                sign=emision.get("sign"),
             )
             if not consulta.get("ok"):
                 messagebox.showerror(

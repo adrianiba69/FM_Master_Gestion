@@ -1472,6 +1472,8 @@ class FichaClienteFrame(ctk.CTkFrame):
                 tipo_comprobante=11,
                 numero_comprobante=numero_emitido,
                 carpeta_trabajo=carpeta_facturas,
+                token=emision.get("token"),
+                sign=emision.get("sign"),
             )
 
             if not consulta.get("ok"):

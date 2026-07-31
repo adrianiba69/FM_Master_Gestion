@@ -16,6 +16,8 @@ class HomologacionService:
         tipo_comprobante,
         numero_comprobante,
         carpeta_trabajo,
+        token=None,
+        sign=None,
     ):
         resultado = {
             "ok": False,
@@ -49,36 +51,39 @@ class HomologacionService:
             resultado["errores"].append("Carpeta de trabajo no informada.")
             return resultado
 
-        ruta_tra = WSAAService.guardar_tra(
-            Path(carpeta_texto) / "tra_wsfe_comp_consultar.xml",
-            servicio="wsfe",
-            duracion_segundos=3600,
-        )
+        token_texto = str(token or "").strip()
+        sign_texto = str(sign or "").strip()
+        if not token_texto or not sign_texto:
+            ruta_tra = WSAAService.guardar_tra(
+                Path(carpeta_texto) / "tra_wsfe_comp_consultar.xml",
+                servicio="wsfe",
+                duracion_segundos=3600,
+            )
 
-        login = WSAALoginService.login_homologacion(
-            ruta_tra=ruta_tra,
-            ruta_certificado=ruta_certificado,
-            ruta_clave=ruta_clave,
-        )
+            login = WSAALoginService.login_homologacion(
+                ruta_tra=ruta_tra,
+                ruta_certificado=ruta_certificado,
+                ruta_clave=ruta_clave,
+            )
 
-        if not login.get("ok"):
-            resultado["errores"].extend(login.get("errores") or ["No se pudo autenticar en WSAA."])
-            if login.get("faultcode"):
-                resultado["faultcode"] = str(login.get("faultcode") or "")
-            if login.get("faultstring"):
-                resultado["faultstring"] = str(login.get("faultstring") or "")
-            return resultado
+            if not login.get("ok"):
+                resultado["errores"].extend(login.get("errores") or ["No se pudo autenticar en WSAA."])
+                if login.get("faultcode"):
+                    resultado["faultcode"] = str(login.get("faultcode") or "")
+                if login.get("faultstring"):
+                    resultado["faultstring"] = str(login.get("faultstring") or "")
+                return resultado
 
-        token = str(login.get("token") or "").strip()
-        sign = str(login.get("sign") or "").strip()
+            token_texto = str(login.get("token") or "").strip()
+            sign_texto = str(login.get("sign") or "").strip()
 
-        if not token or not sign:
+        if not token_texto or not sign_texto:
             resultado["errores"].append("WSAA no devolvio credenciales de acceso validas.")
             return resultado
 
         consulta = WSFEService.fe_comp_consultar(
-            token=token,
-            sign=sign,
+            token=token_texto,
+            sign=sign_texto,
             cuit=cuit_emisor,
             punto_venta=punto_venta,
             tipo_comprobante=tipo_comprobante,
@@ -114,6 +119,8 @@ class HomologacionService:
             "cae_recibido": False,
             "cae": "",
             "vencimiento_cae": "",
+            "token": "",
+            "sign": "",
             "numero_comprobante": 0,
             "punto_venta": int(punto_venta or 0) if str(punto_venta or "").strip().isdigit() else 0,
             "tipo_comprobante": tipo_comprobante,
@@ -156,6 +163,8 @@ class HomologacionService:
 
         token = str(login.get("token") or "").strip()
         sign = str(login.get("sign") or "").strip()
+        resultado["token"] = token
+        resultado["sign"] = sign
         resultado["expiration_ticket"] = str(login.get("expiration") or "")
 
         if not token or not sign:

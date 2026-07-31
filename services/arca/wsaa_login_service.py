@@ -200,6 +200,41 @@ class WSAALoginService:
             resultado["faultcode"] = parseo.get("faultcode", "")
             resultado["faultstring"] = parseo.get("faultstring", "")
             resultado["detail"] = parseo.get("detail", "")
+
+            faultcode_str = str(parseo.get("faultcode", "")).lower()
+            if "alreadyauthenticated" in faultcode_str:
+                print("DEBUG WSAA - SOAP Fault alreadyAuthenticated recibido en HTTPError")
+                cache_memoria = WSAALoginService._ta_cache.get(cache_key, {})
+                if WSAALoginService._validar_ta(
+                    cache_memoria.get("token", ""),
+                    cache_memoria.get("sign", ""),
+                    cache_memoria.get("expiration", ""),
+                ):
+                    print("DEBUG WSAA - Reutilizando TA valido de memoria tras alreadyAuthenticated")
+                    resultado["ok"] = True
+                    resultado["token"] = cache_memoria.get("token", "")
+                    resultado["sign"] = cache_memoria.get("sign", "")
+                    resultado["expiration"] = cache_memoria.get("expiration", "")
+                    return resultado
+
+                cache_disco = WSAALoginService._leer_cache_disco(ruta_tra, cache_key)
+                if cache_disco and WSAALoginService._validar_ta(
+                    cache_disco.get("token", ""),
+                    cache_disco.get("sign", ""),
+                    cache_disco.get("expiration", ""),
+                ):
+                    print("DEBUG WSAA - Reutilizando TA valido de disco tras alreadyAuthenticated")
+                    resultado["ok"] = True
+                    resultado["token"] = cache_disco.get("token", "")
+                    resultado["sign"] = cache_disco.get("sign", "")
+                    resultado["expiration"] = cache_disco.get("expiration", "")
+                    WSAALoginService._ta_cache[cache_key] = {
+                        "token": resultado["token"],
+                        "sign": resultado["sign"],
+                        "expiration": resultado["expiration"],
+                    }
+                    return resultado
+
             if parseo.get("errores"):
                 resultado["errores"].extend(parseo.get("errores"))
             else:
