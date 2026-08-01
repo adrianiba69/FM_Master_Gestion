@@ -93,11 +93,12 @@ class HomologacionService:
         return consulta
 
     @staticmethod
-    def emitir_factura_c_prueba(
+    def emitir_comprobante_prueba(
         ruta_certificado,
         ruta_clave,
         cuit_emisor,
         punto_venta,
+        tipo_comprobante,
         condicion_iva_receptor_id,
         concepto,
         tipo_documento,
@@ -108,11 +109,20 @@ class HomologacionService:
         importe_exento,
         fecha_comprobante,
         carpeta_trabajo,
+        importe_tot_conc=0.0,
+        importe_tributos=0.0,
+        alicuotas_iva=None,
+        moneda="PES",
+        cotizacion=1.0,
         fecha_servicio_desde=None,
         fecha_servicio_hasta=None,
         fecha_vencimiento_pago=None,
     ):
-        tipo_comprobante = 11
+        try:
+            tipo_comprobante_int = int(tipo_comprobante)
+        except (TypeError, ValueError):
+            tipo_comprobante_int = 0
+
         resultado = {
             "ok": False,
             "resultado": "",
@@ -123,7 +133,7 @@ class HomologacionService:
             "sign": "",
             "numero_comprobante": 0,
             "punto_venta": int(punto_venta or 0) if str(punto_venta or "").strip().isdigit() else 0,
-            "tipo_comprobante": tipo_comprobante,
+            "tipo_comprobante": tipo_comprobante_int,
             "fecha_comprobante": str(fecha_comprobante or "").strip(),
             "observaciones": [],
             "errores_arca": [],
@@ -176,7 +186,7 @@ class HomologacionService:
             sign=sign,
             cuit=cuit_emisor,
             punto_venta=punto_venta,
-            tipo_comprobante=tipo_comprobante,
+            tipo_comprobante=tipo_comprobante_int,
         )
         if not consulta_ultimo.get("ok"):
             resultado["errores"].extend(
@@ -200,7 +210,7 @@ class HomologacionService:
         armado = WSFEService.construir_solicitud_cae(
             cuit=cuit_emisor,
             punto_venta=punto_venta,
-            tipo_comprobante=tipo_comprobante,
+            tipo_comprobante=tipo_comprobante_int,
             numero_comprobante=numero_comprobante,
             condicion_iva_receptor_id=condicion_iva_receptor_id,
             concepto=concepto,
@@ -211,8 +221,11 @@ class HomologacionService:
             importe_iva=importe_iva,
             importe_exento=importe_exento,
             fecha_comprobante=fecha_comprobante,
-            moneda="PES",
-            cotizacion=1.0,
+            moneda=moneda,
+            cotizacion=cotizacion,
+            importe_tot_conc=importe_tot_conc,
+            importe_tributos=importe_tributos,
+            alicuotas_iva=alicuotas_iva,
             fecha_servicio_desde=fecha_servicio_desde,
             fecha_servicio_hasta=fecha_servicio_hasta,
             fecha_vencimiento_pago=fecha_vencimiento_pago,
@@ -248,6 +261,47 @@ class HomologacionService:
         resultado["ok"] = True
         resultado["cae_recibido"] = bool(resultado["cae"])
         return resultado
+
+    @staticmethod
+    def emitir_factura_c_prueba(
+        ruta_certificado,
+        ruta_clave,
+        cuit_emisor,
+        punto_venta,
+        condicion_iva_receptor_id,
+        concepto,
+        tipo_documento,
+        documento_receptor,
+        importe_total,
+        importe_neto,
+        importe_iva,
+        importe_exento,
+        fecha_comprobante,
+        carpeta_trabajo,
+        fecha_servicio_desde=None,
+        fecha_servicio_hasta=None,
+        fecha_vencimiento_pago=None,
+    ):
+        return HomologacionService.emitir_comprobante_prueba(
+            ruta_certificado=ruta_certificado,
+            ruta_clave=ruta_clave,
+            cuit_emisor=cuit_emisor,
+            punto_venta=punto_venta,
+            tipo_comprobante=11,
+            condicion_iva_receptor_id=condicion_iva_receptor_id,
+            concepto=concepto,
+            tipo_documento=tipo_documento,
+            documento_receptor=documento_receptor,
+            importe_total=importe_total,
+            importe_neto=importe_neto,
+            importe_iva=importe_iva,
+            importe_exento=importe_exento,
+            fecha_comprobante=fecha_comprobante,
+            carpeta_trabajo=carpeta_trabajo,
+            fecha_servicio_desde=fecha_servicio_desde,
+            fecha_servicio_hasta=fecha_servicio_hasta,
+            fecha_vencimiento_pago=fecha_vencimiento_pago,
+        )
 
     @staticmethod
     def consultar_ultimo_comprobante(

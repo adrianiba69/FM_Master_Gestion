@@ -20,6 +20,10 @@ from services.whatsapp_service import WhatsAppService
 
 
 class ResumenesFrame(ctk.CTkFrame):
+    # Criterio fiscal explícito para Factura A: los importes de servicios/resumen se
+    # interpretan como NETOS gravados y se adiciona IVA en la emisión.
+    FACTURA_A_SERVICIOS_IMPORTE_ES_NETO = True
+    FACTURA_A_ALICUOTA_PORCENTAJE = 21.0
 
     def __init__(self, master, cliente_id=None, on_cambio=None, contexto_facturacion=None):
         super().__init__(master, fg_color="white", corner_radius=0)
@@ -445,10 +449,11 @@ class ResumenesFrame(ctk.CTkFrame):
             )
             return
 
-        if tipo_factura != "Factura C":
+        tipo_factura_normalizado = str(tipo_factura or "").strip()
+        if tipo_factura_normalizado not in {"Factura C", "Factura A"}:
             messagebox.showerror(
                 "Emitir factura",
-                "El tipo de factura configurado no es compatible con este flujo automático (solo Factura C).",
+                "El tipo de factura configurado no es compatible con este flujo automático (solo Factura C / Factura A).",
                 parent=self,
             )
             return
@@ -495,6 +500,15 @@ class ResumenesFrame(ctk.CTkFrame):
             messagebox.showerror(
                 "Emitir factura",
                 "El punto de venta del emisor habitual es inválido.",
+                parent=self,
+            )
+            return
+
+        condicion_iva_emisor = str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or "").strip().lower()
+        if tipo_factura_normalizado == "Factura A" and "responsable" not in condicion_iva_emisor:
+            messagebox.showerror(
+                "Emitir factura",
+                "No se puede emitir Factura A: el emisor no está configurado como Responsable Inscripto.",
                 parent=self,
             )
             return
@@ -575,7 +589,24 @@ class ResumenesFrame(ctk.CTkFrame):
             )
             return
 
-        if documento_normalizado and len(documento_normalizado) == 11:
+        if tipo_factura_normalizado == "Factura A":
+            if "responsable" not in condicion_iva_normalizada:
+                messagebox.showerror(
+                    "Emitir factura",
+                    "No se puede emitir Factura A: el cliente debe ser Responsable Inscripto.",
+                    parent=self,
+                )
+                return
+            if len(documento_normalizado) != 11:
+                messagebox.showerror(
+                    "Emitir factura",
+                    "No se puede emitir Factura A: el cliente debe tener CUIT válido de 11 dígitos.",
+                    parent=self,
+                )
+                return
+            tipo_documento = 80
+            documento_receptor = int(documento_normalizado)
+        elif documento_normalizado and len(documento_normalizado) == 11:
             if condicion_iva_normalizada == "consumidor final":
                 tipo_documento = 96
                 documento_receptor = int(documento_normalizado[2:-1])
@@ -586,14 +617,58 @@ class ResumenesFrame(ctk.CTkFrame):
             tipo_documento = 99
             documento_receptor = 0
 
+        tipo_comprobante = 1 if tipo_factura_normalizado == "Factura A" else 11
+        if tipo_factura_normalizado == "Factura A":
+            if not self.FACTURA_A_SERVICIOS_IMPORTE_ES_NETO:
+                messagebox.showerror(
+                    "Emitir factura",
+                    "Configuración fiscal inválida: para Factura A este flujo requiere importes netos en servicios.",
+                    parent=self,
+                )
+                return
+
+            neto_factura = round(suma_items, 2)
+            alicuota_iva = float(self.FACTURA_A_ALICUOTA_PORCENTAJE)
+            importe_iva_factura = round(neto_factura * (alicuota_iva / 100.0), 2)
+            total_factura_fiscal = round(neto_factura + importe_iva_factura, 2)
+            importe_exento_factura = 0.0
+            importe_tot_conc = 0.0
+            importe_tributos = 0.0
+            alicuotas_iva = [
+                {
+                    "id": 5,
+                    "base_imponible": neto_factura,
+                    "importe": importe_iva_factura,
+                }
+            ]
+            condicion_iva_receptor_id = 1
+        else:
+            neto_factura = round(total_factura, 2)
+            alicuota_iva = 0.0
+            importe_iva_factura = 0.0
+            total_factura_fiscal = round(total_factura, 2)
+            importe_exento_factura = 0.0
+            importe_tot_conc = 0.0
+            importe_tributos = 0.0
+            alicuotas_iva = []
+            condicion_iva_receptor_id = 5
+
+        if round(neto_factura + importe_iva_factura + importe_exento_factura + importe_tot_conc + importe_tributos, 2) != round(total_factura_fiscal, 2):
+            messagebox.showerror(
+                "Emitir factura",
+                "No se puede emitir: los importes fiscales no cierran (neto + IVA + exento + no gravado + tributos != total).",
+                parent=self,
+            )
+            return
+
         pre_guardado = FacturaArcaService.validar_pre_guardado(
             cliente_id=cliente[0],
             emisor_id=emisor_facturacion_id,
             resumen_id=resumen.id,
             fecha=date.today().isoformat(),
             punto_venta=str(punto_venta_normalizado),
-            tipo_comprobante="Factura C",
-            importe_total=total_factura,
+            tipo_comprobante=tipo_factura_normalizado,
+            importe_total=total_factura_fiscal,
             estado="Facturada manualmente",
         )
         if not pre_guardado.get("ok"):
@@ -615,25 +690,32 @@ class ResumenesFrame(ctk.CTkFrame):
             print(f"carpeta_facturas_recibida: {carpeta_facturas}")
             print(f"emisor_interno_encontrado: {emisor_facturacion_id}")
             print(f"campo_usado_vinculo: {campo_vinculo}")
-            print("funcion_emision: HomologacionService.emitir_factura_c_prueba")
-            print(f"importe_enviado_arca: {total_factura}")
+            print("funcion_emision: HomologacionService.emitir_comprobante_prueba")
+            print(f"tipo_factura_emision: {tipo_factura_normalizado}")
+            print(f"importe_neto_enviado_arca: {neto_factura}")
+            print(f"importe_iva_enviado_arca: {importe_iva_factura}")
+            print(f"importe_total_enviado_arca: {total_factura_fiscal}")
 
             fecha_comprobante = datetime.now().strftime("%Y%m%d")
-            emision = HomologacionService.emitir_factura_c_prueba(
+            emision = HomologacionService.emitir_comprobante_prueba(
                 ruta_certificado=ruta_certificado,
                 ruta_clave=ruta_clave,
                 cuit_emisor=cuit_emisor_normalizado,
                 punto_venta=punto_venta_normalizado,
-                condicion_iva_receptor_id=5,
+                tipo_comprobante=tipo_comprobante,
+                condicion_iva_receptor_id=condicion_iva_receptor_id,
                 concepto=1,
                 tipo_documento=tipo_documento,
                 documento_receptor=documento_receptor,
-                importe_total=total_factura,
-                importe_neto=total_factura,
-                importe_iva=0.0,
-                importe_exento=0.0,
+                importe_total=total_factura_fiscal,
+                importe_neto=neto_factura,
+                importe_iva=importe_iva_factura,
+                importe_exento=importe_exento_factura,
                 fecha_comprobante=fecha_comprobante,
                 carpeta_trabajo=carpeta_facturas,
+                importe_tot_conc=importe_tot_conc,
+                importe_tributos=importe_tributos,
+                alicuotas_iva=alicuotas_iva,
             )
             if not emision.get("ok"):
                 messagebox.showerror(
@@ -649,7 +731,7 @@ class ResumenesFrame(ctk.CTkFrame):
                 ruta_clave=ruta_clave,
                 cuit_emisor=cuit_emisor_normalizado,
                 punto_venta=punto_venta_normalizado,
-                tipo_comprobante=11,
+                tipo_comprobante=tipo_comprobante,
                 numero_comprobante=numero_emitido,
                 carpeta_trabajo=carpeta_facturas,
                 token=emision.get("token"),
@@ -676,13 +758,17 @@ class ResumenesFrame(ctk.CTkFrame):
                     resumen_id=resumen.id,
                     fecha=date.today().isoformat(),
                     punto_venta=str(punto_venta_num),
-                    tipo_comprobante="Factura C",
-                    importe_total=total_factura,
+                    tipo_comprobante=tipo_factura_normalizado,
+                    importe_total=total_factura_fiscal,
                     estado="Facturada manualmente",
                     numero_factura=numero_factura,
                     cae=cae,
                     vencimiento_cae=vencimiento_cae,
-                    observaciones=f"Emitida desde Resúmenes ({modalidad}). Emisor habitual: {emisor_habitual}",
+                    observaciones=(
+                        f"Emitida desde Resúmenes ({modalidad}). Emisor habitual: {emisor_habitual}. "
+                        f"Fiscal: neto={neto_factura:.2f}; iva_alicuota={alicuota_iva:.2f}%; "
+                        f"iva_importe={importe_iva_factura:.2f}; total={total_factura_fiscal:.2f}"
+                    ),
                     fecha_creacion=datetime.now().isoformat(timespec="seconds"),
                 )
             )
@@ -720,14 +806,17 @@ class ResumenesFrame(ctk.CTkFrame):
             }
 
             datos_comprobante = {
-                "tipo": "Factura C",
+                "tipo": tipo_factura_normalizado,
                 "numero": numero_comprobante,
                 "fecha": str(consulta.get("fecha_comprobante") or fecha_comprobante or ""),
                 "concepto": "1 - Productos",
                 "periodo_servicio_desde": periodo_desde,
                 "periodo_servicio_hasta": periodo_hasta,
                 "vencimiento_pago": self._a_fecha_arca_yyyymmdd(resumen_actual.fecha_vencimiento),
-                "importe_total": total_factura,
+                "importe_neto": neto_factura,
+                "importe_iva": importe_iva_factura,
+                "alicuota_iva": alicuota_iva,
+                "importe_total": total_factura_fiscal,
                 "items": items_factura,
                 "moneda": str(consulta.get("moneda") or "PES"),
                 "cae": cae,
@@ -735,7 +824,7 @@ class ResumenesFrame(ctk.CTkFrame):
                 "ambiente": str(emisor_fiscal[9] if len(emisor_fiscal) > 9 else "Homologación"),
                 "punto_venta": punto_venta_num,
             }
-            print(f"importe_enviado_pdf: {total_factura}")
+            print(f"importe_enviado_pdf: {total_factura_fiscal}")
 
             pdf = PDFFiscalService.generar_factura_c(
                 ruta_destino=ruta_sugerida_pdf,
@@ -766,7 +855,7 @@ class ResumenesFrame(ctk.CTkFrame):
             messagebox.showinfo(
                 "Emitir factura",
                 "Factura autorizada correctamente.\n"
-                f"Comprobante: C {codigo_factura}\n"
+                f"Comprobante: {tipo_factura_normalizado[-1]} {codigo_factura}\n"
                 f"CAE: {cae or '-'}\n"
                 f"Vencimiento CAE: {vencimiento_cae or '-'}",
                 parent=self,

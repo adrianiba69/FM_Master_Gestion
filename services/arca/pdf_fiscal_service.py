@@ -51,10 +51,12 @@ class PDFFiscalService:
             destino_final = PDFFiscalService._resolver_ruta_destino(ruta_destino)
             destino_final.parent.mkdir(parents=True, exist_ok=True)
 
+            tipo_comprobante = str(PDFFiscalService._pick(datos_comprobante, "tipo", default="Factura C") or "Factura C")
+
             pdf = canvas.Canvas(str(destino_final), pagesize=A4, pageCompression=1)
-            pdf.setTitle("Factura C")
+            pdf.setTitle(tipo_comprobante)
             pdf.setAuthor(str(PDFFiscalService._pick(datos_emisor, "razon_social", "nombre_fantasia", default="Emisor")))
-            pdf.setSubject("Factura C - Homologacion")
+            pdf.setSubject(f"{tipo_comprobante} - Homologacion")
 
             PDFFiscalService._dibujar_estructura(pdf, datos_emisor, datos_receptor, datos_comprobante)
 

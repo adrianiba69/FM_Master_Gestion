@@ -30,6 +30,9 @@ class WSFEService:
         fecha_comprobante,
         moneda,
         cotizacion,
+        importe_tot_conc=0.0,
+        importe_tributos=0.0,
+        alicuotas_iva=None,
         fecha_servicio_desde=None,
         fecha_servicio_hasta=None,
         fecha_vencimiento_pago=None,
@@ -142,6 +145,18 @@ class WSFEService:
             imp_exento = 0.0
 
         try:
+            imp_tot_conc = round(float(importe_tot_conc), 2)
+        except (TypeError, ValueError):
+            errores.append("Importe no gravado inválido.")
+            imp_tot_conc = 0.0
+
+        try:
+            imp_trib = round(float(importe_tributos), 2)
+        except (TypeError, ValueError):
+            errores.append("Importe tributos inválido.")
+            imp_trib = 0.0
+
+        try:
             mon_cotiz = round(float(cotizacion), 6)
             if mon_cotiz <= 0:
                 raise ValueError()
@@ -151,15 +166,72 @@ class WSFEService:
 
         if imp_total <= 0:
             errores.append("El importe total debe ser mayor a cero.")
-        if imp_neto < 0 or imp_iva < 0 or imp_exento < 0:
-            errores.append("Importes neto, IVA y exento no pueden ser negativos.")
+        if imp_neto < 0 or imp_iva < 0 or imp_exento < 0 or imp_tot_conc < 0 or imp_trib < 0:
+            errores.append("Importes no pueden ser negativos.")
 
-        suma_componentes = round(imp_neto + imp_iva + imp_exento, 2)
+        suma_componentes = round(imp_neto + imp_iva + imp_exento + imp_tot_conc + imp_trib, 2)
         if round(imp_total, 2) != suma_componentes:
-            errores.append("Los totales no cierran: importe total debe igualar neto + IVA + exento.")
+            errores.append("Los totales no cierran: importe total debe igualar neto + IVA + exento + no gravado + tributos.")
 
         if imp_iva > 0 and imp_neto <= 0:
             errores.append("IVA inválido: si hay IVA, el importe neto debe ser mayor a cero.")
+
+        alicuotas = []
+        if alicuotas_iva is None:
+            alicuotas_iva = []
+
+        if not isinstance(alicuotas_iva, list):
+            errores.append("Alicuotas de IVA inválidas.")
+            alicuotas_iva = []
+
+        suma_iva_alicuotas = 0.0
+        suma_base_alicuotas = 0.0
+        for item in alicuotas_iva:
+            if not isinstance(item, dict):
+                errores.append("Alicuotas de IVA inválidas.")
+                continue
+
+            try:
+                iva_id = int(item.get("id"))
+                if iva_id <= 0:
+                    raise ValueError()
+            except (TypeError, ValueError):
+                errores.append("ID de alícuota IVA inválido.")
+                continue
+
+            try:
+                base_imp = round(float(item.get("base_imponible")), 2)
+                if base_imp < 0:
+                    raise ValueError()
+            except (TypeError, ValueError):
+                errores.append("Base imponible de alícuota IVA inválida.")
+                continue
+
+            try:
+                importe_alic = round(float(item.get("importe")), 2)
+                if importe_alic < 0:
+                    raise ValueError()
+            except (TypeError, ValueError):
+                errores.append("Importe de alícuota IVA inválido.")
+                continue
+
+            alicuotas.append({
+                "Id": iva_id,
+                "BaseImp": base_imp,
+                "Importe": importe_alic,
+            })
+            suma_base_alicuotas += base_imp
+            suma_iva_alicuotas += importe_alic
+
+        suma_base_alicuotas = round(suma_base_alicuotas, 2)
+        suma_iva_alicuotas = round(suma_iva_alicuotas, 2)
+
+        if imp_iva > 0 and not alicuotas:
+            errores.append("Debe informar detalle de alícuotas IVA cuando ImpIVA es mayor a cero.")
+        if imp_iva > 0 and alicuotas and round(imp_iva, 2) != suma_iva_alicuotas:
+            errores.append("ImpIVA no coincide con la suma de alícuotas IVA.")
+        if imp_iva > 0 and alicuotas and round(imp_neto, 2) != suma_base_alicuotas:
+            errores.append("ImpNeto no coincide con la base imponible total de alícuotas IVA.")
 
         if concepto_val in {2, 3}:
             if not fecha_serv_desde_texto:
@@ -211,14 +283,17 @@ class WSFEService:
         detalle.update({
             "CondicionIVAReceptorId": cond_iva_receptor,
             "ImpTotal": imp_total,
-            "ImpTotConc": 0.0,
+            "ImpTotConc": imp_tot_conc,
             "ImpNeto": imp_neto,
             "ImpOpEx": imp_exento,
-            "ImpTrib": 0.0,
+            "ImpTrib": imp_trib,
             "ImpIVA": imp_iva,
             "MonId": moneda_texto,
             "MonCotiz": mon_cotiz,
         })
+
+        if alicuotas:
+            detalle["Iva"] = {"AlicIva": alicuotas}
 
         solicitud = {
             "FeCAEReq": {
@@ -892,6 +967,26 @@ class WSFEService:
                 else:
                     valor_xml = WSFEService._escapar_xml(valor)
                 partes.append(f"<ar:{clave}>{valor_xml}</ar:{clave}>")
+
+            iva_detalle = detalle.get("Iva") if isinstance(detalle, dict) else None
+            if isinstance(iva_detalle, dict):
+                alic_list = iva_detalle.get("AlicIva")
+                if isinstance(alic_list, dict):
+                    alic_list = [alic_list]
+                if isinstance(alic_list, list) and alic_list:
+                    partes.append("<ar:Iva>")
+                    for alic in alic_list:
+                        if not isinstance(alic, dict):
+                            continue
+                        id_xml = WSFEService._serializar_entero_xml(alic.get("Id"), default="0")
+                        base_xml = WSFEService._serializar_decimal_xml(alic.get("BaseImp"), default="0")
+                        imp_xml = WSFEService._serializar_decimal_xml(alic.get("Importe"), default="0")
+                        partes.append("<ar:AlicIva>")
+                        partes.append(f"<ar:Id>{id_xml}</ar:Id>")
+                        partes.append(f"<ar:BaseImp>{base_xml}</ar:BaseImp>")
+                        partes.append(f"<ar:Importe>{imp_xml}</ar:Importe>")
+                        partes.append("</ar:AlicIva>")
+                    partes.append("</ar:Iva>")
             partes.append("</ar:FECAEDetRequest>")
             detalles_xml.append("".join(partes))
 
