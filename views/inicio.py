@@ -911,7 +911,11 @@ class InicioFrame(ctk.CTkFrame):
 
         aplicacion = self.winfo_toplevel()
         if hasattr(aplicacion, "mostrar_resumenes"):
-            aplicacion.mostrar_resumenes(cliente_id=id_cliente, on_cambio=self.actualizar_recomendacion)
+            aplicacion.mostrar_resumenes(
+                cliente_id=id_cliente,
+                on_cambio=self.actualizar_recomendacion,
+                origen_creacion="inicio.abrir_resumenes_cliente_desde_dashboard",
+            )
 
     def abrir_cobros_cliente_desde_dashboard(self, cliente_id):
         try:
@@ -962,7 +966,7 @@ class InicioFrame(ctk.CTkFrame):
 
     def ir_resumenes(self):
         aplicacion = self.winfo_toplevel()
-        aplicacion.mostrar_resumenes()
+        aplicacion.mostrar_resumenes(origen_creacion="inicio.ir_resumenes")
 
     def ir_cobros(self):
         aplicacion = self.winfo_toplevel()

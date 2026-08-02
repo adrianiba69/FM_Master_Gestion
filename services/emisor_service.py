@@ -9,12 +9,12 @@ class EmisorService:
         cur = conn.cursor()
         if activos_solo:
             cur.execute(
-                "SELECT id, alias, titular, nombre, cuit, condicion_iva, punto_venta, tipo_comprobante_default, orden_prioridad, direccion, localidad, telefono, email, activo, observaciones, certificado_path, clave_privada_path, arca_modo, arca_estado "
+                "SELECT id, alias, titular, nombre, cuit, condicion_iva, punto_venta, tipo_comprobante_default, orden_prioridad, direccion, localidad, telefono, email, activo, observaciones, certificado_path, clave_privada_path, arca_modo, arca_estado, emisor_fiscal_id "
                 "FROM emisores_facturacion WHERE activo=1 ORDER BY orden_prioridad, alias"
             )
         else:
             cur.execute(
-                "SELECT id, alias, titular, nombre, cuit, condicion_iva, punto_venta, tipo_comprobante_default, orden_prioridad, direccion, localidad, telefono, email, activo, observaciones, certificado_path, clave_privada_path, arca_modo, arca_estado "
+                "SELECT id, alias, titular, nombre, cuit, condicion_iva, punto_venta, tipo_comprobante_default, orden_prioridad, direccion, localidad, telefono, email, activo, observaciones, certificado_path, clave_privada_path, arca_modo, arca_estado, emisor_fiscal_id "
                 "FROM emisores_facturacion ORDER BY orden_prioridad, alias"
             )
         filas = cur.fetchall()
@@ -26,13 +26,37 @@ class EmisorService:
         conn = conectar()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, alias, titular, nombre, cuit, condicion_iva, punto_venta, tipo_comprobante_default, orden_prioridad, direccion, localidad, telefono, email, activo, observaciones, certificado_path, clave_privada_path, arca_modo, arca_estado "
+            "SELECT id, alias, titular, nombre, cuit, condicion_iva, punto_venta, tipo_comprobante_default, orden_prioridad, direccion, localidad, telefono, email, activo, observaciones, certificado_path, clave_privada_path, arca_modo, arca_estado, emisor_fiscal_id "
             "FROM emisores_facturacion WHERE id=?",
             (id_,)
         )
         fila = cur.fetchone()
         conn.close()
         return fila
+
+    @staticmethod
+    def obtener_por_emisor_fiscal_id(emisor_fiscal_id):
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, alias, titular, nombre, cuit, condicion_iva, punto_venta, tipo_comprobante_default, orden_prioridad, direccion, localidad, telefono, email, activo, observaciones, certificado_path, clave_privada_path, arca_modo, arca_estado, emisor_fiscal_id "
+            "FROM emisores_facturacion WHERE emisor_fiscal_id=? ORDER BY activo DESC, orden_prioridad, id LIMIT 1",
+            (emisor_fiscal_id,)
+        )
+        fila = cur.fetchone()
+        conn.close()
+        return fila
+
+    @staticmethod
+    def vincular_emisor_fiscal(id_, emisor_fiscal_id):
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE emisores_facturacion SET emisor_fiscal_id=? WHERE id=?",
+            (emisor_fiscal_id, id_),
+        )
+        conn.commit()
+        conn.close()
 
     @staticmethod
     def guardar(alias, titular, nombre, cuit, condicion_iva, punto_venta, tipo_comprobante_default, orden_prioridad, direccion, localidad, telefono, email, activo=1, observaciones="", certificado_path="", clave_privada_path="", arca_modo="Homologación", arca_estado="Desconocido"):

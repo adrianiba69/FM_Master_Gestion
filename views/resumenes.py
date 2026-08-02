@@ -25,14 +25,20 @@ class ResumenesFrame(ctk.CTkFrame):
     FACTURA_A_SERVICIOS_IMPORTE_ES_NETO = True
     FACTURA_A_ALICUOTA_PORCENTAJE = 21.0
 
-    def __init__(self, master, cliente_id=None, on_cambio=None, contexto_facturacion=None):
+    def __init__(self, master, cliente_id=None, on_cambio=None, contexto_facturacion=None, origen_creacion="desconocido"):
         super().__init__(master, fg_color="white", corner_radius=0)
+        self.origen_creacion = str(origen_creacion or "desconocido")
+        self.instancia_id = id(self)
         self.clientes_por_nombre = {}
         self.cliente_inicial = cliente_id
         self.on_cambio = on_cambio
         self.contexto_facturacion_cliente = {}
         self.contexto_facturacion_pendiente = {}
         self.ultimo_contexto_facturacion = None
+        print(
+            f"DIAGNOSTICO RESUMENES - instancia_creada id(self)={self.instancia_id} "
+            f"origen={self.origen_creacion} cliente_inicial={self.cliente_inicial}"
+        )
         if isinstance(contexto_facturacion, dict):
             cliente_ctx_id = contexto_facturacion.get("cliente_id")
             if cliente_ctx_id is not None:
@@ -131,7 +137,7 @@ class ResumenesFrame(ctk.CTkFrame):
             height=38,
             fg_color="#C00000",
             hover_color="#990000",
-            command=self.generar_resumen,
+            command=self._on_click_generar_pdf,
         )
         boton_generar.grid(row=1, column=3, padx=(10, 14), pady=(4, 14))
 
@@ -241,10 +247,41 @@ class ResumenesFrame(ctk.CTkFrame):
                  if identificador == self.cliente_inicial),
                 "",
             )
+        print(
+            f"DIAGNOSTICO RESUMENES - antes_carga_combo id(self)={self.instancia_id} "
+            f"origen={self.origen_creacion} cliente_inicial={self.cliente_inicial}"
+        )
+
+        if not seleccionado and self.cliente_inicial is not None:
+            print(
+                "DIAGNOSTICO RESUMENES - cliente_inicial_no_encontrado_en_combo "
+                f"id(self)={self.instancia_id} cliente_inicial={self.cliente_inicial} "
+                "(se evita fallback al primer cliente)"
+            )
+            self.selector_cliente.set("")
+            return
+
         if not seleccionado and nombres:
             seleccionado = nombres[0]
+            print(
+                "DIAGNOSTICO RESUMENES - cliente_inicial_none, "
+                f"se_asigna_primer_cliente: {seleccionado}"
+            )
         self.selector_cliente.set(seleccionado)
+        print(f"DIAGNOSTICO RESUMENES - cliente_inicial_recibido: {self.cliente_inicial}")
+        print(f"DIAGNOSTICO RESUMENES - cliente_selector_set: {seleccionado}")
+        print(
+            "DIAGNOSTICO RESUMENES - cliente_selector_id: "
+            f"{self.clientes_por_nombre.get(seleccionado)}"
+        )
+        print(
+            f"DIAGNOSTICO RESUMENES - despues_carga_combo id(self)={self.instancia_id} "
+            f"cliente_selector_id={self.clientes_por_nombre.get(seleccionado)}"
+        )
         self.actualizar_vencimiento()
+
+    def obtener_cliente_id_actual(self):
+        return self.clientes_por_nombre.get(self.selector_cliente.get())
 
     def actualizar_vencimiento(self):
         cliente_id = self.clientes_por_nombre.get(self.selector_cliente.get())
@@ -284,9 +321,112 @@ class ResumenesFrame(ctk.CTkFrame):
             ), tags=(tag_estado,))
 
     def generar_resumen(self):
-        cliente_id = self.clientes_por_nombre.get(self.selector_cliente.get())
+        print(
+            f"DIAGNOSTICO RESUMENES - funcion_real_ejecutada: generar_resumen "
+            f"id(self)={self.instancia_id} origen={self.origen_creacion}"
+        )
+
+        selector_valor = str(self.selector_cliente.get() or "").strip()
+        cliente_id = self.clientes_por_nombre.get(selector_valor)
+        origen_cliente_id = "selector_cliente"
+
+        def _diag_exit(motivo, cliente_fila=None, modalidad="", tipo_factura="", emisor_habitual="", emisor_fiscal_id=None):
+            cliente_encontrado = "SI" if cliente_fila else "NO"
+            razon_social = str(cliente_fila[2] if cliente_fila and len(cliente_fila) > 2 else "" or "").strip()
+            condicion_iva = str(cliente_fila[11] if cliente_fila and len(cliente_fila) > 11 else "" or "").strip()
+            modalidad_real = str(modalidad or "").strip()
+            tipo_factura_real = str(tipo_factura or "").strip()
+            emisor_habitual_real = str(emisor_habitual or "").strip()
+            print(f"DIAGNOSTICO RESUMENES - salida_motivo: {motivo}")
+            print(f"DIAGNOSTICO RESUMENES - cliente_id_seleccionado: {cliente_id}")
+            print(f"DIAGNOSTICO RESUMENES - origen_cliente_id: {origen_cliente_id}")
+            print(f"DIAGNOSTICO RESUMENES - cliente_encontrado: {cliente_encontrado}")
+            print(f"DIAGNOSTICO RESUMENES - cliente_razon_social: {razon_social}")
+            print(f"DIAGNOSTICO RESUMENES - cliente_condicion_iva: {condicion_iva}")
+            print(f"DIAGNOSTICO RESUMENES - modalidad: {modalidad_real}")
+            print(f"DIAGNOSTICO RESUMENES - tipo_factura: {tipo_factura_real}")
+            print(f"DIAGNOSTICO RESUMENES - emisor_habitual: {emisor_habitual_real}")
+            print(f"DIAGNOSTICO RESUMENES - emisor_fiscal_id_resuelto: {emisor_fiscal_id}")
+
         if cliente_id is None:
+            _diag_exit("cliente no seleccionado o no mapeado en combo")
             messagebox.showwarning("Atencion", "Seleccione un cliente.")
+            return
+
+        cliente_seleccionado = ClienteService.obtener(cliente_id)
+        if cliente_seleccionado is None:
+            _diag_exit("cliente_id seleccionado no existe en BD")
+            messagebox.showerror("No se pudo generar", "No se encontró el cliente seleccionado.")
+            return
+
+        modalidad = str(cliente_seleccionado[21] if len(cliente_seleccionado) > 21 else "" or "").strip()
+        emisor_habitual = str(cliente_seleccionado[22] if len(cliente_seleccionado) > 22 else "" or "").strip()
+        tipo_factura = str(cliente_seleccionado[12] if len(cliente_seleccionado) > 12 else "" or "").strip()
+        condicion_iva = str(cliente_seleccionado[11] if len(cliente_seleccionado) > 11 else "" or "").strip()
+        emisor_id = cliente_seleccionado[14] if len(cliente_seleccionado) > 14 else None
+        modalidad_normalizada = self._normalizar_modalidad(modalidad)
+        requiere_factura = self._modalidad_requiere_vista_previa_factura(modalidad)
+
+        emisor_fiscal_id_resuelto = None
+        if emisor_habitual:
+            emisor_fiscal = self._buscar_emisor_fiscal_por_etiqueta(emisor_habitual)
+            if emisor_fiscal:
+                emisor_fiscal_id_resuelto = emisor_fiscal[0]
+
+        if requiere_factura and emisor_fiscal_id_resuelto is None:
+            _diag_exit(
+                "emisor fiscal habitual no encontrado",
+                cliente_fila=cliente_seleccionado,
+                modalidad=modalidad,
+                tipo_factura=tipo_factura,
+                emisor_habitual=emisor_habitual,
+                emisor_fiscal_id=emisor_fiscal_id_resuelto,
+            )
+            messagebox.showerror(
+                "Configuración fiscal incompleta",
+                "No se puede continuar porque el Emisor Fiscal habitual no existe o no está activo:\n\n"
+                f"- Emisor habitual: {emisor_habitual or '-'}",
+                parent=self,
+            )
+            return
+
+        print(f"DIAGNOSTICO RESUMENES - selector_cliente_texto: {selector_valor}")
+        print(f"DIAGNOSTICO RESUMENES - cliente_id_inicial_frame: {self.cliente_inicial}")
+        print(f"DIAGNOSTICO RESUMENES - cliente_id_resuelto_combo: {cliente_id}")
+        print(f"DIAGNOSTICO RESUMENES - cliente_razon_social_leida: {str(cliente_seleccionado[2] if len(cliente_seleccionado) > 2 else '' or '').strip()}")
+        print(f"DIAGNOSTICO RESUMENES - cliente_condicion_iva_leida: {condicion_iva}")
+        print(f"DIAGNOSTICO RESUMENES - modalidad_leida: {modalidad}")
+        print(f"DIAGNOSTICO RESUMENES - tipo_factura_leida: {tipo_factura}")
+        print(f"DIAGNOSTICO RESUMENES - emisor_habitual_leido: {emisor_habitual}")
+        print(f"DIAGNOSTICO RESUMENES - emisor_id_cliente_leido: {emisor_id}")
+        print(f"DIAGNOSTICO RESUMENES - emisor_fiscal_id_resuelto: {emisor_fiscal_id_resuelto}")
+
+        faltantes_fiscales = []
+        if not modalidad:
+            faltantes_fiscales.append("Modalidad de comprobante")
+        if requiere_factura:
+            if not tipo_factura:
+                faltantes_fiscales.append("Tipo de factura")
+            if not emisor_habitual:
+                faltantes_fiscales.append("Emisor habitual")
+
+        if modalidad and not self._modalidad_es_solo_resumen(modalidad) and not requiere_factura:
+            faltantes_fiscales.append(f"Modalidad de comprobante inválida: {modalidad}")
+
+        if faltantes_fiscales:
+            _diag_exit(
+                "configuracion fiscal incompleta o invalida",
+                cliente_fila=cliente_seleccionado,
+                modalidad=modalidad,
+                tipo_factura=tipo_factura,
+                emisor_habitual=emisor_habitual,
+                emisor_fiscal_id=emisor_fiscal_id_resuelto,
+            )
+            messagebox.showerror(
+                "Configuración fiscal incompleta",
+                "No se puede continuar porque faltan datos fiscales del cliente:\n\n- " + "\n- ".join(faltantes_fiscales),
+                parent=self,
+            )
             return
 
         try:
@@ -295,24 +435,58 @@ class ResumenesFrame(ctk.CTkFrame):
                 self.entrada_vencimiento.get().strip(), "%d/%m/%Y"
             ).date()
         except ValueError:
+            _diag_exit(
+                "formato de fechas invalido",
+                cliente_fila=cliente_seleccionado,
+                modalidad=modalidad,
+                tipo_factura=tipo_factura,
+                emisor_habitual=emisor_habitual,
+                emisor_fiscal_id=emisor_fiscal_id_resuelto,
+            )
             messagebox.showerror("Error", "Las fechas deben tener formato DD/MM/AAAA.")
             return
 
         try:
+            print(f"DIAGNOSTICO RESUMENES - cliente_id_usado_generar_resumen: {cliente_id}")
             resumen = ResumenService.generar_desde_servicios(
                 cliente_id,
                 fecha=fecha,
                 fecha_vencimiento=vencimiento,
             )
+            print(f"DIAGNOSTICO RESUMENES - resumen_id_generado: {getattr(resumen, 'id', None)}")
         except (ValueError, OSError) as error:
+            _diag_exit(
+                f"error de negocio al generar resumen: {error}",
+                cliente_fila=cliente_seleccionado,
+                modalidad=modalidad,
+                tipo_factura=tipo_factura,
+                emisor_habitual=emisor_habitual,
+                emisor_fiscal_id=emisor_fiscal_id_resuelto,
+            )
             messagebox.showerror("No se pudo generar", str(error))
             return
         except Exception as error:
+            _diag_exit(
+                f"error inesperado al generar resumen: {error}",
+                cliente_fila=cliente_seleccionado,
+                modalidad=modalidad,
+                tipo_factura=tipo_factura,
+                emisor_habitual=emisor_habitual,
+                emisor_fiscal_id=emisor_fiscal_id_resuelto,
+            )
             messagebox.showerror("Error", f"No se pudo generar el resumen: {error}")
             return
 
         cliente_actual = ClienteService.obtener(resumen.cliente_id)
         if cliente_actual is None:
+            _diag_exit(
+                "cliente no recuperable despues de guardar resumen",
+                cliente_fila=cliente_seleccionado,
+                modalidad=modalidad,
+                tipo_factura=tipo_factura,
+                emisor_habitual=emisor_habitual,
+                emisor_fiscal_id=emisor_fiscal_id_resuelto,
+            )
             messagebox.showerror(
                 "No se pudo generar",
                 "El resumen se guardó, pero no se pudo volver a leer el cliente para continuar el flujo.",
@@ -320,50 +494,86 @@ class ResumenesFrame(ctk.CTkFrame):
             )
             return
 
-        contexto_post = self._leer_contexto_facturacion_desde_bd(resumen.cliente_id)
-        if contexto_post is None:
-            messagebox.showerror(
-                "No se pudo generar",
-                "El resumen se guardó, pero no se pudo obtener la configuración actual del cliente.",
-                parent=self,
-            )
-            return
-
-        modalidad = str(contexto_post.get("modalidad_comprobante") or "Solo Resumen").strip()
-        emisor_habitual = str(contexto_post.get("emisor_habitual") or "").strip()
-        tipo_factura = str(contexto_post.get("tipo_factura") or "").strip()
-        condicion_iva = str(contexto_post.get("condicion_iva") or "").strip()
-
         contexto_disponible = {
-            **contexto_post,
+            "cliente_id": resumen.cliente_id,
             "resumen_id": resumen.id,
             "resumen_numero": resumen.numero,
             "fecha_resumen": resumen.fecha,
-            "modalidad_comprobante": modalidad or "Solo Resumen",
+            "modalidad_comprobante": modalidad,
             "emisor_habitual": emisor_habitual,
             "tipo_factura": tipo_factura,
             "condicion_iva": condicion_iva,
+            "emisor_id": emisor_id,
         }
 
-        self.contexto_facturacion_pendiente[resumen.id] = contexto_disponible
-        self.ultimo_contexto_facturacion = contexto_disponible
+        self.contexto_facturacion_cliente[resumen.cliente_id] = dict(contexto_disponible)
+        self.contexto_facturacion_pendiente[resumen.id] = dict(contexto_disponible)
+        self.ultimo_contexto_facturacion = dict(contexto_disponible)
 
         self.cargar_resumenes()
         if callable(self.on_cambio):
             self.on_cambio()
 
-        if modalidad == "Solo Resumen":
+        if self._modalidad_es_solo_resumen(modalidad):
+            print("DIAGNOSTICO RESUMENES - vista_previa_invocada: NO (modalidad solo resumen)")
             try:
                 ruta = ResumenPDF.generar(resumen.id)
             except (ValueError, OSError) as error:
+                _diag_exit(
+                    f"fallo generacion pdf resumen: {error}",
+                    cliente_fila=cliente_actual,
+                    modalidad=modalidad,
+                    tipo_factura=tipo_factura,
+                    emisor_habitual=emisor_habitual,
+                    emisor_fiscal_id=emisor_fiscal_id_resuelto,
+                )
                 messagebox.showerror("No se pudo generar", str(error), parent=self)
                 return
             self.mostrar_modal_resumen_generado(ruta)
+            _diag_exit(
+                "flujo solo resumen completado",
+                cliente_fila=cliente_actual,
+                modalidad=modalidad,
+                tipo_factura=tipo_factura,
+                emisor_habitual=emisor_habitual,
+                emisor_fiscal_id=emisor_fiscal_id_resuelto,
+            )
             return
 
-        if modalidad in ("Resumen + Factura", "Solo Factura"):
-            accion = self._mostrar_vista_previa_resumen_para_factura(resumen)
+        if self._modalidad_requiere_vista_previa_factura(modalidad):
+            emisor_fiscal = self._buscar_emisor_fiscal_por_etiqueta(emisor_habitual)
+            emisor_facturacion_id, criterio_vinculo = self._resolver_emisor_facturacion_id(cliente_actual, emisor_fiscal)
+            if emisor_facturacion_id is None:
+                cuit_fiscal = self._normalizar_cuit(emisor_fiscal[3] if emisor_fiscal and len(emisor_fiscal) > 3 else "") or "-"
+                messagebox.showerror(
+                    "Vínculo de emisor faltante",
+                    "No se puede habilitar Emitir porque falta el emisor interno de facturación vinculado al emisor fiscal seleccionado.\n\n"
+                    f"- Emisor fiscal ID: {emisor_fiscal_id_resuelto or '-'}\n"
+                    f"- Emisor fiscal: {emisor_habitual or '-'}\n"
+                    f"- CUIT fiscal: {cuit_fiscal}\n"
+                    "- Emisor interno esperado: registro en emisores_facturacion vinculado explícitamente",
+                    parent=self,
+                )
+                _diag_exit(
+                    f"vinculo emisor interno faltante ({criterio_vinculo})",
+                    cliente_fila=cliente_actual,
+                    modalidad=modalidad,
+                    tipo_factura=tipo_factura,
+                    emisor_habitual=emisor_habitual,
+                    emisor_fiscal_id=emisor_fiscal_id_resuelto,
+                )
+                return
+            print("DIAGNOSTICO RESUMENES - vista_previa_invocada: SI")
+            accion = self._mostrar_vista_previa_resumen_para_factura(resumen, contexto_disponible)
             if accion == "cancelar":
+                _diag_exit(
+                    "usuario cancelo en vista previa",
+                    cliente_fila=cliente_actual,
+                    modalidad=modalidad,
+                    tipo_factura=tipo_factura,
+                    emisor_habitual=emisor_habitual,
+                    emisor_fiscal_id=emisor_fiscal_id_resuelto,
+                )
                 return
             if accion == "guardar":
                 messagebox.showinfo(
@@ -371,16 +581,50 @@ class ResumenesFrame(ctk.CTkFrame):
                     "Resumen guardado correctamente. Puede emitir la factura más tarde.",
                     parent=self,
                 )
+                _diag_exit(
+                    "usuario eligio solo guardar resumen",
+                    cliente_fila=cliente_actual,
+                    modalidad=modalidad,
+                    tipo_factura=tipo_factura,
+                    emisor_habitual=emisor_habitual,
+                    emisor_fiscal_id=emisor_fiscal_id_resuelto,
+                )
                 return
             if accion == "emitir":
+                _diag_exit(
+                    "usuario eligio emitir factura desde vista previa",
+                    cliente_fila=cliente_actual,
+                    modalidad=modalidad,
+                    tipo_factura=tipo_factura,
+                    emisor_habitual=emisor_habitual,
+                    emisor_fiscal_id=emisor_fiscal_id_resuelto,
+                )
                 self._emitir_factura_arca_desde_resumen(resumen, contexto_disponible)
-            return
+                return
+
+        print("DIAGNOSTICO RESUMENES - vista_previa_invocada: NO (modalidad no reconocida)")
+        _diag_exit(
+            f"modalidad no reconocida tras guardar: {modalidad_normalizada}",
+            cliente_fila=cliente_actual,
+            modalidad=modalidad,
+            tipo_factura=tipo_factura,
+            emisor_habitual=emisor_habitual,
+            emisor_fiscal_id=emisor_fiscal_id_resuelto,
+        )
 
         messagebox.showinfo(
             "Resumen generado",
             "Resumen guardado correctamente.",
             parent=self,
         )
+
+    def _on_click_generar_pdf(self):
+        print(
+            "DIAGNOSTICO BOTON GENERAR PDF - "
+            f"id(self)={self.instancia_id} archivo={__file__} "
+            "clase=ResumenesFrame metodo_callback_real=_on_click_generar_pdf"
+        )
+        self.generar_resumen()
 
     def _emitir_factura_arca_desde_resumen(self, resumen, contexto):
         if resumen is None:
@@ -617,49 +861,26 @@ class ResumenesFrame(ctk.CTkFrame):
             tipo_documento = 99
             documento_receptor = 0
 
-        tipo_comprobante = 1 if tipo_factura_normalizado == "Factura A" else 11
-        if tipo_factura_normalizado == "Factura A":
-            if not self.FACTURA_A_SERVICIOS_IMPORTE_ES_NETO:
-                messagebox.showerror(
-                    "Emitir factura",
-                    "Configuración fiscal inválida: para Factura A este flujo requiere importes netos en servicios.",
-                    parent=self,
-                )
-                return
-
-            neto_factura = round(suma_items, 2)
-            alicuota_iva = float(self.FACTURA_A_ALICUOTA_PORCENTAJE)
-            importe_iva_factura = round(neto_factura * (alicuota_iva / 100.0), 2)
-            total_factura_fiscal = round(neto_factura + importe_iva_factura, 2)
-            importe_exento_factura = 0.0
-            importe_tot_conc = 0.0
-            importe_tributos = 0.0
-            alicuotas_iva = [
-                {
-                    "id": 5,
-                    "base_imponible": neto_factura,
-                    "importe": importe_iva_factura,
-                }
-            ]
-            condicion_iva_receptor_id = 1
-        else:
-            neto_factura = round(total_factura, 2)
-            alicuota_iva = 0.0
-            importe_iva_factura = 0.0
-            total_factura_fiscal = round(total_factura, 2)
-            importe_exento_factura = 0.0
-            importe_tot_conc = 0.0
-            importe_tributos = 0.0
-            alicuotas_iva = []
-            condicion_iva_receptor_id = 5
-
-        if round(neto_factura + importe_iva_factura + importe_exento_factura + importe_tot_conc + importe_tributos, 2) != round(total_factura_fiscal, 2):
+        fiscal = self._calcular_datos_fiscales_desde_items(tipo_factura_normalizado, suma_items)
+        if not fiscal.get("ok"):
+            errores_fiscales = "\n- ".join(fiscal.get("errores") or ["Cálculo fiscal inválido."])
             messagebox.showerror(
                 "Emitir factura",
-                "No se puede emitir: los importes fiscales no cierran (neto + IVA + exento + no gravado + tributos != total).",
+                "No se puede emitir por inconsistencias fiscales:\n\n- " + errores_fiscales,
                 parent=self,
             )
             return
+
+        tipo_comprobante = int(fiscal.get("tipo_comprobante") or 0)
+        neto_factura = float(fiscal.get("neto_factura") or 0.0)
+        alicuota_iva = float(fiscal.get("alicuota_iva") or 0.0)
+        importe_iva_factura = float(fiscal.get("importe_iva_factura") or 0.0)
+        total_factura_fiscal = float(fiscal.get("total_factura_fiscal") or 0.0)
+        importe_exento_factura = float(fiscal.get("importe_exento_factura") or 0.0)
+        importe_tot_conc = float(fiscal.get("importe_tot_conc") or 0.0)
+        importe_tributos = float(fiscal.get("importe_tributos") or 0.0)
+        alicuotas_iva = list(fiscal.get("alicuotas_iva") or [])
+        condicion_iva_receptor_id = int(fiscal.get("condicion_iva_receptor_id") or 0)
 
         pre_guardado = FacturaArcaService.validar_pre_guardado(
             cliente_id=cliente[0],
@@ -794,6 +1015,7 @@ class ResumenesFrame(ctk.CTkFrame):
                 "condicion_iva": str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or ""),
                 "domicilio": str(emisor_fiscal[10] if len(emisor_fiscal) > 10 else "" or ""),
                 "punto_venta": punto_venta_num,
+                "carpeta_facturas": carpeta_facturas,
             }
 
             cuit_o_doc = documento_normalizado or "0"
@@ -895,6 +1117,109 @@ class ResumenesFrame(ctk.CTkFrame):
     def _sumar_importes_items(self, items):
         return float(round(sum(float(item.get("importe", 0) or 0) for item in list(items or [])), 2))
 
+    def _normalizar_modalidad(self, modalidad):
+        texto = str(modalidad or "").strip().lower()
+        texto = " ".join(texto.split())
+        return texto
+
+    def _modalidad_es_solo_resumen(self, modalidad):
+        normalizada = self._normalizar_modalidad(modalidad)
+        return normalizada in {"solo resumen"}
+
+    def _modalidad_requiere_vista_previa_factura(self, modalidad):
+        normalizada = self._normalizar_modalidad(modalidad)
+        return normalizada in {
+            "resumen + factura",
+            "resumen+factura",
+            "solo factura",
+        }
+
+    def _calcular_datos_fiscales_desde_items(self, tipo_factura, suma_items):
+        resultado = {
+            "ok": False,
+            "errores": [],
+            "neto_factura": 0.0,
+            "alicuota_iva": 0.0,
+            "importe_iva_factura": 0.0,
+            "total_factura_fiscal": 0.0,
+            "importe_exento_factura": 0.0,
+            "importe_tot_conc": 0.0,
+            "importe_tributos": 0.0,
+            "alicuotas_iva": [],
+            "condicion_iva_receptor_id": 0,
+            "tipo_comprobante": 0,
+        }
+
+        tipo_factura_normalizado = str(tipo_factura or "").strip()
+        if tipo_factura_normalizado not in {"Factura C", "Factura A"}:
+            resultado["errores"].append("Tipo de factura no compatible (solo Factura C / Factura A).")
+            return resultado
+
+        total_factura = float(round(float(suma_items or 0), 2))
+        if total_factura <= 0:
+            resultado["errores"].append("El total del resumen es inválido para facturación.")
+            return resultado
+
+        if tipo_factura_normalizado == "Factura A":
+            if not self.FACTURA_A_SERVICIOS_IMPORTE_ES_NETO:
+                resultado["errores"].append(
+                    "Configuración fiscal inválida: para Factura A este flujo requiere importes netos en servicios."
+                )
+                return resultado
+
+            neto_factura = round(total_factura, 2)
+            alicuota_iva = float(self.FACTURA_A_ALICUOTA_PORCENTAJE)
+            importe_iva_factura = round(neto_factura * (alicuota_iva / 100.0), 2)
+            total_factura_fiscal = round(neto_factura + importe_iva_factura, 2)
+            alicuotas_iva = [
+                {
+                    "id": 5,
+                    "base_imponible": neto_factura,
+                    "importe": importe_iva_factura,
+                }
+            ]
+            condicion_iva_receptor_id = 1
+            tipo_comprobante = 1
+        else:
+            neto_factura = round(total_factura, 2)
+            alicuota_iva = 0.0
+            importe_iva_factura = 0.0
+            total_factura_fiscal = round(total_factura, 2)
+            alicuotas_iva = []
+            condicion_iva_receptor_id = 5
+            tipo_comprobante = 11
+
+        importe_exento_factura = 0.0
+        importe_tot_conc = 0.0
+        importe_tributos = 0.0
+
+        total_componentes = round(
+            neto_factura + importe_iva_factura + importe_exento_factura + importe_tot_conc + importe_tributos,
+            2,
+        )
+        if round(total_factura_fiscal, 2) != total_componentes:
+            resultado["errores"].append(
+                "Los importes fiscales no cierran (neto + IVA + exento + no gravado + tributos != total)."
+            )
+            return resultado
+
+        resultado.update(
+            {
+                "ok": True,
+                "neto_factura": neto_factura,
+                "alicuota_iva": alicuota_iva,
+                "importe_iva_factura": importe_iva_factura,
+                "total_factura_fiscal": total_factura_fiscal,
+                "importe_exento_factura": importe_exento_factura,
+                "importe_tot_conc": importe_tot_conc,
+                "importe_tributos": importe_tributos,
+                "alicuotas_iva": alicuotas_iva,
+                "condicion_iva_receptor_id": condicion_iva_receptor_id,
+                "tipo_comprobante": tipo_comprobante,
+            }
+        )
+        return resultado
+
     def _obtener_periodo_facturado(self, resumen):
         fechas_inicio = []
         fechas_fin = []
@@ -913,7 +1238,7 @@ class ResumenesFrame(ctk.CTkFrame):
         periodo_hasta = max(fechas_fin) if fechas_fin else ""
         return periodo_desde, periodo_hasta
 
-    def _mostrar_vista_previa_resumen_para_factura(self, resumen):
+    def _mostrar_vista_previa_resumen_para_factura(self, resumen, contexto=None):
         resumen_actual = ResumenService.obtener(resumen.id)
         if not resumen_actual:
             messagebox.showerror(
@@ -926,6 +1251,13 @@ class ResumenesFrame(ctk.CTkFrame):
         items = self._armar_items_factura_desde_resumen(resumen_actual)
         total_items = self._sumar_importes_items(items)
         total_resumen = float(getattr(resumen_actual, "total", 0) or 0)
+        contexto_emision = contexto if isinstance(contexto, dict) else self._obtener_contexto_facturacion(resumen_actual.cliente_id)
+        tipo_factura_normalizado = str((contexto_emision or {}).get("tipo_factura") or "").strip()
+        emisor_habitual = str((contexto_emision or {}).get("emisor_habitual") or "").strip()
+        datos_fiscales = self._calcular_datos_fiscales_desde_items(
+            tipo_factura=tipo_factura_normalizado,
+            suma_items=total_items,
+        )
 
         ventana = ctk.CTkToplevel(self)
         ventana.title("Revisar resumen antes de emitir")
@@ -1018,6 +1350,50 @@ class ResumenesFrame(ctk.CTkFrame):
             text_color="#222222",
         ).pack(anchor="w", pady=2)
 
+        ctk.CTkLabel(
+            resumen_totales,
+            text=f"Emisor: {emisor_habitual or '-'}",
+            font=("Arial", 13),
+            text_color="#222222",
+        ).pack(anchor="w", pady=2)
+
+        ctk.CTkLabel(
+            resumen_totales,
+            text=f"Tipo de factura: {tipo_factura_normalizado or '-'}",
+            font=("Arial", 13),
+            text_color="#222222",
+        ).pack(anchor="w", pady=2)
+
+        if datos_fiscales.get("ok"):
+            if tipo_factura_normalizado == "Factura A":
+                texto_fiscal = (
+                    f"Factura A - Neto gravado: {self.formatear_moneda(datos_fiscales['neto_factura'])} | "
+                    f"IVA 21 %: {self.formatear_moneda(datos_fiscales['importe_iva_factura'])} | "
+                    f"Total fiscal: {self.formatear_moneda(datos_fiscales['total_factura_fiscal'])}"
+                )
+            else:
+                texto_fiscal = (
+                    f"Factura C - Total fiscal: {self.formatear_moneda(datos_fiscales['total_factura_fiscal'])} "
+                    "(sin IVA discriminado)"
+                )
+
+            ctk.CTkLabel(
+                resumen_totales,
+                text=texto_fiscal,
+                font=("Arial", 13, "bold"),
+                text_color="#1E5AA8",
+            ).pack(anchor="w", pady=(2, 0))
+        else:
+            ctk.CTkLabel(
+                resumen_totales,
+                text=(
+                    "Cálculo fiscal no disponible para emitir: "
+                    + " | ".join(datos_fiscales.get("errores") or ["Tipo de factura inválido."])
+                ),
+                font=("Arial", 12, "bold"),
+                text_color="#C00000",
+            ).pack(anchor="w", pady=(2, 0))
+
         diferencia = round(total_items - total_resumen, 2)
         if abs(diferencia) > 0.01:
             ctk.CTkLabel(
@@ -1037,6 +1413,15 @@ class ResumenesFrame(ctk.CTkFrame):
                 text_color="#1E7A2E",
             ).pack(anchor="w", pady=(2, 0))
 
+        emision_habilitada = abs(diferencia) <= 0.01 and bool(datos_fiscales.get("ok"))
+        if not emision_habilitada:
+            ctk.CTkLabel(
+                resumen_totales,
+                text="No se habilita la emisión hasta corregir cálculo fiscal y/o diferencia de totales.",
+                font=("Arial", 12, "bold"),
+                text_color="#C00000",
+            ).pack(anchor="w", pady=(2, 0))
+
         botones = ctk.CTkFrame(pie, fg_color="#F7F7F7", corner_radius=0)
         botones.grid(row=0, column=1, sticky="e", padx=(10, 14), pady=(10, 10))
 
@@ -1050,6 +1435,7 @@ class ResumenesFrame(ctk.CTkFrame):
             fg_color="#C00000",
             hover_color="#990000",
             width=150,
+            state="normal" if emision_habilitada else "disabled",
             command=lambda: _cerrar("emitir"),
         ).pack(side="right", padx=(8, 0))
 
@@ -1141,13 +1527,21 @@ class ResumenesFrame(ctk.CTkFrame):
         print(f"nombre_emisor_fiscal: {nombre_fiscal or '-'}")
         print(f"emisores_internos_encontrados: {resumen_internos}")
 
-        # 1) Vínculo directo por ID
-        if emisor_fiscal_id and EmisorService.obtener(emisor_fiscal_id):
-            print("criterio_vinculacion: id_directo")
-            print(f"emisor_facturacion_id_final: {emisor_fiscal_id}")
-            return emisor_fiscal_id, "id_directo"
+        # 1) Vínculo explícito por campo dedicado
+        if emisor_fiscal_id:
+            emisor_vinculado = EmisorService.obtener_por_emisor_fiscal_id(emisor_fiscal_id)
+            if emisor_vinculado:
+                print("criterio_vinculacion: emisor_fiscal_id")
+                print(f"emisor_facturacion_id_final: {emisor_vinculado[0]}")
+                return emisor_vinculado[0], "emisor_fiscal_id"
 
-        # 2) Vínculo por CUIT exacto
+        # 2) Compatibilidad histórica por coincidencia accidental de ID
+        if emisor_fiscal_id and EmisorService.obtener(emisor_fiscal_id):
+            print("criterio_vinculacion: id_directo_legacy")
+            print(f"emisor_facturacion_id_final: {emisor_fiscal_id}")
+            return emisor_fiscal_id, "id_directo_legacy"
+
+        # 3) Vínculo por CUIT exacto
         if cuit_fiscal:
             for emisor in emisores_internos:
                 cuit_interno = self._normalizar_cuit(emisor[4] if len(emisor) > 4 else "")
@@ -1156,7 +1550,7 @@ class ResumenesFrame(ctk.CTkFrame):
                     print(f"emisor_facturacion_id_final: {emisor[0]}")
                     return emisor[0], "cuit"
 
-        # 3) Vínculo por código único (alias exacto normalizado)
+        # 4) Vínculo por código único (alias exacto normalizado)
         if nombre_fiscal_normalizado:
             for emisor in emisores_internos:
                 alias_normalizado = self._normalizar_etiqueta_emisor(emisor[1] if len(emisor) > 1 else "")
@@ -1165,7 +1559,7 @@ class ResumenesFrame(ctk.CTkFrame):
                     print(f"emisor_facturacion_id_final: {emisor[0]}")
                     return emisor[0], "alias"
 
-        # 4) Último recurso: nombre exacto normalizado
+        # 5) Último recurso: nombre exacto normalizado
         if nombre_fiscal_normalizado:
             for emisor in emisores_internos:
                 nombre_normalizado = self._normalizar_etiqueta_emisor(emisor[3] if len(emisor) > 3 else "")
@@ -1350,6 +1744,10 @@ class ResumenesFrame(ctk.CTkFrame):
         ).grid(row=0, column=1)
 
     def generar_pendientes_seleccionados(self):
+        print(
+            "DIAGNOSTICO RESUMENES - metodo_candidato_pdf: generar_pendientes_seleccionados "
+            f"id(self)={self.instancia_id} archivo={__file__}"
+        )
         seleccion = self.tabla_pendientes.selection()
         if not seleccion:
             messagebox.showwarning(
@@ -1391,6 +1789,10 @@ class ResumenesFrame(ctk.CTkFrame):
         )
 
     def abrir_pdf_seleccionado(self):
+        print(
+            "DIAGNOSTICO RESUMENES - metodo_candidato_pdf: abrir_pdf_seleccionado "
+            f"id(self)={self.instancia_id} archivo={__file__}"
+        )
         resumen_id = self._obtener_resumen_id_seleccionado(
             titulo="Atencion",
             mensaje="Seleccione un resumen para abrir.",
@@ -1423,6 +1825,10 @@ class ResumenesFrame(ctk.CTkFrame):
             return None
 
     def _resolver_pdf_resumen(self, resumen):
+        print(
+            "DIAGNOSTICO RESUMENES - metodo_candidato_pdf: _resolver_pdf_resumen "
+            f"id(self)={self.instancia_id} archivo={__file__}"
+        )
         if resumen is None:
             raise ValueError("No se encontró el resumen seleccionado.")
 

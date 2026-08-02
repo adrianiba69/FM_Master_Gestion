@@ -104,12 +104,13 @@ class PDFFiscalService:
         emisor_iva = str(PDFFiscalService._pick(datos_emisor, "condicion_iva", default=""))
         emisor_domicilio = str(PDFFiscalService._pick(datos_emisor, "domicilio", default=""))
         emisor_punto_venta = str(PDFFiscalService._pick(datos_emisor, "punto_venta", default=punto_venta))
+        logo_path = PDFFiscalService._resolver_logo_emisor(datos_emisor)
 
         # ══════════════════ ENCABEZADO PROFESIONAL ══════════════════
         y = alto - 30
 
         # Logo (esquina superior izquierda)
-        PDFFiscalService._dibujar_logo(pdf, x=30, y_banda_inferior=y - 80, altura_banda=80)
+        PDFFiscalService._dibujar_logo(pdf, x=30, y_banda_inferior=y - 80, altura_banda=80, logo_path=logo_path)
 
         # Información del emisor (columna central-izquierda)
         pdf.setFillColor(PDFFiscalService.COLOR_TEXTO)
@@ -247,15 +248,44 @@ class PDFFiscalService:
         # Se baja el bloque fiscal para acercarlo al pie sin invadir la leyenda inferior.
         y = y - 65
         pdf.setFillColor(PDFFiscalService.COLOR_TEXTO)
-        pdf.setFont("Helvetica-Bold", 12)
-        importe_fmt = PDFFiscalService._fmt_moneda(importe_total, moneda)
-        pdf.drawString(40, y, "IMPORTE TOTAL")
-        pdf.drawRightString(ancho - 40, y, importe_fmt)
-        
+        tipo_normalizado = tipo.strip().upper()
+        if tipo_normalizado == "FACTURA A":
+            importe_neto = PDFFiscalService._to_float(
+                PDFFiscalService._pick(datos_comprobante, "importe_neto", "neto_factura", default=0.0)
+            )
+            importe_iva = PDFFiscalService._to_float(
+                PDFFiscalService._pick(datos_comprobante, "importe_iva", "importe_iva_factura", default=0.0)
+            )
+            alicuota_iva = PDFFiscalService._to_float(
+                PDFFiscalService._pick(datos_comprobante, "alicuota_iva", default=21.0)
+            )
+            importe_total_fiscal = PDFFiscalService._to_float(
+                PDFFiscalService._pick(datos_comprobante, "importe_total", default=importe_total)
+            )
+            etiquetas = [
+                ("Importe neto gravado", importe_neto, "Helvetica-Bold", 11),
+                (f"IVA {alicuota_iva:.0f} %", importe_iva, "Helvetica-Bold", 11),
+                ("IMPORTE TOTAL", importe_total_fiscal, "Helvetica-Bold", 12),
+            ]
+            for indice, (etiqueta, valor, fuente, tamano) in enumerate(etiquetas):
+                posicion_y = y - (indice * 18)
+                pdf.setFont(fuente, tamano)
+                pdf.drawString(40, posicion_y, etiqueta)
+                pdf.drawRightString(ancho - 40, posicion_y, PDFFiscalService._fmt_moneda(valor, moneda))
+
+            y = y - 56
+        else:
+            pdf.setFont("Helvetica-Bold", 12)
+            importe_fmt = PDFFiscalService._fmt_moneda(importe_total, moneda)
+            pdf.drawString(40, y, "IMPORTE TOTAL")
+            pdf.drawRightString(ancho - 40, y, importe_fmt)
+
+            y = y - 18
+
         pdf.setFont("Helvetica", 10)
         pdf.drawString(40, y - 18, "CAE")
         pdf.drawRightString(ancho - 40, y - 18, cae or "-")
-        
+
         pdf.drawString(40, y - 36, "Vencimiento CAE")
         pdf.drawRightString(ancho - 40, y - 36, PDFFiscalService._fmt_fecha(vto_cae))
         
@@ -267,14 +297,14 @@ class PDFFiscalService:
         pdf.drawString(30, 26, "Documento generado localmente para pruebas de homologacion. Sin validez fiscal.")
 
     @staticmethod
-    def _dibujar_logo(pdf, x, y_banda_inferior, altura_banda):
+    def _dibujar_logo(pdf, x, y_banda_inferior, altura_banda, logo_path=None):
         """Dibuja el logo dentro de la banda del encabezado.
         Retorna True si se dibujó, False si el archivo no existe o hay error."""
         try:
-            logo_path = PDFFiscalService.LOGO_PATH
-            if not Path(logo_path).exists():
+            ruta = Path(str(logo_path or "").strip())
+            if not ruta.is_file():
                 return False
-            imagen = ImageReader(str(logo_path))
+            imagen = ImageReader(str(ruta))
             w_orig, h_orig = imagen.getSize()
             escala = min(
                 PDFFiscalService.LOGO_MAX_WIDTH / float(w_orig),
@@ -296,6 +326,39 @@ class PDFFiscalService:
             return True
         except (OSError, ValueError, TypeError):
             return False
+
+    @staticmethod
+    def _resolver_logo_emisor(datos_emisor):
+        candidatos = []
+        if isinstance(datos_emisor, dict):
+            candidatos.extend(
+                [
+                    datos_emisor.get("logo_path"),
+                    datos_emisor.get("ruta_logo"),
+                    datos_emisor.get("logo"),
+                ]
+            )
+            carpeta = str(datos_emisor.get("carpeta_facturas") or "").strip()
+            if carpeta:
+                base = Path(carpeta)
+                candidatos.extend(
+                    [
+                        base / "logo.png",
+                        base / "logo.jpg",
+                        base / "logo.jpeg",
+                        base / "logo.webp",
+                        base / "logo_emisor.png",
+                        base / "logo_emisor.jpg",
+                    ]
+                )
+
+        for candidato in candidatos:
+            if not candidato:
+                continue
+            ruta = Path(str(candidato).strip())
+            if ruta.is_file():
+                return ruta
+        return None
 
     @staticmethod
     def _resolver_ruta_destino(ruta_destino):

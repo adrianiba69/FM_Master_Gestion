@@ -231,7 +231,38 @@ class FMMasterApp(ctk.CTk):
             )
             error_label.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
 
-    def mostrar_resumenes(self, cliente_id=None, on_cambio=None, contexto_facturacion=None):
+    def mostrar_resumenes(self, cliente_id=None, on_cambio=None, contexto_facturacion=None, origen_creacion="main.mostrar_resumenes"):
+        frame_existente = None
+        if hasattr(self, "panel") and hasattr(self.panel, "winfo_children"):
+            for child in self.panel.winfo_children():
+                if isinstance(child, ResumenesFrame):
+                    frame_existente = child
+                    break
+
+        if frame_existente is not None and cliente_id is None and contexto_facturacion is None and on_cambio is None:
+            try:
+                cliente_actual = frame_existente.obtener_cliente_id_actual()
+            except Exception:
+                cliente_actual = None
+            print(
+                "DIAGNOSTICO RESUMENES - reutilizando_instancia_existente "
+                f"id(self)={id(frame_existente)} cliente_actual={cliente_actual} "
+                f"origen={origen_creacion}"
+            )
+            return
+
+        if frame_existente is not None and cliente_id is None:
+            try:
+                cliente_actual = frame_existente.obtener_cliente_id_actual()
+            except Exception:
+                cliente_actual = None
+            if cliente_actual is not None:
+                cliente_id = cliente_actual
+                print(
+                    "DIAGNOSTICO RESUMENES - preservando_cliente_desde_instancia_previa "
+                    f"cliente_id={cliente_id} origen={origen_creacion}"
+                )
+
         self.limpiar_panel()
         try:
             resumenes = ResumenesFrame(
@@ -239,6 +270,7 @@ class FMMasterApp(ctk.CTk):
                 cliente_id=cliente_id,
                 on_cambio=on_cambio,
                 contexto_facturacion=contexto_facturacion,
+                origen_creacion=origen_creacion,
             )
             resumenes.grid(row=0, column=0, sticky="nsew")
         except Exception as error:

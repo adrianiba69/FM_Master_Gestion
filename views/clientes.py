@@ -346,26 +346,35 @@ class ClientesFrame(ctk.CTkFrame):
         )
 
     def _abrir_resumenes_desde_ficha(self, id_cliente, parent_toplevel=None, on_cambio=None):
-        fila_cliente = ClienteService.obtener(id_cliente)
-        contexto_facturacion = None
-        if fila_cliente is not None:
-            contexto_facturacion = {
-                "cliente_id": id_cliente,
-                "modalidad_comprobante": fila_cliente[21] if len(fila_cliente) > 21 and fila_cliente[21] else "Solo Resumen",
-                "emisor_habitual": fila_cliente[22] if len(fila_cliente) > 22 and fila_cliente[22] else "FM Master 98.3",
-                "tipo_factura": fila_cliente[12] if len(fila_cliente) > 12 and fila_cliente[12] else "No factura",
-                "condicion_iva": fila_cliente[11] if len(fila_cliente) > 11 and fila_cliente[11] else "",
-            }
+        self._abrir_resumenes_para_cliente(
+            id_cliente=id_cliente,
+            parent_toplevel=parent_toplevel,
+            on_cambio=on_cambio,
+            origen_creacion="clientes._abrir_resumenes_desde_ficha",
+        )
+
+    def _abrir_resumenes_para_cliente(self, id_cliente, parent_toplevel=None, on_cambio=None, origen_creacion="clientes._abrir_resumenes_para_cliente"):
+        try:
+            id_cliente_int = int(id_cliente)
+        except (TypeError, ValueError):
+            messagebox.showerror("Error", "No se pudo identificar el cliente seleccionado.")
+            return
+
+        fila_cliente = ClienteService.obtener(id_cliente_int)
+        if fila_cliente is None:
+            messagebox.showerror("Error", "No se encontró el cliente seleccionado.")
+            return
 
         aplicacion = self.winfo_toplevel()
         if hasattr(aplicacion, "mostrar_resumenes"):
             aplicacion.mostrar_resumenes(
-                cliente_id=id_cliente,
+                cliente_id=id_cliente_int,
                 on_cambio=on_cambio,
-                contexto_facturacion=contexto_facturacion,
+                origen_creacion=origen_creacion,
             )
             aplicacion.lift()
             aplicacion.focus_force()
+
         if parent_toplevel is not None:
             try:
                 if parent_toplevel.winfo_exists():
@@ -511,9 +520,12 @@ class ClientesFrame(ctk.CTkFrame):
             messagebox.showwarning("Atencion", "Seleccione un cliente para generar el resumen.")
             return
 
-        aplicacion = self.winfo_toplevel()
-        if hasattr(aplicacion, "mostrar_resumenes"):
-            aplicacion.mostrar_resumenes(cliente_id=id_cliente)
+        self._abrir_resumenes_para_cliente(
+            id_cliente=id_cliente,
+            parent_toplevel=None,
+            on_cambio=None,
+            origen_creacion="clientes.abrir_resumen_cliente",
+        )
 
     def abrir_cuenta_corriente(self):
         id_cliente = self.obtener_id_seleccionado()

@@ -8,11 +8,13 @@ import customtkinter as ctk
 from config import COLOR_PRINCIPAL
 from database import conectar
 from pdf.nombre_archivos import nombre_cliente_archivo, nombre_factura_pdf
+from services.arca.pdf_fiscal_service import PDFFiscalService
 from views.clientes import ClientesFrame
 from services.cobro_service import CobroService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
+from services.resumen_service import ResumenService
 from services.whatsapp_service import WhatsAppService
 from views.cliente_ficha import FichaClienteFrame
 
@@ -932,7 +934,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             return None
 
         nombre_pdf = nombre_factura_pdf(cliente_id, tipo_factura, codigo_factura)
-        ruta_pdf = Path(carpeta_facturas) / nombre_pdf
+        ruta_pdf_estandar = Path(carpeta_facturas) / nombre_pdf
+        ruta_pdf = ruta_pdf_estandar
         if not ruta_pdf.is_file():
             coincidencias = self._buscar_pdf_historico_compatible(
                 carpeta_facturas=carpeta_facturas,
@@ -951,6 +954,21 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 )
                 return None
 
+        ruta_pdf_inicial = ruta_pdf
+        regenerado = False
+        if tipo_factura == "Factura A":
+            ruta_pdf, regenerado = self._asegurar_pdf_fiscal_actualizado_factura_a(
+                factura=factura,
+                valores_fila=valores_fila,
+                emisor_fiscal=emisor_fiscal,
+                carpeta_facturas=carpeta_facturas,
+                ruta_pdf_estandar=ruta_pdf_estandar,
+                ruta_pdf_resuelta=ruta_pdf,
+                cliente_id=cliente_id,
+                tipo_factura=tipo_factura,
+                codigo_factura=codigo_factura,
+            )
+
         if not ruta_pdf.is_file():
             messagebox.showwarning(
                 "Facturas electrónicas",
@@ -959,11 +977,229 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             )
             return None
 
+        coincide_con_estandar = False
+        try:
+            coincide_con_estandar = ruta_pdf.resolve() == ruta_pdf_estandar.resolve()
+        except OSError:
+            coincide_con_estandar = False
+
+        print(
+            "DIAGNOSTICO PDF FACTURAS ELECTRONICAS | "
+            f"factura_id={factura_id} | tipo={tipo_factura} | "
+            f"ruta_elegida_inicial={ruta_pdf_inicial} | "
+            f"archivo={ruta_pdf.name} | "
+            f"fecha_archivo={self._fecha_modificacion_archivo(ruta_pdf)} | "
+            f"regenerado={regenerado} | "
+            f"coincide_con_ruta_estandar={coincide_con_estandar} | "
+            f"ruta_final_abierta={ruta_pdf}"
+        )
+
         return {
             "factura": factura,
             "valores_fila": valores_fila,
             "ruta_pdf": ruta_pdf,
         }
+
+    def _asegurar_pdf_fiscal_actualizado_factura_a(
+        self,
+        factura,
+        valores_fila,
+        emisor_fiscal,
+        carpeta_facturas,
+        ruta_pdf_estandar,
+        ruta_pdf_resuelta,
+        cliente_id,
+        tipo_factura,
+        codigo_factura,
+    ):
+        ruta_estandar = Path(ruta_pdf_estandar)
+        ruta_resuelta = Path(ruta_pdf_resuelta)
+
+        requiere_regenerar = False
+        if not ruta_estandar.is_file():
+            requiere_regenerar = True
+        else:
+            tiene_desglose = self._pdf_contiene_desglose_factura_a(ruta_estandar)
+            if not tiene_desglose:
+                requiere_regenerar = True
+
+            if ruta_resuelta.is_file() and ruta_resuelta.resolve() != ruta_estandar.resolve():
+                try:
+                    if ruta_resuelta.stat().st_mtime > ruta_estandar.stat().st_mtime:
+                        requiere_regenerar = True
+                except OSError:
+                    pass
+
+        if not requiere_regenerar:
+            return ruta_estandar if ruta_estandar.is_file() else ruta_resuelta, False
+
+        datos_pdf = self._construir_datos_pdf_fiscal_desde_factura(
+            factura=factura,
+            valores_fila=valores_fila,
+            emisor_fiscal=emisor_fiscal,
+            carpeta_facturas=carpeta_facturas,
+            cliente_id=cliente_id,
+            tipo_factura=tipo_factura,
+            codigo_factura=codigo_factura,
+        )
+        if not datos_pdf:
+            return ruta_resuelta, False
+
+        resultado = PDFFiscalService.generar_factura_c(
+            ruta_destino=str(ruta_estandar),
+            datos_emisor=datos_pdf["datos_emisor"],
+            datos_receptor=datos_pdf["datos_receptor"],
+            datos_comprobante=datos_pdf["datos_comprobante"],
+        )
+        if not resultado.get("ok"):
+            return ruta_resuelta, False
+
+        return Path(str(resultado.get("ruta_pdf") or ruta_estandar)), True
+
+    def _construir_datos_pdf_fiscal_desde_factura(
+        self,
+        factura,
+        valores_fila,
+        emisor_fiscal,
+        carpeta_facturas,
+        cliente_id,
+        tipo_factura,
+        codigo_factura,
+    ):
+        resumen_id = factura.get("resumen_id")
+        if not resumen_id:
+            return None
+
+        resumen = ResumenService.obtener(resumen_id)
+        cliente = ResumenService.obtener_cliente(resumen_id)
+        if not resumen or not cliente:
+            return None
+
+        items = []
+        for concepto in list(getattr(resumen, "conceptos", []) or []):
+            descripcion = str(getattr(concepto, "descripcion", "") or "").strip()
+            nombre_concepto = str(getattr(concepto, "concepto", "") or "").strip()
+            texto_item = f"{nombre_concepto} - {descripcion}" if descripcion else nombre_concepto
+            items.append(
+                {
+                    "cantidad": float(getattr(concepto, "cantidad", 0) or 0),
+                    "descripcion": texto_item or "Servicio",
+                    "precio_unitario": float(getattr(concepto, "importe", 0) or 0),
+                    "importe": float(getattr(concepto, "total", 0) or 0),
+                }
+            )
+
+        neto = round(sum(float(item.get("importe", 0) or 0) for item in items), 2)
+        total = round(float(factura.get("importe_total") or 0), 2)
+        if total <= 0:
+            total = round(float(getattr(resumen, "total", 0) or 0), 2)
+
+        if tipo_factura == "Factura A":
+            alicuota = 21.0
+            iva = round(total - neto, 2)
+            if iva < 0:
+                iva = round(neto * (alicuota / 100.0), 2)
+                total = round(neto + iva, 2)
+        else:
+            alicuota = 0.0
+            iva = 0.0
+
+        fecha_valor = str(factura.get("valores_tabla_fecha") or "")
+        if not fecha_valor and valores_fila and len(valores_fila) > 0:
+            fecha_fila = str(valores_fila[0] or "").strip()
+            try:
+                fecha_valor = datetime.strptime(fecha_fila, "%d/%m/%Y").strftime("%Y%m%d")
+            except (TypeError, ValueError):
+                fecha_valor = datetime.now().strftime("%Y%m%d")
+
+        vto_cae = str(factura.get("vencimiento") or "").strip()
+        if len(vto_cae) == 10 and "-" in vto_cae:
+            vto_cae = vto_cae.replace("-", "")
+
+        numero_comprobante = 0
+        try:
+            numero_comprobante = int(str(codigo_factura).split("-", 1)[1])
+        except (TypeError, ValueError, IndexError):
+            try:
+                numero_comprobante = int(str(factura.get("numero_factura_raw") or "0").split("-", 1)[-1])
+            except (TypeError, ValueError):
+                numero_comprobante = 0
+
+        punto_venta = str(factura.get("punto_venta_raw") or "").strip()
+        if not punto_venta and "-" in codigo_factura:
+            punto_venta = str(codigo_factura).split("-", 1)[0]
+
+        datos_emisor = {
+            "razon_social": str(emisor_fiscal[1] if len(emisor_fiscal) > 1 else "" or ""),
+            "nombre_fantasia": str(emisor_fiscal[2] if len(emisor_fiscal) > 2 else "" or ""),
+            "cuit": self._normalizar_cuit(emisor_fiscal[3] if len(emisor_fiscal) > 3 else "") or "",
+            "condicion_iva": str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or ""),
+            "domicilio": str(emisor_fiscal[10] if len(emisor_fiscal) > 10 else "" or ""),
+            "punto_venta": punto_venta,
+            "carpeta_facturas": carpeta_facturas,
+        }
+
+        datos_receptor = {
+            "razon_social": str(cliente[2] if len(cliente) > 2 else "" or ""),
+            "cuit": str(cliente[9] if len(cliente) > 9 else "" or ""),
+            "documento": str(cliente[9] if len(cliente) > 9 else "" or ""),
+            "condicion_iva": str(cliente[10] if len(cliente) > 10 else "" or ""),
+            "domicilio": self._combinar_domicilio_cliente(cliente),
+        }
+
+        datos_comprobante = {
+            "tipo": tipo_factura,
+            "numero": numero_comprobante,
+            "fecha": fecha_valor,
+            "concepto": "1 - Productos",
+            "periodo_servicio_desde": "",
+            "periodo_servicio_hasta": "",
+            "vencimiento_pago": "",
+            "importe_neto": neto,
+            "importe_iva": iva,
+            "alicuota_iva": alicuota,
+            "importe_total": total,
+            "items": items,
+            "moneda": "PES",
+            "cae": str(valores_fila[6] if valores_fila and len(valores_fila) > 6 else "" or ""),
+            "vencimiento_cae": vto_cae,
+            "ambiente": str(emisor_fiscal[9] if len(emisor_fiscal) > 9 else "Homologación"),
+            "punto_venta": punto_venta,
+        }
+        return {
+            "datos_emisor": datos_emisor,
+            "datos_receptor": datos_receptor,
+            "datos_comprobante": datos_comprobante,
+        }
+
+    @staticmethod
+    def _pdf_contiene_desglose_factura_a(ruta_pdf):
+        try:
+            contenido = Path(ruta_pdf).read_bytes().decode("latin-1", errors="ignore").lower()
+        except OSError:
+            return False
+
+        return (
+            "importe neto gravado" in contenido
+            and "iva" in contenido
+            and "importe total" in contenido
+        )
+
+    @staticmethod
+    def _fecha_modificacion_archivo(ruta_pdf):
+        try:
+            marca = Path(ruta_pdf).stat().st_mtime
+            return datetime.fromtimestamp(marca).strftime("%Y-%m-%d %H:%M:%S")
+        except OSError:
+            return "-"
+
+    @staticmethod
+    def _combinar_domicilio_cliente(cliente_fila):
+        direccion = str(cliente_fila[5] if len(cliente_fila) > 5 else "" or "").strip()
+        localidad = str(cliente_fila[6] if len(cliente_fila) > 6 else "" or "").strip()
+        if direccion and localidad:
+            return f"{direccion} - {localidad}"
+        return direccion or localidad
 
     def _mostrar_menu_contextual(self, event):
         fila = self.tabla.identify_row(event.y)
@@ -1126,7 +1362,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         cliente_id = factura.get("cliente_id")
         aplicacion = self.winfo_toplevel()
         if hasattr(aplicacion, "mostrar_resumenes"):
-            aplicacion.mostrar_resumenes(cliente_id=cliente_id)
+            aplicacion.mostrar_resumenes(
+                cliente_id=cliente_id,
+                origen_creacion="facturas_electronicas.abrir_resumen_cliente",
+            )
             self._seleccionar_resumen_en_vista(aplicacion, resumen_id)
             aplicacion.lift()
             aplicacion.focus_force()

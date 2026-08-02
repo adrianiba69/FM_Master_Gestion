@@ -1,7 +1,9 @@
 from datetime import date, datetime
+from pathlib import Path
 
 from database import conectar
 from models.resumen import Resumen, ResumenConcepto
+from services.emisor_service import EmisorService
 
 
 class ResumenService:
@@ -680,16 +682,76 @@ class ResumenService:
     def obtener_emisor_de_cliente(resumen_id):
         conn = conectar()
         cur = conn.cursor()
-        cur.execute("SELECT c.emisor_id FROM resumenes r JOIN clientes c ON c.id=r.cliente_id WHERE r.id=?", (resumen_id,))
+        cur.execute("SELECT emisor_fiscal_id FROM resumenes WHERE id=?", (resumen_id,))
         fila = cur.fetchone()
         if not fila or not fila[0]:
             conn.close()
             return None
-        emisor_id = fila[0]
-        cur.execute("SELECT id, nombre, cuit, condicion_iva, direccion, localidad, telefono, email, activo FROM emisores_facturacion WHERE id=?", (emisor_id,))
-        emisor = cur.fetchone()
+        emisor_fiscal_id = int(fila[0])
+        cur.execute(
+            """
+            SELECT
+                id,
+                razon_social,
+                nombre_fantasia,
+                cuit,
+                condicion_iva,
+                domicilio,
+                carpeta_facturas
+            FROM emisores_fiscales
+            WHERE id=?
+            """,
+            (emisor_fiscal_id,),
+        )
+        emisor_fiscal = cur.fetchone()
+        emisor_interno = EmisorService.obtener_por_emisor_fiscal_id(emisor_fiscal_id)
         conn.close()
-        return emisor
+        if not emisor_fiscal:
+            return None
+
+        domicilio = str(emisor_fiscal[5] or "").strip()
+        if not domicilio and emisor_interno:
+            domicilio = str(emisor_interno[9] or "").strip()
+
+        telefono = ""
+        email = ""
+        if emisor_interno:
+            telefono = str(emisor_interno[11] or "").strip()
+            email = str(emisor_interno[12] or "").strip()
+
+        carpeta_facturas = str(emisor_fiscal[6] or "").strip()
+        return {
+            "id": int(emisor_fiscal[0]),
+            "razon_social": str(emisor_fiscal[1] or "").strip(),
+            "nombre_fantasia": str(emisor_fiscal[2] or "").strip(),
+            "cuit": str(emisor_fiscal[3] or "").strip(),
+            "condicion_iva": str(emisor_fiscal[4] or "").strip(),
+            "domicilio": domicilio,
+            "telefono": telefono,
+            "email": email,
+            "carpeta_facturas": carpeta_facturas,
+            "logo_path": ResumenService._resolver_logo_emisor(carpeta_facturas),
+        }
+
+    @staticmethod
+    def _resolver_logo_emisor(carpeta_facturas):
+        carpeta = str(carpeta_facturas or "").strip()
+        if not carpeta:
+            return ""
+
+        base = Path(carpeta)
+        candidatos = [
+            base / "logo.png",
+            base / "logo.jpg",
+            base / "logo.jpeg",
+            base / "logo.webp",
+            base / "logo_emisor.png",
+            base / "logo_emisor.jpg",
+        ]
+        for candidato in candidatos:
+            if candidato.is_file():
+                return str(candidato)
+        return ""
 
     @staticmethod
     def actualizar_pdf_path(resumen_id, ruta):

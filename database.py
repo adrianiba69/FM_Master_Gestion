@@ -182,7 +182,8 @@ def crear_base():
         certificado_path TEXT,
         clave_privada_path TEXT,
         arca_modo TEXT DEFAULT 'Homologación',
-        arca_estado TEXT DEFAULT 'Desconocido'
+        arca_estado TEXT DEFAULT 'Desconocido',
+        emisor_fiscal_id INTEGER
     )
     """)
 
@@ -205,6 +206,7 @@ def crear_base():
         "clave_privada_path": "TEXT",
         "arca_modo": "TEXT DEFAULT 'Homologación'",
         "arca_estado": "TEXT DEFAULT 'Desconocido'",
+        "emisor_fiscal_id": "INTEGER",
     }
     for columna, definicion in columnas_emisores.items():
         agregar_columna_si_falta(cur, "emisores_facturacion", columna, definicion)
