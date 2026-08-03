@@ -853,15 +853,20 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         datos = self._resolver_pdf_factura_seleccionada()
         if not datos:
             return
+        self.abrir_pdf_factura_por_ruta(datos["ruta_pdf"], parent=self)
 
+    @staticmethod
+    def abrir_pdf_factura_por_ruta(ruta_pdf, parent=None):
         try:
-            os.startfile(str(datos["ruta_pdf"]))
+            os.startfile(str(ruta_pdf))
+            return True
         except OSError as error:
             messagebox.showwarning(
                 "Facturas electrónicas",
                 f"No se pudo abrir el PDF asociado a esta factura.\n\n{error}",
-                parent=self,
+                parent=parent,
             )
+            return False
 
     def _resolver_pdf_factura_seleccionada(self):
         seleccion = self.tabla.selection()

@@ -17,6 +17,7 @@ from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
 from services.resumen_service import ResumenService
 from services.whatsapp_service import WhatsAppService
+from views.facturas_electronicas import FacturasElectronicasFrame
 
 
 class ResumenesFrame(ctk.CTkFrame):
@@ -1066,21 +1067,22 @@ class ResumenesFrame(ctk.CTkFrame):
                 return
 
             ruta_pdf = str(pdf.get("ruta_pdf") or "").strip()
-            if ruta_pdf:
-                try:
-                    os.startfile(ruta_pdf)
-                except OSError:
-                    pass
-
             self.cargar_resumenes()
-
-            messagebox.showinfo(
-                "Emitir factura",
-                "Factura autorizada correctamente.\n"
-                f"Comprobante: {tipo_factura_normalizado[-1]} {codigo_factura}\n"
-                f"CAE: {cae or '-'}\n"
-                f"Vencimiento CAE: {vencimiento_cae or '-'}",
-                parent=self,
+            self._mostrar_modal_factura_emitida(
+                cliente_fila=cliente,
+                emisor_fiscal=emisor_fiscal,
+                tipo_factura=tipo_factura_normalizado,
+                punto_venta_num=punto_venta_num,
+                numero_comprobante=numero_comprobante,
+                codigo_factura=codigo_factura,
+                cae=cae,
+                vencimiento_cae=vencimiento_cae,
+                neto_factura=neto_factura,
+                importe_iva_factura=importe_iva_factura,
+                total_factura_fiscal=total_factura_fiscal,
+                factura_id=factura_id,
+                resumen_id=resumen.id,
+                ruta_pdf_factura=ruta_pdf,
             )
         except Exception as error:
             messagebox.showerror(
@@ -1088,6 +1090,239 @@ class ResumenesFrame(ctk.CTkFrame):
                 f"Error inesperado durante la emisión:\n{error}",
                 parent=self,
             )
+
+    def _mostrar_modal_factura_emitida(
+        self,
+        cliente_fila,
+        emisor_fiscal,
+        tipo_factura,
+        punto_venta_num,
+        numero_comprobante,
+        codigo_factura,
+        cae,
+        vencimiento_cae,
+        neto_factura,
+        importe_iva_factura,
+        total_factura_fiscal,
+        factura_id,
+        resumen_id,
+        ruta_pdf_factura,
+    ):
+        modal = ctk.CTkToplevel(self)
+        modal.title("FACTURA EMITIDA CORRECTAMENTE")
+        modal.configure(fg_color="white")
+        modal.transient(self.winfo_toplevel())
+        modal.grab_set()
+        modal.update_idletasks()
+
+        ancho = 920
+        alto = 610
+        pantalla_ancho = int(modal.winfo_screenwidth() or 1366)
+        pantalla_alto = int(modal.winfo_screenheight() or 768)
+        pos_x = max(0, (pantalla_ancho - ancho) // 2)
+        pos_y = max(0, (pantalla_alto - alto) // 2)
+        modal.geometry(f"{ancho}x{alto}+{pos_x}+{pos_y}")
+        modal.minsize(860, 560)
+        modal.grid_columnconfigure(0, weight=1)
+        modal.grid_rowconfigure(1, weight=1)
+
+        encabezado = ctk.CTkFrame(modal, fg_color="white", corner_radius=0)
+        encabezado.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 8))
+        encabezado.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            encabezado,
+            text="✓",
+            text_color="#1E7A2E",
+            font=("Arial", 62, "bold"),
+            width=70,
+        ).grid(row=0, column=0, sticky="nw", padx=(0, 12))
+
+        ctk.CTkLabel(
+            encabezado,
+            text="FACTURA EMITIDA CORRECTAMENTE",
+            text_color="#145A32",
+            font=("Arial", 30, "bold"),
+        ).grid(row=0, column=1, sticky="w")
+
+        ctk.CTkLabel(
+            encabezado,
+            text="Estado ARCA: Autorizada",
+            text_color="#1E7A2E",
+            font=("Arial", 15, "bold"),
+        ).grid(row=1, column=1, sticky="w", pady=(6, 0))
+
+        cuerpo = ctk.CTkFrame(modal, fg_color="#F8FAF8", corner_radius=10)
+        cuerpo.grid(row=1, column=0, sticky="nsew", padx=24, pady=(8, 14))
+        cuerpo.grid_columnconfigure(0, weight=1)
+        cuerpo.grid_columnconfigure(1, weight=1)
+
+        cliente = str(cliente_fila[2] if len(cliente_fila) > 2 else "" or "").strip() or "-"
+        emisor = EmisorFiscalService.etiqueta_visible(emisor_fiscal)
+        numero_fmt = f"{int(numero_comprobante or 0):08d}" if str(numero_comprobante).isdigit() else str(numero_comprobante or "-")
+        punto_venta_fmt = f"{int(punto_venta_num or 0):05d}" if str(punto_venta_num).isdigit() else str(punto_venta_num or "-")
+
+        datos_col_izq = [
+            ("Cliente", cliente),
+            ("Emisor", emisor or "-"),
+            ("Tipo de comprobante", tipo_factura or "-"),
+            ("Punto de venta", punto_venta_fmt),
+            ("Número", numero_fmt),
+            ("CAE", cae or "-"),
+        ]
+        datos_col_der = [
+            ("Vencimiento CAE", self.formatear_fecha(vencimiento_cae) or "-"),
+            ("Neto", self.formatear_moneda(neto_factura)),
+        ]
+        if str(tipo_factura or "").strip() == "Factura A":
+            datos_col_der.append((f"IVA {self.FACTURA_A_ALICUOTA_PORCENTAJE:.0f} %", self.formatear_moneda(importe_iva_factura)))
+        datos_col_der.append(("Total", self.formatear_moneda(total_factura_fiscal)))
+        datos_col_der.append(("Comprobante", f"{tipo_factura[-1] if tipo_factura else '-'} {codigo_factura or '-'}"))
+
+        self._dibujar_columna_detalle(cuerpo, 0, datos_col_izq)
+        self._dibujar_columna_detalle(cuerpo, 1, datos_col_der)
+
+        botones = ctk.CTkFrame(modal, fg_color="white", corner_radius=0)
+        botones.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 20))
+        for col in range(5):
+            botones.grid_columnconfigure(col, weight=1)
+
+        ctk.CTkButton(
+            botones,
+            text="Abrir Factura PDF",
+            height=42,
+            fg_color="#C00000",
+            hover_color="#990000",
+            command=lambda: self._abrir_factura_pdf_emitida(ruta_pdf_factura),
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 10))
+
+        ctk.CTkButton(
+            botones,
+            text="Abrir Resumen PDF",
+            height=42,
+            fg_color="#444444",
+            hover_color="#222222",
+            command=lambda: self._abrir_resumen_pdf_por_id(resumen_id),
+        ).grid(row=0, column=1, sticky="ew", padx=8, pady=(0, 10))
+
+        ctk.CTkButton(
+            botones,
+            text="Enviar por WhatsApp",
+            height=42,
+            fg_color="#1B7F3A",
+            hover_color="#15632D",
+            command=lambda: self._enviar_factura_emitida_whatsapp(
+                cliente_fila=cliente_fila,
+                tipo_factura=tipo_factura,
+                codigo_factura=codigo_factura,
+                total_factura_fiscal=total_factura_fiscal,
+                ruta_pdf_factura=ruta_pdf_factura,
+            ),
+        ).grid(row=0, column=2, sticky="ew", padx=8, pady=(0, 10))
+
+        tiene_flujo_email = callable(getattr(self, "_enviar_email_existente", None))
+        ctk.CTkButton(
+            botones,
+            text="Enviar por e-mail",
+            height=42,
+            fg_color="#2E5B8A",
+            hover_color="#224264",
+            state="normal" if tiene_flujo_email else "disabled",
+            command=lambda: self._enviar_email_existente(
+                cliente_fila=cliente_fila,
+                ruta_pdf_factura=ruta_pdf_factura,
+            ),
+        ).grid(row=0, column=3, sticky="ew", padx=8, pady=(0, 10))
+
+        ctk.CTkButton(
+            botones,
+            text="Finalizar",
+            height=42,
+            fg_color="#666666",
+            hover_color="#444444",
+            command=modal.destroy,
+        ).grid(row=0, column=4, sticky="ew", padx=(8, 0), pady=(0, 10))
+
+        if not tiene_flujo_email:
+            ctk.CTkLabel(
+                botones,
+                text="No se detectó un flujo de e-mail reutilizable en este módulo.",
+                text_color="#666666",
+                font=("Arial", 11),
+            ).grid(row=1, column=0, columnspan=5, sticky="w")
+
+        modal.protocol("WM_DELETE_WINDOW", modal.destroy)
+
+    def _dibujar_columna_detalle(self, parent, columna, filas):
+        bloque = ctk.CTkFrame(parent, fg_color="#F8FAF8", corner_radius=0)
+        bloque.grid(row=0, column=columna, sticky="nsew", padx=18, pady=16)
+        for indice, (titulo, valor) in enumerate(list(filas or [])):
+            y_pad = (0, 10) if indice == 0 else (8, 10)
+            ctk.CTkLabel(
+                bloque,
+                text=titulo,
+                text_color="#2E2E2E",
+                font=("Arial", 12, "bold"),
+                anchor="w",
+            ).pack(anchor="w", pady=(y_pad[0], 2))
+            ctk.CTkLabel(
+                bloque,
+                text=str(valor or "-"),
+                text_color="#111111",
+                font=("Arial", 14),
+                anchor="w",
+            ).pack(anchor="w", pady=(0, y_pad[1]))
+
+    def _abrir_factura_pdf_emitida(self, ruta_pdf_factura):
+        if not str(ruta_pdf_factura or "").strip():
+            messagebox.showwarning("Factura emitida", "No se encontró ruta de PDF de factura.", parent=self)
+            return
+        FacturasElectronicasFrame.abrir_pdf_factura_por_ruta(ruta_pdf_factura, parent=self)
+
+    def _abrir_resumen_pdf_por_id(self, resumen_id):
+        resumen = ResumenService.obtener(resumen_id)
+        if resumen is None:
+            messagebox.showwarning("Factura emitida", "No se encontró el resumen asociado.", parent=self)
+            return
+        try:
+            ruta_pdf = self._resolver_pdf_resumen(resumen)
+            os.startfile(str(ruta_pdf))
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Factura emitida", f"No se pudo abrir el PDF del resumen: {error}", parent=self)
+
+    def _enviar_factura_emitida_whatsapp(self, cliente_fila, tipo_factura, codigo_factura, total_factura_fiscal, ruta_pdf_factura):
+        contacto = self._obtener_contacto_cliente_para_whatsapp(cliente_fila)
+        if not contacto.get("numero_destino"):
+            messagebox.showwarning("WhatsApp", "El cliente no tiene WhatsApp ni teléfono cargado.", parent=self)
+            return
+
+        try:
+            numero_normalizado = WhatsAppService.normalizar_numero(contacto["numero_destino"])
+        except ValueError as error:
+            messagebox.showwarning("WhatsApp", str(error), parent=self)
+            return
+
+        mensaje = (
+            f"Hola {contacto.get('nombre') or 'Cliente'}.\n\n"
+            f"Te enviamos la Factura {tipo_factura or 'Factura'} {codigo_factura or ''}.\n\n"
+            f"Importe: {self.formatear_moneda(total_factura_fiscal)}\n\n"
+            "Muchas gracias."
+        )
+        try:
+            resultado = WhatsAppService.abrir_whatsapp_factura(
+                numero=numero_normalizado,
+                mensaje=mensaje,
+                pdf_path=str(ruta_pdf_factura or ""),
+            )
+        except (ValueError, OSError) as error:
+            messagebox.showerror("WhatsApp", str(error), parent=self)
+            return
+
+        advertencia_explorador = str(resultado.get("explorador_advertencia") or "").strip()
+        texto = "Se abrió WhatsApp Desktop con el mensaje preparado y el PDF listo para adjuntar."
+        if advertencia_explorador:
+            texto += f"\n\n{advertencia_explorador}"
+        messagebox.showinfo("WhatsApp", texto, parent=self)
 
     def _armar_items_factura_desde_resumen(self, resumen):
         items = []
