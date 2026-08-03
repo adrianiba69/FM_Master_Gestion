@@ -574,6 +574,14 @@ class ServiciosWindow(ctk.CTkToplevel):
             )
             return None
 
+        if fecha_fin < fecha_inicio:
+            messagebox.showerror(
+                "Error",
+                "La fecha de fin no puede ser anterior a la fecha de inicio.",
+                parent=self,
+            )
+            return None
+
         return Servicio(
             id=id_servicio,
             cliente_id=self.cliente_id,

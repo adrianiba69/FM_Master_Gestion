@@ -71,7 +71,7 @@ class ServicioService:
     @staticmethod
     def guardar(servicio):
         inicio = ServicioService._fecha(servicio.fecha_inicio or date.today())
-        fin = ServicioService.sumar_un_mes(inicio)
+        fin = ServicioService._fecha(servicio.fecha_fin) if str(servicio.fecha_fin or "").strip() else ServicioService.sumar_un_mes(inicio)
         conn = conectar()
         cur = conn.cursor()
         cur.execute("""
@@ -94,7 +94,7 @@ class ServicioService:
     @staticmethod
     def actualizar(servicio):
         inicio = ServicioService._fecha(servicio.fecha_inicio or date.today())
-        fin = ServicioService.sumar_un_mes(inicio)
+        fin = ServicioService._fecha(servicio.fecha_fin) if str(servicio.fecha_fin or "").strip() else ServicioService.sumar_un_mes(inicio)
         referencia = date.today()
         if fin < referencia:
             estado = "Vencido" if servicio.renovable else "Finalizado"
