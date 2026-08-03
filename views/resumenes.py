@@ -13,6 +13,7 @@ from services.arca.homologacion_service import HomologacionService
 from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.cliente_service import ClienteService
 from services.emisor_fiscal_service import EmisorFiscalService
+from services.email_service import EmailService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
 from services.resumen_service import ResumenService
@@ -1067,6 +1068,7 @@ class ResumenesFrame(ctk.CTkFrame):
                 return
 
             ruta_pdf = str(pdf.get("ruta_pdf") or "").strip()
+            ruta_pdf_resumen = self._obtener_ruta_pdf_resumen_existente(resumen.id)
             self.cargar_resumenes()
             self._mostrar_modal_factura_emitida(
                 cliente_fila=cliente,
@@ -1083,6 +1085,7 @@ class ResumenesFrame(ctk.CTkFrame):
                 factura_id=factura_id,
                 resumen_id=resumen.id,
                 ruta_pdf_factura=ruta_pdf,
+                ruta_pdf_resumen=ruta_pdf_resumen,
             )
         except Exception as error:
             messagebox.showerror(
@@ -1107,6 +1110,7 @@ class ResumenesFrame(ctk.CTkFrame):
         factura_id,
         resumen_id,
         ruta_pdf_factura,
+        ruta_pdf_resumen,
     ):
         modal = ctk.CTkToplevel(self)
         modal.title("FACTURA EMITIDA CORRECTAMENTE")
@@ -1220,17 +1224,21 @@ class ResumenesFrame(ctk.CTkFrame):
             ),
         ).grid(row=0, column=2, sticky="ew", padx=8, pady=(0, 10))
 
-        tiene_flujo_email = callable(getattr(self, "_enviar_email_existente", None))
         ctk.CTkButton(
             botones,
             text="Enviar por e-mail",
             height=42,
             fg_color="#2E5B8A",
             hover_color="#224264",
-            state="normal" if tiene_flujo_email else "disabled",
-            command=lambda: self._enviar_email_existente(
+            state="normal",
+            command=lambda: self._enviar_factura_emitida_email(
                 cliente_fila=cliente_fila,
+                emisor_nombre=emisor or "-",
+                tipo_factura=tipo_factura,
+                codigo_factura=codigo_factura,
+                total_factura_fiscal=total_factura_fiscal,
                 ruta_pdf_factura=ruta_pdf_factura,
+                ruta_pdf_resumen=ruta_pdf_resumen,
             ),
         ).grid(row=0, column=3, sticky="ew", padx=8, pady=(0, 10))
 
@@ -1243,15 +1251,127 @@ class ResumenesFrame(ctk.CTkFrame):
             command=modal.destroy,
         ).grid(row=0, column=4, sticky="ew", padx=(8, 0), pady=(0, 10))
 
-        if not tiene_flujo_email:
-            ctk.CTkLabel(
-                botones,
-                text="No se detectó un flujo de e-mail reutilizable en este módulo.",
-                text_color="#666666",
-                font=("Arial", 11),
-            ).grid(row=1, column=0, columnspan=5, sticky="w")
-
         modal.protocol("WM_DELETE_WINDOW", modal.destroy)
+
+    def _abrir_modal_factura_existente(self, factura_id):
+        try:
+            factura_id_valor = int(factura_id)
+        except (TypeError, ValueError):
+            messagebox.showwarning(
+                "Modo prueba modal",
+                "El ID de factura indicado es inválido.",
+                parent=self,
+            )
+            return False
+
+        factura = FacturaArcaService.obtener(factura_id_valor)
+        if not factura:
+            messagebox.showwarning(
+                "Modo prueba modal",
+                f"No existe la factura con ID {factura_id_valor}.",
+                parent=self,
+            )
+            return False
+
+        resumen_id = factura[3] if len(factura) > 3 else None
+        cliente_id = factura[1] if len(factura) > 1 else None
+        emisor_facturacion_id = factura[2] if len(factura) > 2 else None
+
+        resumen = ResumenService.obtener(resumen_id) if resumen_id else None
+        if resumen and not cliente_id:
+            cliente_id = getattr(resumen, "cliente_id", None)
+
+        cliente_fila = ClienteService.obtener(cliente_id) if cliente_id else None
+        if not cliente_fila:
+            messagebox.showwarning(
+                "Modo prueba modal",
+                "No se pudieron obtener los datos del cliente de la factura.",
+                parent=self,
+            )
+            return False
+
+        emisor_fiscal = None
+        if resumen and getattr(resumen, "emisor_fiscal_id", None):
+            emisor_fiscal = EmisorFiscalService.obtener(int(resumen.emisor_fiscal_id))
+        if not emisor_fiscal and emisor_facturacion_id:
+            emisor_interno = EmisorService.obtener(int(emisor_facturacion_id))
+            emisor_fiscal_id = emisor_interno[19] if emisor_interno and len(emisor_interno) > 19 else None
+            if emisor_fiscal_id:
+                emisor_fiscal = EmisorFiscalService.obtener(int(emisor_fiscal_id))
+        if not emisor_fiscal and len(cliente_fila) > 22:
+            emisor_fiscal = self._buscar_emisor_fiscal_por_etiqueta(cliente_fila[22])
+
+        if not emisor_fiscal:
+            messagebox.showwarning(
+                "Modo prueba modal",
+                "No se pudo resolver el emisor fiscal asociado a la factura.",
+                parent=self,
+            )
+            return False
+
+        tipo_factura = str(factura[6] if len(factura) > 6 else "" or "").strip() or "Factura C"
+        numero_factura = str(factura[9] if len(factura) > 9 else "" or "").strip()
+        punto_venta_raw = str(factura[5] if len(factura) > 5 else "" or "").strip()
+        cae = str(factura[10] if len(factura) > 10 else "" or "").strip()
+        vencimiento_cae = str(factura[11] if len(factura) > 11 else "" or "").strip()
+        total_factura_fiscal = float(factura[7] if len(factura) > 7 and factura[7] is not None else 0.0)
+
+        punto_venta_num = self._normalizar_punto_venta(punto_venta_raw) or 0
+        numero_comprobante = 0
+        if "-" in numero_factura:
+            partes = numero_factura.split("-", 1)
+            punto_venta_num = self._normalizar_punto_venta(partes[0]) or punto_venta_num
+            try:
+                numero_comprobante = int(partes[1])
+            except (TypeError, ValueError):
+                numero_comprobante = 0
+        else:
+            try:
+                numero_comprobante = int(numero_factura)
+            except (TypeError, ValueError):
+                numero_comprobante = 0
+
+        if punto_venta_num <= 0 and emisor_fiscal and len(emisor_fiscal) > 6:
+            punto_venta_num = self._normalizar_punto_venta(emisor_fiscal[6]) or 0
+        codigo_factura = numero_factura or self._formatear_codigo_factura(punto_venta_num, numero_comprobante)
+
+        neto_factura = float(total_factura_fiscal)
+        importe_iva_factura = 0.0
+        if resumen:
+            neto_estimado = self._sumar_importes_items(self._armar_items_factura_desde_resumen(resumen))
+            if str(tipo_factura).strip() == "Factura A":
+                neto_factura = neto_estimado
+                importe_iva_factura = round(total_factura_fiscal - neto_factura, 2)
+                if importe_iva_factura < 0:
+                    importe_iva_factura = round(neto_factura * (self.FACTURA_A_ALICUOTA_PORCENTAJE / 100.0), 2)
+                    total_factura_fiscal = round(neto_factura + importe_iva_factura, 2)
+
+        ruta_pdf_factura = self._resolver_ruta_pdf_factura_existente(
+            cliente_id=cliente_id,
+            tipo_factura=tipo_factura,
+            codigo_factura=codigo_factura,
+            emisor_fiscal=emisor_fiscal,
+        )
+        ruta_pdf_resumen = self._obtener_ruta_pdf_resumen_existente(resumen_id) if resumen_id else ""
+
+        self._mostrar_modal_factura_emitida(
+            cliente_fila=cliente_fila,
+            emisor_fiscal=emisor_fiscal,
+            tipo_factura=tipo_factura,
+            punto_venta_num=punto_venta_num,
+            numero_comprobante=numero_comprobante,
+            codigo_factura=codigo_factura,
+            cae=cae,
+            vencimiento_cae=vencimiento_cae,
+            neto_factura=neto_factura,
+            importe_iva_factura=importe_iva_factura,
+            total_factura_fiscal=total_factura_fiscal,
+            factura_id=factura_id_valor,
+            resumen_id=resumen_id,
+            ruta_pdf_factura=ruta_pdf_factura,
+            ruta_pdf_resumen=ruta_pdf_resumen,
+        )
+        return True
 
     def _dibujar_columna_detalle(self, parent, columna, filas):
         bloque = ctk.CTkFrame(parent, fg_color="#F8FAF8", corner_radius=0)
@@ -1323,6 +1443,121 @@ class ResumenesFrame(ctk.CTkFrame):
         if advertencia_explorador:
             texto += f"\n\n{advertencia_explorador}"
         messagebox.showinfo("WhatsApp", texto, parent=self)
+
+    def _enviar_factura_emitida_email(
+        self,
+        cliente_fila,
+        emisor_nombre,
+        tipo_factura,
+        codigo_factura,
+        total_factura_fiscal,
+        ruta_pdf_factura,
+        ruta_pdf_resumen,
+    ):
+        nombre_cliente = str(cliente_fila[2] if len(cliente_fila) > 2 else "" or "").strip() or "Cliente"
+        email_cliente = str(cliente_fila[9] if len(cliente_fila) > 9 else "" or "").strip()
+        resultado_envio = None
+
+        try:
+            resultado_envio = EmailService.preparar_y_abrir_correo_factura(
+                destinatario=email_cliente,
+                nombre_cliente=nombre_cliente,
+                emisor=emisor_nombre,
+                tipo_comprobante=tipo_factura,
+                codigo_comprobante=codigo_factura,
+                importe_total=self.formatear_moneda(total_factura_fiscal),
+                ruta_pdf_factura=str(Path(str(ruta_pdf_factura or "")).resolve()),
+                ruta_pdf_resumen=str(Path(str(ruta_pdf_resumen or "")).resolve()) if str(ruta_pdf_resumen or "").strip() else "",
+            )
+        except ValueError as error:
+            messagebox.showwarning("E-mail", str(error), parent=self)
+            return
+        except OSError as error:
+            usar_fallback = messagebox.askyesno(
+                "E-mail",
+                f"{error}\n\n¿Querés intentar con el cliente de correo predeterminado (mailto)?",
+                parent=self,
+            )
+            if not usar_fallback:
+                return
+            try:
+                resultado_envio = EmailService.preparar_y_abrir_correo_factura(
+                    destinatario=email_cliente,
+                    nombre_cliente=nombre_cliente,
+                    emisor=emisor_nombre,
+                    tipo_comprobante=tipo_factura,
+                    codigo_comprobante=codigo_factura,
+                    importe_total=self.formatear_moneda(total_factura_fiscal),
+                    ruta_pdf_factura=str(Path(str(ruta_pdf_factura or "")).resolve()),
+                    ruta_pdf_resumen=str(Path(str(ruta_pdf_resumen or "")).resolve()) if str(ruta_pdf_resumen or "").strip() else "",
+                    usar_fallback_mailto=True,
+                )
+            except (ValueError, OSError) as error_fallback:
+                messagebox.showwarning("E-mail", str(error_fallback), parent=self)
+                return
+
+        canal = str((resultado_envio or {}).get("canal") or "")
+        if canal == "outlook_web":
+            texto = (
+                "Se abrió Outlook.com con el mensaje preparado.\n"
+                "Adjuntá manualmente la factura y el resumen desde el Explorador."
+            )
+        else:
+            texto = (
+                "Se abrió el cliente de correo predeterminado con el mensaje preparado.\n"
+                "Adjuntá manualmente la factura y el resumen desde el Explorador."
+            )
+
+        messagebox.showinfo(
+            "E-mail",
+            texto,
+            parent=self,
+        )
+
+    def _obtener_ruta_pdf_resumen_existente(self, resumen_id):
+        resumen = ResumenService.obtener(resumen_id)
+        if resumen is None:
+            return ""
+        ruta_guardada = str(getattr(resumen, "pdf_path", "") or "").strip()
+        ruta_pdf = self._normalizar_ruta_pdf(ruta_guardada) if ruta_guardada else None
+        if ruta_pdf is None or not ruta_pdf.is_file():
+            return ""
+        return str(ruta_pdf)
+
+    def _resolver_ruta_pdf_factura_existente(self, cliente_id, tipo_factura, codigo_factura, emisor_fiscal):
+        if not emisor_fiscal or not cliente_id:
+            return ""
+
+        carpeta_facturas = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
+        if not carpeta_facturas:
+            return ""
+
+        try:
+            nombre_pdf = nombre_factura_pdf(int(cliente_id), str(tipo_factura or "").strip(), str(codigo_factura or "").strip())
+        except (TypeError, ValueError):
+            return ""
+
+        ruta_estandar = Path(carpeta_facturas) / nombre_pdf
+        if ruta_estandar.is_file():
+            return str(ruta_estandar)
+
+        if not str(codigo_factura or "").strip():
+            return ""
+
+        carpeta = Path(carpeta_facturas)
+        if not carpeta.is_dir():
+            return ""
+
+        coincidencias = [
+            ruta
+            for ruta in carpeta.glob("*.pdf")
+            if str(codigo_factura).strip() in ruta.name
+        ]
+        if not coincidencias:
+            return ""
+
+        coincidencias.sort(key=lambda ruta: ruta.stat().st_mtime, reverse=True)
+        return str(coincidencias[0])
 
     def _armar_items_factura_desde_resumen(self, resumen):
         items = []
