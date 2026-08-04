@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from database import conectar
+from pdf.resumen_pdf import ResumenPDF
 from runtime_paths import APP_DIR
 
 
@@ -39,10 +40,9 @@ class WhatsAppService:
         whatsapp, pdf_path, cliente, numero_resumen = fila
         if not whatsapp.strip():
             raise ValueError("El cliente no tiene un numero de WhatsApp cargado.")
-        if not pdf_path.strip():
-            raise ValueError("El resumen no tiene un PDF generado.")
 
-        ruta_pdf = Path(pdf_path)
+        ruta_resuelta = ResumenPDF.obtener_ruta_pdf_resumen(resumen_id, regenerar_si_falta=True)
+        ruta_pdf = Path(ruta_resuelta or pdf_path)
         if not ruta_pdf.is_absolute():
             ruta_pdf = cls.RAIZ_PROYECTO / ruta_pdf
         ruta_pdf = ruta_pdf.resolve()

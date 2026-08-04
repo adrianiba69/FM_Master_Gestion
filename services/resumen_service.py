@@ -47,11 +47,20 @@ class ResumenService:
     @staticmethod
     def _resolver_datos_fiscales_cliente(cur, cliente_id):
         cur.execute(
-            "SELECT monotributo_facturacion FROM clientes WHERE id=?",
+            "SELECT monotributo_facturacion, modalidad_comprobante, emisor_habitual FROM clientes WHERE id=?",
             (cliente_id,),
         )
         fila = cur.fetchone()
         referencia_emisor = (fila[0] or "").strip() if fila else ""
+        modalidad = (fila[1] or "").strip() if fila else ""
+        emisor_habitual = (fila[2] or "").strip() if fila else ""
+
+        modalidad_normalizada = " ".join(modalidad.lower().split())
+        if (not referencia_emisor or referencia_emisor == "No aplica") and modalidad_normalizada == "solo resumen":
+            # Regla comercial explícita para Solo Resumen: usar emisor habitual del cliente;
+            # si no está definido, usar FM Master 98.3.
+            referencia_emisor = emisor_habitual or "FM Master 98.3"
+
         if not referencia_emisor or referencia_emisor == "No aplica":
             return None, None, None
 
@@ -682,12 +691,21 @@ class ResumenService:
     def obtener_emisor_de_cliente(resumen_id):
         conn = conectar()
         cur = conn.cursor()
-        cur.execute("SELECT emisor_fiscal_id FROM resumenes WHERE id=?", (resumen_id,))
+        cur.execute("SELECT cliente_id, emisor_fiscal_id FROM resumenes WHERE id=?", (resumen_id,))
         fila = cur.fetchone()
-        if not fila or not fila[0]:
+        if not fila:
             conn.close()
             return None
-        emisor_fiscal_id = int(fila[0])
+
+        cliente_id = int(fila[0]) if fila[0] else None
+        emisor_fiscal_id = int(fila[1]) if fila[1] else None
+        if emisor_fiscal_id is None and cliente_id is not None:
+            emisor_fiscal_id, _, _ = ResumenService._resolver_datos_fiscales_cliente(cur, cliente_id)
+
+        if not emisor_fiscal_id:
+            conn.close()
+            return None
+
         cur.execute(
             """
             SELECT

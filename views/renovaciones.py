@@ -1,11 +1,9 @@
-from datetime import date, datetime
-from pathlib import Path
+from datetime import datetime
 from tkinter import messagebox, ttk
 
 import customtkinter as ctk
 
 from pdf.resumen_pdf import ResumenPDF
-from runtime_paths import PDF_DIR
 from services.resumen_service import ResumenService
 from services.servicio_service import ServicioService
 
@@ -216,11 +214,9 @@ class RenovacionesFrame(ctk.CTkFrame):
         )
         generados = 0
         errores = list(resultado["errores"])
-        carpeta = PDF_DIR / "resumenes" / date.today().strftime("%Y-%m")
         for resumen in resultado["generados"]:
             try:
-                ruta = carpeta / f"resumen_{resumen.numero:06d}.pdf"
-                ResumenPDF.generar(resumen.id, ruta)
+                ResumenPDF.generar(resumen.id)
                 generados += 1
             except Exception as error:
                 ResumenService.eliminar_generacion(resumen.id)

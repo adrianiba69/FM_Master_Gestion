@@ -10,7 +10,7 @@ from reportlab.pdfgen import canvas
 
 from config import CUIT, DIRECCION, EMAIL, EMPRESA, TELEFONO
 from pdf.nombre_archivos import nombre_resumen_pdf
-from runtime_paths import ASSETS_DIR, PDF_DIR
+from runtime_paths import APP_DIR, ASSETS_DIR, PDF_DIR
 from services.resumen_service import ResumenService
 
 
@@ -23,6 +23,8 @@ class ResumenPDF:
     LOGO_HEIGHT = 60
     LOGO_X = 38
     LOGO_Y = 749
+    LOGO_FM_MASTER_INSTITUCIONAL = ASSETS_DIR / "logos" / "logo_fm_master.png"
+    CUIT_FM_MASTER_NORMALIZADO = "20206871629"
 
     @staticmethod
     def moneda(valor):
@@ -43,8 +45,22 @@ class ResumenPDF:
 
         carpeta = PDF_DIR / "resumenes"
         carpeta.mkdir(parents=True, exist_ok=True)
-        destino = Path(ruta) if ruta else carpeta / nombre_resumen_pdf(resumen.cliente_id, resumen.numero)
+        nombre_estandar = nombre_resumen_pdf(resumen.cliente_id, resumen.numero)
+        destino = Path(ruta) if ruta else carpeta / nombre_estandar
+        if not destino.is_absolute():
+            destino = APP_DIR / destino
+        destino = destino.resolve()
         destino.parent.mkdir(parents=True, exist_ok=True)
+
+        emisor_nombre = cls._texto_emisor(emisor, "nombre_fantasia", "razon_social")
+        emisor_cuit = cls._texto_emisor(emisor, "cuit")
+        emisor_domicilio = cls._texto_emisor(emisor, "domicilio")
+
+        if not emisor or not emisor_nombre or not emisor_cuit or not emisor_domicilio:
+            raise ValueError(
+                "No se puede generar el PDF del resumen porque no se pudo resolver el emisor fiscal "
+                "con nombre, CUIT y domicilio. Revise la configuración fiscal del cliente/emisor."
+            )
 
         documento = canvas.Canvas(str(destino), pagesize=A4, pageCompression=1)
         documento.setTitle(f"Resumen {resumen.numero:06d} - {cliente[2]}")
@@ -75,6 +91,82 @@ class ResumenPDF:
         ruta_guardada = os.path.normpath(str(destino))
         ResumenService.actualizar_pdf_path(resumen.id, ruta_guardada)
         return str(destino.resolve())
+
+    @staticmethod
+    def _normalizar_cuit(cuit):
+        return "".join(char for char in str(cuit or "") if char.isdigit())
+
+    @classmethod
+    def _ruta_existente(cls, candidato):
+        texto = str(candidato or "").strip()
+        if not texto:
+            return None
+
+        ruta = Path(texto)
+        rutas_candidatas = [ruta]
+        if not ruta.is_absolute():
+            rutas_candidatas.append(APP_DIR / ruta)
+
+        for ruta_candidata in rutas_candidatas:
+            try:
+                ruta_resuelta = ruta_candidata.resolve()
+            except OSError:
+                continue
+            if ruta_resuelta.is_file():
+                return ruta_resuelta
+        return None
+
+    @classmethod
+    def _ruta_estandar_resumen(cls, resumen):
+        return (PDF_DIR / "resumenes" / nombre_resumen_pdf(resumen.cliente_id, resumen.numero)).resolve()
+
+    @classmethod
+    def _buscar_pdf_existente(cls, resumen):
+        ruta_guardada = cls._ruta_existente(getattr(resumen, "pdf_path", ""))
+        if ruta_guardada:
+            return ruta_guardada
+
+        ruta_estandar = cls._ruta_estandar_resumen(resumen)
+        if ruta_estandar.is_file():
+            return ruta_estandar
+
+        carpeta = (PDF_DIR / "resumenes").resolve()
+        numero = int(getattr(resumen, "numero", 0) or 0)
+        legacy_nombres = [
+            f"resumen_{numero:06d}.pdf",
+            f"resumen_{numero}.pdf",
+        ]
+        for nombre in legacy_nombres:
+            ruta_legacy_directa = carpeta / nombre
+            if ruta_legacy_directa.is_file():
+                return ruta_legacy_directa
+
+            coincidencias = list(carpeta.rglob(nombre))
+            if coincidencias:
+                coincidencias.sort(key=lambda ruta: ruta.stat().st_mtime, reverse=True)
+                return coincidencias[0].resolve()
+
+        coincidencias_estandar = list(carpeta.rglob(f"*_Resumen_{numero}.pdf"))
+        if coincidencias_estandar:
+            coincidencias_estandar.sort(key=lambda ruta: ruta.stat().st_mtime, reverse=True)
+            return coincidencias_estandar[0].resolve()
+
+        return None
+
+    @classmethod
+    def obtener_ruta_pdf_resumen(cls, resumen_id, regenerar_si_falta=True):
+        resumen = ResumenService.obtener(resumen_id)
+        if resumen is None:
+            raise ValueError("No se encontro el resumen seleccionado.")
+
+        ruta_existente = cls._buscar_pdf_existente(resumen)
+        if ruta_existente and ruta_existente.is_file():
+            ResumenService.actualizar_pdf_path(resumen.id, os.path.normpath(str(ruta_existente)))
+            return str(ruta_existente)
+
+        if not regenerar_si_falta:
+            return ""
+        return cls.generar(resumen.id)
 
     @classmethod
     def _dibujar_logo(cls, documento):
@@ -123,31 +215,38 @@ class ResumenPDF:
         if not isinstance(emisor, dict):
             return None
 
-        candidatos = [
+        candidatos_explicitos = [
             emisor.get("logo_path"),
             emisor.get("ruta_logo"),
             emisor.get("logo"),
         ]
+        for candidato in candidatos_explicitos:
+            ruta = cls._ruta_existente(candidato)
+            if ruta:
+                return ruta
+
         carpeta = str(emisor.get("carpeta_facturas") or "").strip()
         if carpeta:
             base = Path(carpeta)
-            candidatos.extend(
-                [
-                    base / "logo.png",
-                    base / "logo.jpg",
-                    base / "logo.jpeg",
-                    base / "logo.webp",
-                    base / "logo_emisor.png",
-                    base / "logo_emisor.jpg",
-                ]
-            )
+            for candidato in (
+                base / "logo.png",
+                base / "logo.jpg",
+                base / "logo.jpeg",
+                base / "logo.webp",
+                base / "logo_emisor.png",
+                base / "logo_emisor.jpg",
+            ):
+                ruta = cls._ruta_existente(candidato)
+                if ruta:
+                    return ruta
 
-        for candidato in candidatos:
-            if not candidato:
-                continue
-            ruta = Path(str(candidato).strip())
-            if ruta.is_file():
-                return ruta
+        emisor_id = int(emisor.get("id") or 0)
+        cuit_normalizado = cls._normalizar_cuit(emisor.get("cuit"))
+        if emisor_id == 1 or cuit_normalizado == cls.CUIT_FM_MASTER_NORMALIZADO:
+            ruta_institucional = cls._ruta_existente(cls.LOGO_FM_MASTER_INSTITUCIONAL)
+            if ruta_institucional:
+                return ruta_institucional
+
         return None
 
     @classmethod

@@ -82,14 +82,13 @@ class CierreMensualService:
                 if resumen is None:
                     resultado["omitidos"] += 1
                     continue
-                ruta = self.carpeta_resumenes / f"resumen_{resumen.numero:06d}.pdf"
-                ResumenPDF.generar(resumen.id, ruta)
+                ruta_generada = ResumenPDF.generar(resumen.id)
                 registro = {
                     "id": resumen.id,
                     "numero": resumen.numero,
                     "cliente_id": resumen.cliente_id,
                     "total": float(resumen.total or 0),
-                    "ruta": str(ruta.resolve()),
+                    "ruta": str(Path(ruta_generada).resolve()),
                 }
                 self.resumenes_generados.append(registro)
                 resultado["generados"] += 1

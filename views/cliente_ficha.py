@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from config import COLOR_BLANCO, COLOR_NEGRO, COLOR_PRINCIPAL
 from pdf.nombre_archivos import nombre_factura_pdf
+from pdf.resumen_pdf import ResumenPDF
 from services.cliente_service import ClienteService
 from services.cobro_service import CobroService
 from services.contacto_service import ContactoService
@@ -890,8 +891,12 @@ class FichaClienteFrame(ctk.CTkFrame):
             return
 
         valores = self.tabla_resumenes.item(seleccion[0], "values")
+        try:
+            resumen_id = int(valores[5]) if len(valores) > 5 and str(valores[5]).strip() else None
+        except (TypeError, ValueError):
+            resumen_id = None
         pdf_path = valores[4] if len(valores) > 4 else ""
-        if not pdf_path:
+        if not pdf_path and resumen_id is None:
             messagebox.showinfo(
                 "Resumen sin PDF",
                 "El resumen no tiene PDF asociado.",
@@ -900,11 +905,21 @@ class FichaClienteFrame(ctk.CTkFrame):
             return
 
         try:
-            os.startfile(pdf_path)
+            if resumen_id is not None:
+                ruta_pdf = ResumenPDF.obtener_ruta_pdf_resumen(resumen_id, regenerar_si_falta=True)
+            else:
+                ruta_pdf = str(pdf_path)
+            os.startfile(ruta_pdf)
         except OSError as error:
             messagebox.showerror(
                 "Error",
                 f"No se pudo abrir el PDF: {error}",
+                parent=self.winfo_toplevel(),
+            )
+        except ValueError as error:
+            messagebox.showerror(
+                "Error",
+                str(error),
                 parent=self.winfo_toplevel(),
             )
 

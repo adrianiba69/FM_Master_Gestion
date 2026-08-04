@@ -1515,11 +1515,11 @@ class ResumenesFrame(ctk.CTkFrame):
         )
 
     def _obtener_ruta_pdf_resumen_existente(self, resumen_id):
-        resumen = ResumenService.obtener(resumen_id)
-        if resumen is None:
+        try:
+            ruta_resuelta = ResumenPDF.obtener_ruta_pdf_resumen(resumen_id, regenerar_si_falta=True)
+        except ValueError:
             return ""
-        ruta_guardada = str(getattr(resumen, "pdf_path", "") or "").strip()
-        ruta_pdf = self._normalizar_ruta_pdf(ruta_guardada) if ruta_guardada else None
+        ruta_pdf = self._normalizar_ruta_pdf(ruta_resuelta)
         if ruta_pdf is None or not ruta_pdf.is_file():
             return ""
         return str(ruta_pdf)
@@ -2230,7 +2230,6 @@ class ResumenesFrame(ctk.CTkFrame):
         generados = 0
         omitidos = 0
         errores = []
-        carpeta = PDF_DIR / "resumenes" / date.today().strftime("%Y-%m")
         for item in seleccion:
             cliente_id = int(item)
             try:
@@ -2238,8 +2237,7 @@ class ResumenesFrame(ctk.CTkFrame):
                 if resumen is None:
                     omitidos += 1
                     continue
-                ruta = carpeta / f"resumen_{resumen.numero:06d}.pdf"
-                ResumenPDF.generar(resumen.id, ruta)
+                ResumenPDF.generar(resumen.id)
                 generados += 1
             except Exception as error:
                 if "resumen" in locals() and resumen is not None:
@@ -2302,13 +2300,9 @@ class ResumenesFrame(ctk.CTkFrame):
         if resumen is None:
             raise ValueError("No se encontró el resumen seleccionado.")
 
-        ruta_guardada = str(getattr(resumen, "pdf_path", "") or "").strip()
-        ruta_pdf = self._normalizar_ruta_pdf(ruta_guardada) if ruta_guardada else None
-
-        if ruta_pdf is None or not ruta_pdf.is_file():
-            ruta_regenerada = ResumenPDF.generar(resumen.id)
-            self.cargar_resumenes()
-            ruta_pdf = self._normalizar_ruta_pdf(ruta_regenerada)
+        ruta_regenerada = ResumenPDF.obtener_ruta_pdf_resumen(resumen.id, regenerar_si_falta=True)
+        self.cargar_resumenes()
+        ruta_pdf = self._normalizar_ruta_pdf(ruta_regenerada)
 
         if ruta_pdf is None or not ruta_pdf.is_file():
             raise ValueError("No se encontró el archivo PDF del resumen.")
