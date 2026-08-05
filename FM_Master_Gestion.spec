@@ -1,7 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\database', 'database')]
+BASE_DIR = Path(__file__).resolve().parent if '__file__' in globals() else Path.cwd().resolve()
+
+datas = [
+    (str(BASE_DIR / 'database'), 'database'),
+    (str(BASE_DIR / 'assets'), 'assets'),
+]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('customtkinter')
@@ -9,7 +16,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\main.py'],
+    [str(BASE_DIR / 'main.py')],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -39,7 +46,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['C:\\Users\\Usuario\\Desktop\\FM_Master_Gestion\\assets\\iconos\\fm_master.ico'],
+    icon=[str(BASE_DIR / 'assets' / 'iconos' / 'fm_master.ico')],
 )
 coll = COLLECT(
     exe,

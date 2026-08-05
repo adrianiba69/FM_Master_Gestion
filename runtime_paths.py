@@ -19,7 +19,7 @@ FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = obtener_directorio_aplicacion()
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", PROJECT_DIR)).resolve() if FROZEN else PROJECT_DIR
 
-ASSETS_DIR = (APP_DIR if FROZEN else BUNDLE_DIR) / "assets"
+ASSETS_DIR = BUNDLE_DIR / "assets"
 DATABASE_DIR = APP_DIR / "database"
 BACKUP_DIR = APP_DIR / "backup"
 PDF_DIR = APP_DIR / "pdf"
