@@ -7,6 +7,7 @@ echo ==============================================
 echo.
 
 set "SRC=C:\Users\Usuario\Desktop\FM_Master_Gestion"
+set "BUILD_SRC=%SRC%\dist\FM_Master_Gestion"
 set "DST=C:\Users\Usuario\Desktop\FM_Master_Gestion_Produccion"
 set "DB_DIR=%DST%\database"
 set "DB_FILE=%DB_DIR%\fm_master.db"
@@ -15,6 +16,22 @@ set "BKP_DIR=%DST%\backup"
 if not exist "%DST%" (
     echo ERROR: No existe la carpeta destino:
     echo %DST%
+    echo.
+    pause
+    exit /b 1
+)
+
+if not exist "%BUILD_SRC%\FM_Master_Gestion.exe" (
+    echo ERROR: No se encontro el ejecutable compilado:
+    echo %BUILD_SRC%\FM_Master_Gestion.exe
+    echo.
+    pause
+    exit /b 1
+)
+
+if not exist "%BUILD_SRC%\_internal" (
+    echo ERROR: No se encontro la carpeta _internal compilada:
+    echo %BUILD_SRC%\_internal
     echo.
     pause
     exit /b 1
@@ -43,7 +60,29 @@ if exist "%DB_FILE%" (
 )
 
 echo.
-echo Copiando archivos desde desarrollo a produccion...
+echo Copiando ejecutable nuevo...
+copy /Y "%BUILD_SRC%\FM_Master_Gestion.exe" "%DST%\FM_Master_Gestion.exe" >nul
+if errorlevel 1 (
+    echo ERROR: No se pudo copiar el ejecutable.
+    echo.
+    pause
+    exit /b 1
+)
+
+echo Copiando carpeta _internal...
+robocopy "%BUILD_SRC%\_internal" "%DST%\_internal" /MIR /R:2 /W:2 /NFL /NDL /NP /NJS /NJH
+set "RC=%ERRORLEVEL%"
+
+if %RC% GEQ 8 (
+    echo.
+    echo ERROR: Fallo la copia de _internal. Codigo: %RC%
+    echo.
+    pause
+    exit /b %RC%
+)
+
+echo.
+echo Copiando archivos auxiliares de desarrollo...
 robocopy "%SRC%" "%DST%" /E /R:2 /W:2 /NFL /NDL /NP /NJS /NJH ^
     /XD "%SRC%\backup" "%SRC%\__pycache__" "%SRC%\.git" "%SRC%\.venv" "%SRC%\dist" "%SRC%\build" ^
     /XF "fm_master.db" "*.db" "*.pyc"
@@ -51,14 +90,15 @@ set "RC=%ERRORLEVEL%"
 
 if %RC% GEQ 8 (
     echo.
-    echo ERROR: Fallo la copia con robocopy. Codigo: %RC%
+    echo ERROR: Fallo la copia de archivos auxiliares. Codigo: %RC%
     echo.
     pause
     exit /b %RC%
 )
 
 echo.
-echo Actualizacion finalizada.
+echo Actualizacion finalizada correctamente.
+echo Ejecutable actualizado.
 echo Base de datos de produccion conservada.
 echo.
 pause
