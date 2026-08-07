@@ -3,11 +3,11 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
 
-BASE_DIR = Path(__file__).resolve().parent if '__file__' in globals() else Path.cwd().resolve()
+PROJECT_DIR = Path(SPECPATH).resolve()
 
 datas = [
-    (str(BASE_DIR / 'database'), 'database'),
-    (str(BASE_DIR / 'assets'), 'assets'),
+    (str(PROJECT_DIR / "assets"), "assets"),
+    (str(PROJECT_DIR / "database"), "database"),
 ]
 binaries = []
 hiddenimports = []
@@ -16,7 +16,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    [str(BASE_DIR / 'main.py')],
+    [str(PROJECT_DIR / "main.py")],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -46,7 +46,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=[str(BASE_DIR / 'assets' / 'iconos' / 'fm_master.ico')],
+    icon=[str(PROJECT_DIR / "assets" / "iconos" / "fm_master.ico")],
 )
 coll = COLLECT(
     exe,

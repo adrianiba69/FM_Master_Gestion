@@ -176,6 +176,17 @@ class ResumenesFrame(ctk.CTkFrame):
         )
         boton_abrir.grid(row=0, column=2, padx=(10, 0))
 
+        boton_regenerar = ctk.CTkButton(
+            barra,
+            text="Regenerar PDF",
+            width=115,
+            height=38,
+            fg_color="#444444",
+            hover_color="#222222",
+            command=self.regenerar_pdf_seleccionado,
+        )
+        boton_regenerar.grid(row=0, column=3, padx=(10, 0))
+
         self.boton_whatsapp = ctk.CTkButton(
             barra,
             text="Enviar por WhatsApp",
@@ -185,7 +196,7 @@ class ResumenesFrame(ctk.CTkFrame):
             hover_color="#111111",
             command=self.enviar_whatsapp_seleccionado,
         )
-        self.boton_whatsapp.grid(row=0, column=3, padx=(10, 0))
+        self.boton_whatsapp.grid(row=0, column=4, padx=(10, 0))
 
         tabla_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         tabla_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
@@ -2278,6 +2289,44 @@ class ResumenesFrame(ctk.CTkFrame):
             os.startfile(str(ruta_pdf))
         except (OSError, ValueError) as error:
             messagebox.showerror("Error", f"No se pudo abrir el PDF: {error}")
+
+    def regenerar_pdf_seleccionado(self):
+        print(
+            "DIAGNOSTICO RESUMENES - metodo_candidato_pdf: regenerar_pdf_seleccionado "
+            f"id(self)={self.instancia_id} archivo={__file__}"
+        )
+        resumen_id = self._obtener_resumen_id_seleccionado(
+            titulo="Atencion",
+            mensaje="Seleccione un resumen para regenerar.",
+        )
+        if resumen_id is None:
+            return
+
+        resumen = ResumenService.obtener(resumen_id)
+        if resumen is None:
+            messagebox.showwarning("Atencion", "No se encontró el resumen seleccionado.")
+            return
+
+        confirmar = messagebox.askyesno(
+            "Regenerar PDF",
+            "Se regenerará el PDF del resumen seleccionado.\n\n¿Desea continuar?",
+        )
+        if not confirmar:
+            return
+
+        try:
+            ruta_pdf = ResumenPDF.generar(resumen.id)
+            self.cargar_resumenes()
+            os.startfile(str(ruta_pdf))
+            messagebox.showinfo("PDF regenerado", "El PDF del resumen se regeneró correctamente.")
+        except PermissionError:
+            messagebox.showerror(
+                "Error",
+                "No se pudo regenerar el PDF porque el archivo está abierto.\n\n"
+                "Cerrá el PDF en Adobe Reader, Edge, Chrome o cualquier otro visor y volvé a intentarlo.",
+            )
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Error", f"No se pudo regenerar el PDF: {error}")
 
     def _obtener_resumen_id_seleccionado(self, titulo, mensaje):
         seleccion = self.tabla.selection()
