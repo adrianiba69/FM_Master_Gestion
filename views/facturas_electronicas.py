@@ -915,7 +915,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             )
             return None
 
-        carpeta_facturas = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
+        carpeta_facturas = str(emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or "").strip()
         if not carpeta_facturas:
             messagebox.showwarning(
                 "Facturas electrónicas",
@@ -1140,6 +1140,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "cuit": self._normalizar_cuit(emisor_fiscal[3] if len(emisor_fiscal) > 3 else "") or "",
             "condicion_iva": str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or ""),
             "domicilio": str(emisor_fiscal[10] if len(emisor_fiscal) > 10 else "" or ""),
+            "ingresos_brutos": str(emisor_fiscal[11] if len(emisor_fiscal) > 11 else "" or ""),
+            "fecha_inicio_actividades": str(emisor_fiscal[12] if len(emisor_fiscal) > 12 else "" or ""),
             "punto_venta": punto_venta,
             "carpeta_facturas": carpeta_facturas,
         }

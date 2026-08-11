@@ -89,7 +89,12 @@ class ResumenService:
                 """
                 SELECT id, tipo_factura, punto_venta
                 FROM emisores_fiscales
-                WHERE nombre_fantasia=? OR razon_social=?
+                WHERE
+                    REPLACE(REPLACE(LOWER(COALESCE(nombre_fantasia, '')), '.', ''), ' ', '')
+                    = REPLACE(REPLACE(LOWER(?), '.', ''), ' ', '')
+                    OR
+                    REPLACE(REPLACE(LOWER(COALESCE(razon_social, '')), '.', ''), ' ', '')
+                    = REPLACE(REPLACE(LOWER(?), '.', ''), ' ', '')
                 ORDER BY activo DESC, id
                 LIMIT 1
                 """,

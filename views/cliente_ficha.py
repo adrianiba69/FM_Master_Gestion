@@ -1519,6 +1519,8 @@ class FichaClienteFrame(ctk.CTkFrame):
                 "cuit": cuit_emisor,
                 "condicion_iva": str(emisor[4] if len(emisor) > 4 else "" or ""),
                 "domicilio": str(emisor[10] if len(emisor) > 10 else "" or ""),
+                "ingresos_brutos": str(emisor[11] if len(emisor) > 11 else "" or ""),
+                "fecha_inicio_actividades": str(emisor[12] if len(emisor) > 12 else "" or ""),
                 "punto_venta": punto_venta_num,
             }
 

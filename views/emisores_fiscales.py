@@ -193,17 +193,19 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
             "Tipo de factura",
             self.TIPOS_FACTURA,
         )
+        self.entry_ingresos_brutos = self._crear_campo(formulario, 3, 2, "Ingresos Brutos")
+        self.entry_fecha_inicio_actividades = self._crear_campo(formulario, 4, 0, "Fecha inicio actividades", colspan=2)
+        self.entry_ingresos_brutos.configure(width=220)
+        self.entry_fecha_inicio_actividades.configure(width=320)
 
         self.var_activo = ctk.IntVar(value=1)
         ctk.CTkCheckBox(formulario, text="Activo", variable=self.var_activo).grid(
-            row=7, column=2, sticky="w", padx=(10, 0), pady=(26, 0)
+            row=9, column=2, sticky="w", padx=(10, 0), pady=(0, 0)
         )
 
-        ctk.CTkLabel(formulario, text="Observaciones", anchor="w").grid(
-            row=8, column=0, columnspan=3, sticky="ew", pady=(12, 4)
-        )
+        # Se mantiene el control para no alterar la lógica existente de carga/guardado,
+        # pero ya no se muestra en la ficha.
         self.text_observaciones = ctk.CTkTextbox(formulario, height=28, fg_color="white", text_color="#1F1F1F")
-        self.text_observaciones.grid(row=9, column=0, columnspan=3, sticky="ew")
 
         self._crear_seccion_arca(cuerpo_scroll)
 
@@ -335,10 +337,12 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
             emisor[8],  # observaciones
             emisor[9],  # ambiente_arca
             emisor[10],  # domicilio (sin cambios)
+            emisor[11],  # ingresos_brutos (sin cambios)
+            emisor[12],  # fecha_inicio_actividades (sin cambios)
             ruta_certificado,  # ← ACTUALIZADO
-            emisor[12],  # ruta_clave_privada (sin cambios)
-            emisor[13],  # carpeta_facturas (sin cambios)
-            emisor[14] if len(emisor) > 14 else 0,  # configuracion_arca_completa
+            emisor[14],  # ruta_clave_privada (sin cambios)
+            emisor[15],  # carpeta_facturas (sin cambios)
+            emisor[16] if len(emisor) > 16 else 0,  # configuracion_arca_completa
         )
 
     def _persistir_ruta_clave_privada(self, ruta_clave_privada):
@@ -364,10 +368,12 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
             emisor[8],  # observaciones
             emisor[9],  # ambiente_arca
             emisor[10],  # domicilio (sin cambios)
-            emisor[11],  # ruta_certificado (sin cambios)
+            emisor[11],  # ingresos_brutos (sin cambios)
+            emisor[12],  # fecha_inicio_actividades (sin cambios)
+            emisor[13],  # ruta_certificado (sin cambios)
             ruta_clave_privada,  # ← ACTUALIZADO
-            emisor[13],  # carpeta_facturas (sin cambios)
-            emisor[14] if len(emisor) > 14 else 0,  # configuracion_arca_completa
+            emisor[15],  # carpeta_facturas (sin cambios)
+            emisor[16] if len(emisor) > 16 else 0,  # configuracion_arca_completa
         )
 
     def _persistir_ruta_carpeta_facturas(self, carpeta_facturas):
@@ -393,10 +399,12 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
             emisor[8],  # observaciones
             emisor[9],  # ambiente_arca
             emisor[10],  # domicilio (sin cambios)
-            emisor[11],  # ruta_certificado (sin cambios)
-            emisor[12],  # ruta_clave_privada (sin cambios)
+            emisor[11],  # ingresos_brutos (sin cambios)
+            emisor[12],  # fecha_inicio_actividades (sin cambios)
+            emisor[13],  # ruta_certificado (sin cambios)
+            emisor[14],  # ruta_clave_privada (sin cambios)
             carpeta_facturas,  # ← ACTUALIZADO
-            emisor[14] if len(emisor) > 14 else 0,  # configuracion_arca_completa
+            emisor[16] if len(emisor) > 16 else 0,  # configuracion_arca_completa
         )
 
     def _seleccionar_certificado(self):
@@ -529,6 +537,8 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         self.combo_tipo_factura.set(self.TIPOS_FACTURA[0])
         self.combo_ambiente_arca.set(self.AMBIENTES_ARCA[0])
         self.entry_punto_venta.delete(0, "end")
+        self.entry_ingresos_brutos.delete(0, "end")
+        self.entry_fecha_inicio_actividades.delete(0, "end")
         self.entry_ruta_certificado.delete(0, "end")
         self.entry_ruta_clave_privada.delete(0, "end")
         self.entry_carpeta_facturas.delete(0, "end")
@@ -570,17 +580,21 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         self.combo_tipo_factura.set(fila[5] or self.TIPOS_FACTURA[0])
         self.entry_punto_venta.delete(0, "end")
         self.entry_punto_venta.insert(0, fila[6] or "")
+        self.entry_ingresos_brutos.delete(0, "end")
+        self.entry_ingresos_brutos.insert(0, fila[11] or "")
+        self.entry_fecha_inicio_actividades.delete(0, "end")
+        self.entry_fecha_inicio_actividades.insert(0, fila[12] or "")
         self.var_activo.set(1 if fila[7] else 0)
         self.text_observaciones.delete("1.0", "end")
         self.text_observaciones.insert("1.0", fila[8] or "")
         self.combo_ambiente_arca.set(fila[9] or self.AMBIENTES_ARCA[0])
         self.entry_ruta_certificado.delete(0, "end")
-        self.entry_ruta_certificado.insert(0, fila[11] or "")
+        self.entry_ruta_certificado.insert(0, fila[13] or "")
         self.entry_ruta_clave_privada.delete(0, "end")
-        self.entry_ruta_clave_privada.insert(0, fila[12] or "")
+        self.entry_ruta_clave_privada.insert(0, fila[14] or "")
         self.entry_carpeta_facturas.delete(0, "end")
-        self.entry_carpeta_facturas.insert(0, fila[13] or "")
-        self.configuracion_arca_completa = 1 if len(fila) > 14 and fila[14] else 0
+        self.entry_carpeta_facturas.insert(0, fila[15] or "")
+        self.configuracion_arca_completa = 1 if len(fila) > 16 and fila[16] else 0
 
     def validar_configuracion_arca_actual(self):
         if self.emisor_id_actual is None:
@@ -636,6 +650,8 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         condicion_iva = self.combo_condicion_iva.get().strip()
         tipo_factura = self.combo_tipo_factura.get().strip()
         punto_venta = self.entry_punto_venta.get().strip()
+        ingresos_brutos = self.entry_ingresos_brutos.get().strip()
+        fecha_inicio_actividades = self.entry_fecha_inicio_actividades.get().strip()
         observaciones = self.text_observaciones.get("1.0", "end").strip()
         activo = 1 if self.var_activo.get() else 0
         ambiente_arca = self.combo_ambiente_arca.get().strip() or self.AMBIENTES_ARCA[0]
@@ -663,6 +679,8 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
                     observaciones,
                     ambiente_arca,
                     domicilio,
+                    ingresos_brutos,
+                    fecha_inicio_actividades,
                     ruta_certificado,
                     ruta_clave_privada,
                     carpeta_facturas,
@@ -681,6 +699,8 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
                     observaciones,
                     ambiente_arca,
                     domicilio,
+                    ingresos_brutos,
+                    fecha_inicio_actividades,
                     ruta_certificado,
                     ruta_clave_privada,
                     carpeta_facturas,

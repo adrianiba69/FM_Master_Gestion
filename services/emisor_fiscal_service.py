@@ -79,6 +79,8 @@ class EmisorFiscalService:
                 observaciones,
                 ambiente_arca,
                 domicilio,
+                ingresos_brutos,
+                fecha_inicio_actividades,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -111,6 +113,8 @@ class EmisorFiscalService:
                 observaciones,
                 ambiente_arca,
                 domicilio,
+                ingresos_brutos,
+                fecha_inicio_actividades,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -142,6 +146,8 @@ class EmisorFiscalService:
                 observaciones,
                 ambiente_arca,
                 domicilio,
+                ingresos_brutos,
+                fecha_inicio_actividades,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -167,6 +173,8 @@ class EmisorFiscalService:
         observaciones="",
         ambiente_arca="Homologación",
         domicilio="",
+        ingresos_brutos="",
+        fecha_inicio_actividades="",
         ruta_certificado="",
         ruta_clave_privada="",
         carpeta_facturas="",
@@ -187,11 +195,13 @@ class EmisorFiscalService:
                 observaciones,
                 ambiente_arca,
                 domicilio,
+                ingresos_brutos,
+                fecha_inicio_actividades,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
                 configuracion_arca_completa
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 razon_social,
@@ -204,6 +214,8 @@ class EmisorFiscalService:
                 observaciones,
                 ambiente_arca,
                 domicilio,
+                ingresos_brutos,
+                fecha_inicio_actividades,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -228,6 +240,8 @@ class EmisorFiscalService:
         observaciones="",
         ambiente_arca="Homologación",
         domicilio="",
+        ingresos_brutos="",
+        fecha_inicio_actividades="",
         ruta_certificado="",
         ruta_clave_privada="",
         carpeta_facturas="",
@@ -248,6 +262,8 @@ class EmisorFiscalService:
                 observaciones=?,
                 ambiente_arca=?,
                 domicilio=?,
+                ingresos_brutos=?,
+                fecha_inicio_actividades=?,
                 ruta_certificado=?,
                 ruta_clave_privada=?,
                 carpeta_facturas=?,
@@ -265,6 +281,8 @@ class EmisorFiscalService:
                 observaciones,
                 ambiente_arca,
                 domicilio,
+                ingresos_brutos,
+                fecha_inicio_actividades,
                 ruta_certificado,
                 ruta_clave_privada,
                 carpeta_facturas,
@@ -310,17 +328,17 @@ class EmisorFiscalService:
         
         # Si se proporcionan las rutas actualmente visibles, usar esas; sino, usar las de la BD
         if ruta_certificado is None:
-            ruta_certificado = str(emisor[11] or "").strip() if len(emisor) > 11 else ""
+            ruta_certificado = str(emisor[13] or "").strip() if len(emisor) > 13 else ""
         else:
             ruta_certificado = str(ruta_certificado or "").strip()
             
         if ruta_clave_privada is None:
-            ruta_clave_privada = str(emisor[12] or "").strip() if len(emisor) > 12 else ""
+            ruta_clave_privada = str(emisor[14] or "").strip() if len(emisor) > 14 else ""
         else:
             ruta_clave_privada = str(ruta_clave_privada or "").strip()
             
         if carpeta_facturas is None:
-            carpeta_facturas = str(emisor[13] or "").strip() if len(emisor) > 13 else ""
+            carpeta_facturas = str(emisor[15] or "").strip() if len(emisor) > 15 else ""
         else:
             carpeta_facturas = str(carpeta_facturas or "").strip()
 

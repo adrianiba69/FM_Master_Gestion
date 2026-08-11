@@ -9,6 +9,14 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 from config import CUIT, DIRECCION, EMAIL, EMPRESA, TELEFONO
+from pdf.identidad_emisor import (
+    normalizar_cuit as identidad_normalizar_cuit,
+    normalizar_nombre_emisor as identidad_normalizar_nombre_emisor,
+    resolver_tipo_identidad_emisor as identidad_resolver_tipo_identidad_emisor,
+    resolver_logo_emisor as identidad_resolver_logo_emisor,
+    obtener_paleta_emisor as identidad_obtener_paleta_emisor,
+    obtener_dimensiones_logo_emisor as identidad_obtener_dimensiones_logo_emisor,
+)
 from pdf.nombre_archivos import nombre_resumen_pdf
 from runtime_paths import APP_DIR, ASSETS_DIR, PDF_DIR
 from services.resumen_service import ResumenService
@@ -21,10 +29,18 @@ class ResumenPDF:
     GRIS_BORDE = HexColor("#BEBEBE")
     LOGO_WIDTH = 170
     LOGO_HEIGHT = 60
-    LOGO_X = 38
-    LOGO_Y = 749
+    LOGO_X = 48
+    LOGO_Y = 742
     LOGO_FM_MASTER_INSTITUCIONAL = ASSETS_DIR / "logos" / "logo_fm_master.png"
+    LOGO_PUBLICIDAD_SERVICIOS_INSTITUCIONAL = ASSETS_DIR / "logos" / "logo_publicidad_servicios.jpg"
+    LOGO_PUBLICIDAD_SERVICIOS_SH_INSTITUCIONAL = ASSETS_DIR / "logos" / "logo_publicidad_servicios_sh.jpg"
     CUIT_FM_MASTER_NORMALIZADO = "20206871629"
+    CUIT_PUBLICIDAD_SERVICIOS_NORMALIZADO = "20263858884"
+    CUIT_PUBLICIDAD_SERVICIOS_SH_NORMALIZADO = "30712178619"
+    AZUL_PS = HexColor("#07324D")
+    NARANJA_PS = HexColor("#F57C00")
+    GRIS_PS = HexColor("#F5F5F5")
+    GRIS_BORDE_PS = HexColor("#C8C8C8")
 
     @staticmethod
     def moneda(valor):
@@ -55,6 +71,13 @@ class ResumenPDF:
         emisor_nombre = cls._texto_emisor(emisor, "nombre_fantasia", "razon_social")
         emisor_cuit = cls._texto_emisor(emisor, "cuit")
         emisor_domicilio = cls._texto_emisor(emisor, "domicilio")
+        identidad_emisor = cls._resolver_tipo_identidad_emisor(emisor)
+        if identidad_emisor == "publicidad_servicios_sh":
+            texto_pie = "Gracias por confiar en Publicidad & Servicios S.H."
+        elif identidad_emisor == "publicidad_servicios":
+            texto_pie = "Gracias por confiar en Publicidad & Servicios."
+        else:
+            texto_pie = "Gracias por confiar en FM Master."
 
         if not emisor or not emisor_nombre or not emisor_cuit or not emisor_domicilio:
             raise ValueError(
@@ -79,11 +102,11 @@ class ResumenPDF:
             cls._dibujar_conceptos(documento, conceptos_pagina)
 
             if indice == len(paginas) - 1:
-                cls._dibujar_totales(documento, resumen)
+                cls._dibujar_totales(documento, resumen, emisor)
 
             documento.setFont("Helvetica", 8)
             documento.setFillColor(HexColor("#595959"))
-            documento.drawString(38, 38, "Gracias por confiar en FM Master.")
+            documento.drawString(38, 38, texto_pie)
             documento.drawRightString(557, 38, f"Pagina {indice + 1}/{len(paginas)}")
             documento.showPage()
 
@@ -94,7 +117,7 @@ class ResumenPDF:
 
     @staticmethod
     def _normalizar_cuit(cuit):
-        return "".join(char for char in str(cuit or "") if char.isdigit())
+        return identidad_normalizar_cuit(cuit)
 
     @classmethod
     def _ruta_existente(cls, candidato):
@@ -170,23 +193,27 @@ class ResumenPDF:
 
     @classmethod
     def _dibujar_logo(cls, documento):
-        return cls._dibujar_logo_desde_ruta(documento, None)
+        return cls._dibujar_logo_desde_ruta(documento, None, None)
 
     @classmethod
-    def _dibujar_logo_desde_ruta(cls, documento, logo_path):
+    def _dibujar_logo_desde_ruta(cls, documento, logo_path, emisor=None):
         try:
             ruta = Path(str(logo_path or "").strip())
             if not ruta.is_file():
                 return False
             imagen = ImageReader(str(ruta))
             ancho_original, alto_original = imagen.getSize()
+            ancho_objetivo, alto_objetivo = cls._obtener_dimensiones_logo_emisor(emisor)
             escala = min(
-                cls.LOGO_WIDTH / float(ancho_original),
-                cls.LOGO_HEIGHT / float(alto_original),
+                ancho_objetivo / float(ancho_original),
+                alto_objetivo / float(alto_original),
             )
             ancho = ancho_original * escala
             alto = alto_original * escala
-            y = cls.LOGO_Y + (cls.LOGO_HEIGHT - alto) / 2
+            y = cls.LOGO_Y + (alto_objetivo - alto) / 2
+            identidad = cls._resolver_tipo_identidad_emisor(emisor)
+            if identidad in {"publicidad_servicios", "publicidad_servicios_sh"}:
+                y -= 18
             documento.drawImage(
                 imagen,
                 cls.LOGO_X,
@@ -210,62 +237,48 @@ class ResumenPDF:
                 return valor
         return default
 
+    @staticmethod
+    def _normalizar_nombre_emisor(valor):
+        return identidad_normalizar_nombre_emisor(valor)
+
+    @classmethod
+    def _resolver_tipo_identidad_emisor(cls, emisor):
+        return identidad_resolver_tipo_identidad_emisor(emisor)
+
+    @classmethod
+    def _obtener_paleta_emisor(cls, emisor):
+        return identidad_obtener_paleta_emisor(emisor)
+
+    @classmethod
+    def _obtener_dimensiones_logo_emisor(cls, emisor):
+        return identidad_obtener_dimensiones_logo_emisor(
+            emisor,
+            cls.LOGO_WIDTH,
+            cls.LOGO_HEIGHT,
+        )
+
     @classmethod
     def _resolver_logo_emisor(cls, emisor):
-        if not isinstance(emisor, dict):
-            return None
-
-        candidatos_explicitos = [
-            emisor.get("logo_path"),
-            emisor.get("ruta_logo"),
-            emisor.get("logo"),
-        ]
-        for candidato in candidatos_explicitos:
-            ruta = cls._ruta_existente(candidato)
-            if ruta:
-                return ruta
-
-        carpeta = str(emisor.get("carpeta_facturas") or "").strip()
-        if carpeta:
-            base = Path(carpeta)
-            for candidato in (
-                base / "logo.png",
-                base / "logo.jpg",
-                base / "logo.jpeg",
-                base / "logo.webp",
-                base / "logo_emisor.png",
-                base / "logo_emisor.jpg",
-            ):
-                ruta = cls._ruta_existente(candidato)
-                if ruta:
-                    return ruta
-
-        emisor_id = int(emisor.get("id") or 0)
-        cuit_normalizado = cls._normalizar_cuit(emisor.get("cuit"))
-        if emisor_id == 1 or cuit_normalizado == cls.CUIT_FM_MASTER_NORMALIZADO:
-            ruta_institucional = cls._ruta_existente(cls.LOGO_FM_MASTER_INSTITUCIONAL)
-            if ruta_institucional:
-                return ruta_institucional
-
-        return None
+        return identidad_resolver_logo_emisor(emisor)
 
     @classmethod
     def _encabezado(cls, documento, resumen, cliente, emisor=None):
+        paleta = cls._obtener_paleta_emisor(emisor)
         logo_path = cls._resolver_logo_emisor(emisor)
-        cls._dibujar_logo_desde_ruta(documento, logo_path)
+        cls._dibujar_logo_desde_ruta(documento, logo_path, emisor)
 
-        documento.setFillColor(cls.ROJO)
+        documento.setFillColor(paleta["principal"])
         documento.setFont("Helvetica-Bold", 25)
         documento.drawRightString(557, 782, "RESUMEN")
-        documento.setFillColor(cls.NEGRO)
+        documento.setFillColor(paleta["texto"])
         documento.setFont("Helvetica-Bold", 11)
         documento.drawRightString(557, 758, f"Nro. {resumen.numero:06d}")
 
-        documento.setStrokeColor(cls.ROJO)
+        documento.setStrokeColor(paleta["principal"])
         documento.setLineWidth(2)
         documento.line(38, 735, 557, 735)
 
-        documento.setFillColor(cls.NEGRO)
+        documento.setFillColor(paleta["texto"])
         documento.setFont("Helvetica-Bold", 11)
         empresa_nombre = cls._texto_emisor(emisor, "nombre_fantasia", "razon_social")
         empresa_razon_social = cls._texto_emisor(emisor, "razon_social")
@@ -286,27 +299,27 @@ class ResumenPDF:
         if contacto:
             documento.drawString(38, texto_cuit_y - 30, cls._ajustar_texto(f"Contacto: {contacto}", 285, 9))
 
-        documento.setFillColor(cls.GRIS)
-        documento.setStrokeColor(cls.GRIS_BORDE)
+        documento.setFillColor(paleta["gris"])
+        documento.setStrokeColor(paleta["borde"])
         documento.setLineWidth(0.7)
         documento.rect(365, 665, 192, 61, stroke=1, fill=1)
-        documento.setFillColor(cls.ROJO)
+        documento.setFillColor(paleta["principal"])
         documento.setFont("Helvetica-Bold", 8)
         documento.drawString(380, 706, "FECHA")
         documento.drawString(380, 683, "VENCIMIENTO")
-        documento.setFillColor(cls.NEGRO)
+        documento.setFillColor(paleta["texto"])
         documento.setFont("Helvetica-Bold", 9)
         documento.drawString(465, 706, cls.fecha(resumen.fecha))
         documento.drawString(465, 683, cls.fecha(resumen.fecha_vencimiento))
 
-        documento.setFillColor(HexColor("#FAFAFA"))
-        documento.setStrokeColor(cls.GRIS_BORDE)
+        documento.setFillColor(paleta["gris"])
+        documento.setStrokeColor(paleta["borde"])
         documento.rect(38, 584, 519, 66, stroke=1, fill=1)
-        documento.setFillColor(cls.ROJO)
+        documento.setFillColor(paleta["secundario"])
         documento.rect(38, 584, 6, 66, stroke=0, fill=1)
         documento.setFont("Helvetica-Bold", 9)
         documento.drawString(52, 635, "CLIENTE")
-        documento.setFillColor(cls.NEGRO)
+        documento.setFillColor(paleta["texto"])
         documento.setFont("Helvetica-Bold", 13)
         documento.drawString(52, 614, cls._ajustar_texto(cliente[2], 285, 13, True))
         documento.setFont("Helvetica", 9)
@@ -315,7 +328,7 @@ class ResumenPDF:
         documento.drawString(365, 635, f"CUIT: {cliente[9] or '-'}")
         documento.drawString(365, 614, f"IVA: {cliente[10] or '-'}")
 
-        documento.setFillColor(cls.ROJO)
+        documento.setFillColor(paleta["principal"])
         documento.rect(38, 540, 519, 28, stroke=0, fill=1)
         documento.setFillColor(white)
         documento.setFont("Helvetica-Bold", 8)
@@ -350,7 +363,8 @@ class ResumenPDF:
             y -= 25
 
     @classmethod
-    def _dibujar_totales(cls, documento, resumen):
+    def _dibujar_totales(cls, documento, resumen, emisor=None):
+        paleta = cls._obtener_paleta_emisor(emisor)
         tipo_factura = str(getattr(resumen, "tipo_factura", "") or "").strip().upper()
         subtotal_neto = float(getattr(resumen, "total", 0) or 0)
         if tipo_factura == "FACTURA A":
@@ -359,15 +373,15 @@ class ResumenPDF:
             total_fiscal = round(subtotal_neto + importe_iva, 2)
             saldo_fiscal = total_fiscal
 
-            documento.setFillColor(HexColor("#F7F7F7"))
-            documento.setStrokeColor(cls.GRIS_BORDE)
+            documento.setFillColor(paleta["gris"])
+            documento.setStrokeColor(paleta["borde"])
             documento.rect(366, 58, 191, 118, stroke=1, fill=1)
 
             lineas = [
-                ("SUBTOTAL NETO", cls.moneda(subtotal_neto), cls.NEGRO, 11),
-                (f"IVA {alicuota_iva:.0f} %", cls.moneda(importe_iva), cls.NEGRO, 11),
-                ("TOTAL", cls.moneda(total_fiscal), cls.NEGRO, 12),
-                ("SALDO", cls.moneda(saldo_fiscal), cls.ROJO, 13),
+                ("SUBTOTAL NETO", cls.moneda(subtotal_neto), paleta["texto"], 11),
+                (f"IVA {alicuota_iva:.0f} %", cls.moneda(importe_iva), paleta["texto"], 11),
+                ("TOTAL", cls.moneda(total_fiscal), paleta["texto"], 12),
+                ("SALDO", cls.moneda(saldo_fiscal), paleta["principal"], 13),
             ]
             posiciones_y = [146, 123, 100, 77]
             for (etiqueta, valor, color, tamanio), posicion_y in zip(lineas, posiciones_y):
@@ -376,22 +390,22 @@ class ResumenPDF:
                 documento.drawString(382, posicion_y, etiqueta)
                 documento.drawRightString(542, posicion_y, valor)
 
-            documento.setStrokeColor(cls.ROJO)
+            documento.setStrokeColor(paleta["secundario"])
             documento.setLineWidth(1.2)
             documento.line(381, 111, 542, 111)
         else:
-            documento.setFillColor(HexColor("#F7F7F7"))
-            documento.setStrokeColor(cls.GRIS_BORDE)
+            documento.setFillColor(paleta["gris"])
+            documento.setStrokeColor(paleta["borde"])
             documento.rect(366, 72, 191, 78, stroke=1, fill=1)
 
-            documento.setFillColor(cls.NEGRO)
+            documento.setFillColor(paleta["texto"])
             documento.setFont("Helvetica-Bold", 11)
             documento.drawString(382, 124, "TOTAL")
             documento.drawRightString(542, 124, cls.moneda(resumen.total))
-            documento.setStrokeColor(cls.ROJO)
+            documento.setStrokeColor(paleta["secundario"])
             documento.setLineWidth(1.2)
             documento.line(381, 111, 542, 111)
-            documento.setFillColor(cls.ROJO)
+            documento.setFillColor(paleta["principal"])
             documento.setFont("Helvetica-Bold", 13)
             documento.drawString(382, 88, "SALDO")
             documento.drawRightString(542, 88, cls.moneda(resumen.saldo))

@@ -40,6 +40,8 @@ def consultar_y_regenerar():
                 condicion_iva,
                 punto_venta,
                 domicilio,
+                ingresos_brutos,
+                fecha_inicio_actividades,
                 carpeta_facturas
             FROM emisores_fiscales
             WHERE LOWER(REPLACE(REPLACE(COALESCE(nombre_fantasia, ''), '.', ''), ' ', '')) =
@@ -69,7 +71,9 @@ def consultar_y_regenerar():
         emisor_iva = str(emisor[4] or "").strip()
         punto_venta = int(str(emisor[5] or "0").strip() or 0)
         emisor_domicilio = str(emisor[6] or "").strip()
-        carpeta_facturas = str(emisor[7] or "").strip()
+        emisor_ingresos_brutos = str(emisor[7] or "").strip()
+        emisor_fecha_inicio_actividades = str(emisor[8] or "").strip()
+        carpeta_facturas = str(emisor[9] or "").strip()
 
         print("\nOrigen del domicilio del emisor:")
         print("  Tabla: emisores_fiscales")
@@ -117,6 +121,8 @@ def consultar_y_regenerar():
         "condicion_iva": emisor_iva,
         # Sin fallback fijo: se usa el valor exacto almacenado en BD.
         "domicilio": emisor_domicilio,
+        "ingresos_brutos": emisor_ingresos_brutos,
+        "fecha_inicio_actividades": emisor_fecha_inicio_actividades,
         "punto_venta": punto_venta,
     }
 

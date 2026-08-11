@@ -6,6 +6,14 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
+from pdf.identidad_emisor import (
+    normalizar_cuit as identidad_normalizar_cuit,
+    normalizar_nombre_emisor as identidad_normalizar_nombre_emisor,
+    resolver_logo_emisor as identidad_resolver_logo_emisor,
+    resolver_tipo_identidad_emisor as identidad_resolver_tipo_identidad_emisor,
+    obtener_dimensiones_logo_emisor as identidad_obtener_dimensiones_logo_emisor,
+)
+
 try:
     from runtime_paths import ASSETS_DIR as _ASSETS_DIR
 except Exception:
@@ -102,6 +110,11 @@ class PDFFiscalService:
         emisor_razon_social = str(PDFFiscalService._pick(datos_emisor, "razon_social", default=""))
         emisor_cuit = str(PDFFiscalService._pick(datos_emisor, "cuit", default=""))
         emisor_iva = str(PDFFiscalService._pick(datos_emisor, "condicion_iva", default=""))
+        emisor_ingresos_brutos = str(PDFFiscalService._pick(datos_emisor, "ingresos_brutos", default="")).strip() or "-"
+        fecha_inicio_actividades_raw = str(
+            PDFFiscalService._pick(datos_emisor, "fecha_inicio_actividades", default="")
+        ).strip()
+        emisor_fecha_inicio_actividades = PDFFiscalService._fmt_fecha(fecha_inicio_actividades_raw) if fecha_inicio_actividades_raw else "-"
         emisor_domicilio = str(PDFFiscalService._pick(datos_emisor, "domicilio", default=""))
         emisor_punto_venta = str(PDFFiscalService._pick(datos_emisor, "punto_venta", default=punto_venta))
         logo_path = PDFFiscalService._resolver_logo_emisor(datos_emisor)
@@ -110,7 +123,14 @@ class PDFFiscalService:
         y = alto - 30
 
         # Logo (esquina superior izquierda)
-        PDFFiscalService._dibujar_logo(pdf, x=30, y_banda_inferior=y - 80, altura_banda=80, logo_path=logo_path)
+        PDFFiscalService._dibujar_logo(
+            pdf,
+            x=30,
+            y_banda_inferior=y - 80,
+            altura_banda=80,
+            logo_path=logo_path,
+            datos_emisor=datos_emisor,
+        )
 
         # Información del emisor (columna central-izquierda)
         pdf.setFillColor(PDFFiscalService.COLOR_TEXTO)
@@ -121,10 +141,11 @@ class PDFFiscalService:
         pdf.drawString(170, y - 20, emisor_razon_social)
 
         pdf.setFont("Helvetica", 9)
-        pdf.drawString(170, y - 32, f"CUIT: {emisor_cuit}")
+        pdf.drawString(170, y - 32, f"CUIT: {emisor_cuit}  |  Pto. Venta: {emisor_punto_venta}")
         pdf.drawString(170, y - 42, f"IVA: {emisor_iva}")
-        pdf.drawString(170, y - 52, f"Domicilio: {emisor_domicilio}")
-        pdf.drawString(170, y - 62, f"Pto. Venta: {emisor_punto_venta}")
+        pdf.drawString(170, y - 52, f"Ingresos Brutos: {emisor_ingresos_brutos}")
+        pdf.drawString(170, y - 62, f"Inicio de Actividades: {emisor_fecha_inicio_actividades}")
+        pdf.drawString(170, y - 72, f"Domicilio: {emisor_domicilio}")
 
         # Bloque con datos del comprobante (sin fondo rojo, sobre blanco)
         # Alineado al margen derecho del contenido para separar mejor del emisor.
@@ -297,7 +318,7 @@ class PDFFiscalService:
         pdf.drawString(30, 26, "Documento generado localmente para pruebas de homologacion. Sin validez fiscal.")
 
     @staticmethod
-    def _dibujar_logo(pdf, x, y_banda_inferior, altura_banda, logo_path=None):
+    def _dibujar_logo(pdf, x, y_banda_inferior, altura_banda, logo_path=None, datos_emisor=None):
         """Dibuja el logo dentro de la banda del encabezado.
         Retorna True si se dibujó, False si el archivo no existe o hay error."""
         try:
@@ -306,9 +327,10 @@ class PDFFiscalService:
                 return False
             imagen = ImageReader(str(ruta))
             w_orig, h_orig = imagen.getSize()
+            max_width, max_height = PDFFiscalService._obtener_dimensiones_logo_emisor(datos_emisor)
             escala = min(
-                PDFFiscalService.LOGO_MAX_WIDTH / float(w_orig),
-                PDFFiscalService.LOGO_MAX_HEIGHT / float(h_orig),
+                max_width / float(w_orig),
+                max_height / float(h_orig),
             )
             w = w_orig * escala
             h = h_orig * escala
@@ -329,36 +351,34 @@ class PDFFiscalService:
 
     @staticmethod
     def _resolver_logo_emisor(datos_emisor):
-        candidatos = []
-        if isinstance(datos_emisor, dict):
-            candidatos.extend(
-                [
-                    datos_emisor.get("logo_path"),
-                    datos_emisor.get("ruta_logo"),
-                    datos_emisor.get("logo"),
-                ]
-            )
-            carpeta = str(datos_emisor.get("carpeta_facturas") or "").strip()
-            if carpeta:
-                base = Path(carpeta)
-                candidatos.extend(
-                    [
-                        base / "logo.png",
-                        base / "logo.jpg",
-                        base / "logo.jpeg",
-                        base / "logo.webp",
-                        base / "logo_emisor.png",
-                        base / "logo_emisor.jpg",
-                    ]
-                )
+        return identidad_resolver_logo_emisor(datos_emisor)
 
-        for candidato in candidatos:
-            if not candidato:
-                continue
-            ruta = Path(str(candidato).strip())
-            if ruta.is_file():
-                return ruta
-        return None
+    @staticmethod
+    def _normalizar_cuit(cuit):
+        return identidad_normalizar_cuit(cuit)
+
+    @staticmethod
+    def _normalizar_nombre_emisor(valor):
+        return identidad_normalizar_nombre_emisor(valor)
+
+    @staticmethod
+    def _resolver_tipo_identidad_emisor(datos_emisor):
+        return identidad_resolver_tipo_identidad_emisor(datos_emisor)
+
+    @staticmethod
+    def _obtener_dimensiones_logo_emisor(datos_emisor):
+        # Se delega en módulo común preservando el tamaño fiscal histórico (120x44).
+        tipo_identidad = PDFFiscalService._resolver_tipo_identidad_emisor(datos_emisor)
+        base_width = PDFFiscalService.LOGO_MAX_WIDTH
+        base_height = PDFFiscalService.LOGO_MAX_HEIGHT
+        if tipo_identidad in {"publicidad_servicios", "publicidad_servicios_sh"}:
+            base_width = PDFFiscalService.LOGO_MAX_WIDTH / 2.07
+            base_height = PDFFiscalService.LOGO_MAX_HEIGHT / 2.07
+        return identidad_obtener_dimensiones_logo_emisor(
+            datos_emisor,
+            base_width,
+            base_height,
+        )
 
     @staticmethod
     def _resolver_ruta_destino(ruta_destino):

@@ -244,6 +244,8 @@ def crear_base():
         "observaciones": "TEXT",
         "ambiente_arca": "TEXT DEFAULT 'Homologación'",
         "domicilio": "TEXT DEFAULT ''",
+        "ingresos_brutos": "TEXT DEFAULT ''",
+        "fecha_inicio_actividades": "TEXT DEFAULT ''",
         "ruta_certificado": "TEXT DEFAULT ''",
         "ruta_clave_privada": "TEXT DEFAULT ''",
         "carpeta_facturas": "TEXT DEFAULT ''",

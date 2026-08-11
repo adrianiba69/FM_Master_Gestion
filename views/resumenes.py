@@ -15,6 +15,7 @@ from services.cliente_service import ClienteService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.email_service import EmailService
 from services.emisor_service import EmisorService
+from services.facturacion_service import FacturacionService
 from services.factura_arca_service import FacturaArcaService
 from services.resumen_service import ResumenService
 from services.whatsapp_service import WhatsAppService
@@ -674,14 +675,28 @@ class ResumenesFrame(ctk.CTkFrame):
             )
             return
 
-        cliente = ClienteService.obtener(resumen.cliente_id)
-        if not cliente:
+        validacion_resumen = FacturacionService.validar_resumen_para_facturar(resumen.id)
+        if not validacion_resumen.get("ok"):
+            errores_validacion = validacion_resumen.get("errores") or ["El resumen no cumple las validaciones previas para facturar."]
             messagebox.showerror(
                 "Emitir factura",
-                "No se encontraron los datos del cliente para facturar.",
+                "No se puede facturar porque el resumen no cumple las validaciones previas:\n- "
+                + "\n- ".join(str(error) for error in errores_validacion),
                 parent=self,
             )
             return
+
+        resolucion_cliente = FacturacionService.resolver_cliente(resumen.id)
+        if not resolucion_cliente.get("ok"):
+            errores_cliente = resolucion_cliente.get("errores") or ["cliente_no_encontrado"]
+            messagebox.showerror(
+                "Emitir factura",
+                "No se encontraron los datos del cliente para facturar:\n- "
+                + "\n- ".join(str(error) for error in errores_cliente),
+                parent=self,
+            )
+            return
+        cliente = resolucion_cliente.get("cliente")
 
         modalidad = str(contexto.get("modalidad_comprobante") or "Solo Resumen").strip()
         emisor_habitual = str(contexto.get("emisor_habitual") or "").strip()
@@ -689,13 +704,24 @@ class ResumenesFrame(ctk.CTkFrame):
         condicion_iva = str(contexto.get("condicion_iva") or "").strip()
 
         faltantes = []
-        if not emisor_habitual:
-            faltantes.append("Emisor habitual")
         if not tipo_factura:
             faltantes.append("Tipo de factura")
         if not condicion_iva:
             faltantes.append("Condición de IVA")
-        if not getattr(resumen, "conceptos", None):
+
+        resolucion_conceptos = FacturacionService.resolver_conceptos(resumen.id)
+        if not resolucion_conceptos.get("ok"):
+            errores_conceptos = resolucion_conceptos.get("errores") or ["resumen_sin_conceptos"]
+            messagebox.showerror(
+                "Emitir factura",
+                "No se puede facturar porque faltan datos obligatorios:\n- "
+                + "\n- ".join(str(error) for error in errores_conceptos),
+                parent=self,
+            )
+            return
+        resumen_actual = resolucion_conceptos.get("resumen")
+        conceptos_resumen = resolucion_conceptos.get("conceptos") or []
+        if not conceptos_resumen:
             faltantes.append("Ítems del resumen")
 
         if faltantes:
@@ -715,14 +741,17 @@ class ResumenesFrame(ctk.CTkFrame):
             )
             return
 
-        emisor_fiscal = self._buscar_emisor_fiscal_por_etiqueta(emisor_habitual)
-        if not emisor_fiscal:
+        resolucion_emisor = FacturacionService.resolver_emisor(resumen.id)
+        if not resolucion_emisor.get("ok"):
+            errores_emisor = resolucion_emisor.get("errores") or ["emisor_fiscal_no_encontrado"]
             messagebox.showerror(
                 "Emitir factura",
-                "No se encontró el emisor habitual configurado para iniciar la emisión.",
+                "No se encontró el emisor configurado para iniciar la emisión:\n- "
+                + "\n- ".join(str(error) for error in errores_emisor),
                 parent=self,
             )
             return
+        emisor_fiscal = resolucion_emisor.get("emisor_fiscal")
 
         emisor_fiscal_id = emisor_fiscal[0]
         emisor_facturacion_id, campo_vinculo = self._resolver_emisor_facturacion_id(cliente, emisor_fiscal)
@@ -740,9 +769,9 @@ class ResumenesFrame(ctk.CTkFrame):
 
         cuit_emisor = str(emisor_fiscal[3] if len(emisor_fiscal) > 3 else "" or "").strip()
         punto_venta = emisor_fiscal[6] if len(emisor_fiscal) > 6 else ""
-        ruta_certificado = str(emisor_fiscal[11] if len(emisor_fiscal) > 11 else "" or "").strip()
-        ruta_clave = str(emisor_fiscal[12] if len(emisor_fiscal) > 12 else "" or "").strip()
-        carpeta_facturas = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
+        ruta_certificado = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
+        ruta_clave = str(emisor_fiscal[14] if len(emisor_fiscal) > 14 else "" or "").strip()
+        carpeta_facturas = str(emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or "").strip()
 
         cuit_emisor_normalizado = self._normalizar_cuit(cuit_emisor)
         punto_venta_normalizado = self._normalizar_punto_venta(punto_venta)
@@ -770,7 +799,6 @@ class ResumenesFrame(ctk.CTkFrame):
             )
             return
 
-        resumen_actual = ResumenService.obtener(resumen.id)
         if not resumen_actual:
             messagebox.showerror(
                 "Emitir factura",
@@ -874,7 +902,7 @@ class ResumenesFrame(ctk.CTkFrame):
             tipo_documento = 99
             documento_receptor = 0
 
-        fiscal = self._calcular_datos_fiscales_desde_items(tipo_factura_normalizado, suma_items)
+        fiscal = FacturacionService.calcular_importes_fiscales(resumen.id, tipo_factura=tipo_factura_normalizado)
         if not fiscal.get("ok"):
             errores_fiscales = "\n- ".join(fiscal.get("errores") or ["Cálculo fiscal inválido."])
             messagebox.showerror(
@@ -930,142 +958,103 @@ class ResumenesFrame(ctk.CTkFrame):
             print(f"importe_iva_enviado_arca: {importe_iva_factura}")
             print(f"importe_total_enviado_arca: {total_factura_fiscal}")
 
-            fecha_comprobante = datetime.now().strftime("%Y%m%d")
-            emision = HomologacionService.emitir_comprobante_prueba(
+            resultado_arca = FacturacionService.emitir_en_arca(
                 ruta_certificado=ruta_certificado,
                 ruta_clave=ruta_clave,
                 cuit_emisor=cuit_emisor_normalizado,
                 punto_venta=punto_venta_normalizado,
                 tipo_comprobante=tipo_comprobante,
                 condicion_iva_receptor_id=condicion_iva_receptor_id,
-                concepto=1,
                 tipo_documento=tipo_documento,
                 documento_receptor=documento_receptor,
                 importe_total=total_factura_fiscal,
                 importe_neto=neto_factura,
                 importe_iva=importe_iva_factura,
                 importe_exento=importe_exento_factura,
-                fecha_comprobante=fecha_comprobante,
                 carpeta_trabajo=carpeta_facturas,
                 importe_tot_conc=importe_tot_conc,
                 importe_tributos=importe_tributos,
                 alicuotas_iva=alicuotas_iva,
+                concepto=1,
             )
-            if not emision.get("ok"):
+            if not resultado_arca.get("ok"):
+                detalle_arca = resultado_arca.get("emision") if resultado_arca.get("etapa") != "consulta" else resultado_arca.get("consulta")
                 messagebox.showerror(
                     "Emitir factura",
-                    self._mensaje_errores_emision(emision),
+                    self._mensaje_errores_emision(detalle_arca or {}),
                     parent=self,
                 )
                 return
 
-            numero_emitido = int(emision.get("numero_comprobante") or 0)
-            consulta = HomologacionService.consultar_comprobante_emitido(
-                ruta_certificado=ruta_certificado,
-                ruta_clave=ruta_clave,
-                cuit_emisor=cuit_emisor_normalizado,
-                punto_venta=punto_venta_normalizado,
-                tipo_comprobante=tipo_comprobante,
-                numero_comprobante=numero_emitido,
-                carpeta_trabajo=carpeta_facturas,
-                token=emision.get("token"),
-                sign=emision.get("sign"),
-            )
-            if not consulta.get("ok"):
-                messagebox.showerror(
-                    "Emitir factura",
-                    self._mensaje_errores_emision(consulta),
-                    parent=self,
-                )
-                return
-
-            numero_comprobante = int(consulta.get("numero_comprobante") or numero_emitido)
-            punto_venta_num = int(consulta.get("punto_venta") or punto_venta_normalizado)
+            emision = resultado_arca.get("emision") or {}
+            consulta = resultado_arca.get("consulta") or {}
+            fecha_comprobante = str(resultado_arca.get("fecha_comprobante") or "")
+            numero_comprobante = int(resultado_arca.get("numero_comprobante") or 0)
+            punto_venta_num = int(resultado_arca.get("punto_venta_num") or punto_venta_normalizado)
             numero_factura = self._formatear_codigo_factura(punto_venta_num, numero_comprobante)
-            cae = str(consulta.get("cae") or emision.get("cae") or "")
-            vencimiento_cae = str(consulta.get("vencimiento_cae") or emision.get("vencimiento_cae") or "")
+            cae = str(resultado_arca.get("cae") or "")
+            vencimiento_cae = str(resultado_arca.get("vencimiento_cae") or "")
 
-            factura_id = FacturaArcaService.guardar(
-                FacturaArca(
-                    cliente_id=cliente[0],
-                    emisor_id=emisor_facturacion_id,
-                    resumen_id=resumen.id,
-                    fecha=date.today().isoformat(),
-                    punto_venta=str(punto_venta_num),
-                    tipo_comprobante=tipo_factura_normalizado,
-                    importe_total=total_factura_fiscal,
-                    estado="Facturada manualmente",
-                    numero_factura=numero_factura,
-                    cae=cae,
-                    vencimiento_cae=vencimiento_cae,
-                    observaciones=(
-                        f"Emitida desde Resúmenes ({modalidad}). Emisor habitual: {emisor_habitual}. "
-                        f"Fiscal: neto={neto_factura:.2f}; iva_alicuota={alicuota_iva:.2f}%; "
-                        f"iva_importe={importe_iva_factura:.2f}; total={total_factura_fiscal:.2f}"
-                    ),
-                    fecha_creacion=datetime.now().isoformat(timespec="seconds"),
-                )
+            observaciones_factura = (
+                f"Emitida desde Resúmenes ({modalidad}). Emisor habitual: {emisor_habitual}. "
+                f"Fiscal: neto={neto_factura:.2f}; iva_alicuota={alicuota_iva:.2f}%; "
+                f"iva_importe={importe_iva_factura:.2f}; total={total_factura_fiscal:.2f}"
             )
-            print(f"factura_id_registrado: {factura_id}")
-            print(f"comprobante_registrado: {numero_factura}")
-
-            ResumenService.marcar_facturado(
-                resumen.id,
+            registro_emision = FacturacionService.registrar_emision_aprobada(
+                cliente_id=cliente[0],
+                emisor_id=emisor_facturacion_id,
+                resumen_id=resumen.id,
+                fecha=date.today().isoformat(),
+                punto_venta=str(punto_venta_num),
+                tipo_comprobante=tipo_factura_normalizado,
+                importe_total=total_factura_fiscal,
                 numero_factura=numero_factura,
                 cae=cae,
                 vencimiento_cae=vencimiento_cae,
+                observaciones=observaciones_factura,
             )
+            if not registro_emision.get("ok"):
+                errores_registro = "\n- ".join(registro_emision.get("errores") or ["No se pudo persistir la emisión aprobada."])
+                messagebox.showerror(
+                    "Emitir factura",
+                    "La emisión fue autorizada por ARCA, pero falló el guardado local:\n\n- " + errores_registro,
+                    parent=self,
+                )
+                return
+
+            factura_id = registro_emision.get("factura_id")
+            print(f"factura_id_registrado: {factura_id}")
+            print(f"comprobante_registrado: {numero_factura}")
 
             codigo_factura = self._formatear_codigo_factura(punto_venta_num, numero_comprobante)
-            ruta_sugerida_pdf = str(Path(carpeta_facturas) / nombre_factura_pdf(cliente[0], tipo_factura, codigo_factura))
-
             periodo_desde, periodo_hasta = self._obtener_periodo_facturado(resumen_actual)
-
-            datos_emisor = {
-                "razon_social": str(emisor_fiscal[1] if len(emisor_fiscal) > 1 else "" or ""),
-                "nombre_fantasia": str(emisor_fiscal[2] if len(emisor_fiscal) > 2 else "" or ""),
-                "cuit": cuit_emisor_normalizado,
-                "condicion_iva": str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or ""),
-                "domicilio": str(emisor_fiscal[10] if len(emisor_fiscal) > 10 else "" or ""),
-                "punto_venta": punto_venta_num,
-                "carpeta_facturas": carpeta_facturas,
-            }
-
-            cuit_o_doc = documento_normalizado or "0"
-            datos_receptor = {
-                "razon_social": str(cliente[2] if len(cliente) > 2 else "" or ""),
-                "cuit": cuit_o_doc,
-                "documento": cuit_o_doc,
-                "condicion_iva": condicion_iva,
-                "domicilio": self._combinar_domicilio_cliente(cliente),
-            }
-
-            datos_comprobante = {
-                "tipo": tipo_factura_normalizado,
-                "numero": numero_comprobante,
-                "fecha": str(consulta.get("fecha_comprobante") or fecha_comprobante or ""),
-                "concepto": "1 - Productos",
-                "periodo_servicio_desde": periodo_desde,
-                "periodo_servicio_hasta": periodo_hasta,
-                "vencimiento_pago": self._a_fecha_arca_yyyymmdd(resumen_actual.fecha_vencimiento),
-                "importe_neto": neto_factura,
-                "importe_iva": importe_iva_factura,
-                "alicuota_iva": alicuota_iva,
-                "importe_total": total_factura_fiscal,
-                "items": items_factura,
-                "moneda": str(consulta.get("moneda") or "PES"),
-                "cae": cae,
-                "vencimiento_cae": vencimiento_cae,
-                "ambiente": str(emisor_fiscal[9] if len(emisor_fiscal) > 9 else "Homologación"),
-                "punto_venta": punto_venta_num,
-            }
             print(f"importe_enviado_pdf: {total_factura_fiscal}")
 
-            pdf = PDFFiscalService.generar_factura_c(
-                ruta_destino=ruta_sugerida_pdf,
-                datos_emisor=datos_emisor,
-                datos_receptor=datos_receptor,
-                datos_comprobante=datos_comprobante,
+            pdf = FacturacionService.generar_pdf_fiscal(
+                cliente_id=cliente[0],
+                tipo_factura=tipo_factura,
+                tipo_factura_comprobante=tipo_factura_normalizado,
+                numero_comprobante=numero_comprobante,
+                codigo_factura=codigo_factura,
+                carpeta_facturas=carpeta_facturas,
+                emisor_fiscal=emisor_fiscal,
+                cuit_emisor=cuit_emisor_normalizado,
+                punto_venta_num=punto_venta_num,
+                cliente=cliente,
+                condicion_iva=condicion_iva,
+                documento_normalizado=documento_normalizado,
+                consulta=consulta,
+                fecha_comprobante=fecha_comprobante,
+                resumen_actual=resumen_actual,
+                periodo_desde=periodo_desde,
+                periodo_hasta=periodo_hasta,
+                neto_factura=neto_factura,
+                importe_iva_factura=importe_iva_factura,
+                alicuota_iva=alicuota_iva,
+                total_factura_fiscal=total_factura_fiscal,
+                items_factura=items_factura,
+                cae=cae,
+                vencimiento_cae=vencimiento_cae,
             )
             if not pdf.get("ok"):
                 errores_pdf = "\n".join(pdf.get("errores") or ["No se pudo generar el PDF fiscal."])
@@ -1539,7 +1528,7 @@ class ResumenesFrame(ctk.CTkFrame):
         if not emisor_fiscal or not cliente_id:
             return ""
 
-        carpeta_facturas = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
+        carpeta_facturas = str(emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or "").strip()
         if not carpeta_facturas:
             return ""
 
