@@ -60,30 +60,6 @@ class ResumenesFrame(ctk.CTkFrame):
             return {
                 "cliente_id": cliente_id,
                 "modalidad_comprobante": "Solo Resumen",
-                "emisor_habitual": "FM Master 98.3",
-                "tipo_factura": "No factura",
-                "condicion_iva": "",
-            }
-
-        contexto = {
-            "cliente_id": cliente_id,
-            "modalidad_comprobante": fila[21] if len(fila) > 21 and fila[21] else "Solo Resumen",
-            "emisor_habitual": fila[22] if len(fila) > 22 and fila[22] else "FM Master 98.3",
-            "tipo_factura": fila[12] if len(fila) > 12 and fila[12] else "No factura",
-            "condicion_iva": fila[11] if len(fila) > 11 and fila[11] else "",
-        }
-        self.contexto_facturacion_cliente[cliente_id] = contexto
-        return contexto
-
-    def _leer_contexto_facturacion_desde_bd(self, cliente_id):
-        fila = ClienteService.obtener(cliente_id)
-        if not fila:
-            return None
-
-        contexto = {
-            "cliente_id": cliente_id,
-            "modalidad_comprobante": fila[21] if len(fila) > 21 and fila[21] else "Solo Resumen",
-            "emisor_habitual": fila[22] if len(fila) > 22 and fila[22] else "FM Master 98.3",
             "tipo_factura": fila[12] if len(fila) > 12 and fila[12] else "No factura",
             "condicion_iva": fila[11] if len(fila) > 11 and fila[11] else "",
         }
@@ -816,7 +792,7 @@ class ResumenesFrame(ctk.CTkFrame):
             )
             return
 
-        suma_items = self._sumar_importes_items(items_factura)
+        suma_items = FacturacionService._sumar_importes_items(items_factura)
         total_resumen = float(getattr(resumen_actual, "total", 0) or 0)
         diferencia = round(suma_items - total_resumen, 2)
 
@@ -1338,7 +1314,7 @@ class ResumenesFrame(ctk.CTkFrame):
         neto_factura = float(total_factura_fiscal)
         importe_iva_factura = 0.0
         if resumen:
-            neto_estimado = self._sumar_importes_items(self._armar_items_factura_desde_resumen(resumen))
+            neto_estimado = FacturacionService._sumar_importes_items(self._armar_items_factura_desde_resumen(resumen))
             if str(tipo_factura).strip() == "Factura A":
                 neto_factura = neto_estimado
                 importe_iva_factura = round(total_factura_fiscal - neto_factura, 2)
@@ -1584,9 +1560,6 @@ class ResumenesFrame(ctk.CTkFrame):
             )
         return items
 
-    def _sumar_importes_items(self, items):
-        return float(round(sum(float(item.get("importe", 0) or 0) for item in list(items or [])), 2))
-
     def _normalizar_modalidad(self, modalidad):
         texto = str(modalidad or "").strip().lower()
         texto = " ".join(texto.split())
@@ -1694,8 +1667,8 @@ class ResumenesFrame(ctk.CTkFrame):
         fechas_inicio = []
         fechas_fin = []
         for concepto in list(getattr(resumen, "conceptos", []) or []):
-            inicio = self._a_fecha_arca_yyyymmdd(getattr(concepto, "fecha_inicio", ""))
-            fin = self._a_fecha_arca_yyyymmdd(getattr(concepto, "fecha_fin", ""))
+            inicio = FacturacionService._a_fecha_arca_yyyymmdd(getattr(concepto, "fecha_inicio", ""))
+            fin = FacturacionService._a_fecha_arca_yyyymmdd(getattr(concepto, "fecha_fin", ""))
             if len(inicio) == 8 and inicio.isdigit():
                 fechas_inicio.append(inicio)
             if len(fin) == 8 and fin.isdigit():
@@ -1719,7 +1692,7 @@ class ResumenesFrame(ctk.CTkFrame):
             return "cancelar"
 
         items = self._armar_items_factura_desde_resumen(resumen_actual)
-        total_items = self._sumar_importes_items(items)
+        total_items = FacturacionService._sumar_importes_items(items)
         total_resumen = float(getattr(resumen_actual, "total", 0) or 0)
         contexto_emision = contexto if isinstance(contexto, dict) else self._obtener_contexto_facturacion(resumen_actual.cliente_id)
         tipo_factura_normalizado = str((contexto_emision or {}).get("tipo_factura") or "").strip()
@@ -1930,21 +1903,6 @@ class ResumenesFrame(ctk.CTkFrame):
         ventana.protocol("WM_DELETE_WINDOW", lambda: _cerrar("cancelar"))
         self.wait_window(ventana)
         return accion.get()
-
-    def _a_fecha_arca_yyyymmdd(self, valor):
-        texto = str(valor or "").strip()
-        if len(texto) == 8 and texto.isdigit():
-            return texto
-        if len(texto) == 10 and texto[4] == "-" and texto[7] == "-":
-            return texto.replace("-", "")
-        return texto
-
-    def _combinar_domicilio_cliente(self, cliente_fila):
-        direccion = str(cliente_fila[5] if len(cliente_fila) > 5 else "" or "").strip()
-        localidad = str(cliente_fila[6] if len(cliente_fila) > 6 else "" or "").strip()
-        if direccion and localidad:
-            return f"{direccion} - {localidad}"
-        return direccion or localidad
 
     def _buscar_emisor_fiscal_por_etiqueta(self, etiqueta):
         texto_original = str(etiqueta or "").strip()

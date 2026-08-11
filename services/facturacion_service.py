@@ -50,6 +50,10 @@ class FacturacionService:
             total += float(round(importe, 2))
         return float(round(total, 2))
 
+    @staticmethod
+    def _sumar_importes_items(items):
+        return float(round(sum(float(item.get("importe", 0) or 0) for item in list(items or [])), 2))
+
     @classmethod
     def validar_resumen_para_facturar(cls, resumen_id):
         resultado = {
