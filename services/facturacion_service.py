@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from models.factura_arca import FacturaArca
@@ -8,6 +8,7 @@ from services.arca.homologacion_service import HomologacionService
 from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.cliente_service import ClienteService
 from services.emisor_fiscal_service import EmisorFiscalService
+from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
 from services.resumen_service import ResumenService
 
@@ -53,6 +54,523 @@ class FacturacionService:
     @staticmethod
     def _sumar_importes_items(items):
         return float(round(sum(float(item.get("importe", 0) or 0) for item in list(items or [])), 2))
+
+    @staticmethod
+    def _normalizar_etiqueta_emisor(valor):
+        texto = str(valor or "").strip().lower()
+        return "".join(caracter for caracter in texto if caracter.isalnum())
+
+    @staticmethod
+    def _normalizar_cuit(cuit):
+        texto = str(cuit or "").strip()
+        digitos = "".join(char for char in texto if char.isdigit())
+        if len(digitos) != 11:
+            return None
+        return digitos
+
+    @staticmethod
+    def _normalizar_punto_venta(punto_venta):
+        try:
+            valor = int(punto_venta or 0)
+        except (TypeError, ValueError):
+            return None
+        return valor if valor > 0 else None
+
+    @staticmethod
+    def _formatear_codigo_factura(punto_venta, numero):
+        try:
+            pv = int(punto_venta)
+        except (TypeError, ValueError):
+            pv = 0
+        try:
+            nro = int(numero)
+        except (TypeError, ValueError):
+            nro = 0
+        return f"{pv:05d}-{nro:08d}"
+
+    @staticmethod
+    def _armar_items_factura_desde_resumen(resumen):
+        items = []
+        for concepto in list(getattr(resumen, "conceptos", []) or []):
+            cantidad = float(getattr(concepto, "cantidad", 0) or 0)
+            precio_unitario = float(getattr(concepto, "importe", 0) or 0)
+            importe = float(getattr(concepto, "total", 0) or 0)
+            if abs(importe) <= 0.0 and cantidad > 0:
+                importe = cantidad * precio_unitario
+            texto_concepto = str(getattr(concepto, "concepto", "") or "").strip()
+            texto_descripcion = str(getattr(concepto, "descripcion", "") or "").strip()
+            descripcion = texto_concepto
+            if texto_descripcion:
+                descripcion = f"{texto_concepto} - {texto_descripcion}" if texto_concepto else texto_descripcion
+
+            items.append(
+                {
+                    "concepto": texto_concepto,
+                    "descripcion": descripcion or "(Sin descripción)",
+                    "cantidad": cantidad,
+                    "precio_unitario": precio_unitario,
+                    "importe": float(round(importe, 2)),
+                }
+            )
+        return items
+
+    @classmethod
+    def _obtener_periodo_facturado(cls, resumen):
+        fechas_inicio = []
+        fechas_fin = []
+        for concepto in list(getattr(resumen, "conceptos", []) or []):
+            inicio = cls._a_fecha_arca_yyyymmdd(getattr(concepto, "fecha_inicio", ""))
+            fin = cls._a_fecha_arca_yyyymmdd(getattr(concepto, "fecha_fin", ""))
+            if len(inicio) == 8 and inicio.isdigit():
+                fechas_inicio.append(inicio)
+            if len(fin) == 8 and fin.isdigit():
+                fechas_fin.append(fin)
+
+        if not fechas_inicio and not fechas_fin:
+            return "", ""
+
+        periodo_desde = min(fechas_inicio) if fechas_inicio else ""
+        periodo_hasta = max(fechas_fin) if fechas_fin else ""
+        return periodo_desde, periodo_hasta
+
+    @classmethod
+    def _resolver_emisor_facturacion_id(cls, emisor_fiscal):
+        emisor_fiscal_id = emisor_fiscal[0] if emisor_fiscal and len(emisor_fiscal) > 0 else None
+        cuit_fiscal = cls._normalizar_cuit(emisor_fiscal[3] if len(emisor_fiscal) > 3 else "")
+        nombre_fiscal = EmisorFiscalService.etiqueta_visible(emisor_fiscal)
+        nombre_fiscal_normalizado = cls._normalizar_etiqueta_emisor(nombre_fiscal)
+
+        emisores_internos = EmisorService.listar(False)
+
+        if emisor_fiscal_id:
+            emisor_vinculado = EmisorService.obtener_por_emisor_fiscal_id(emisor_fiscal_id)
+            if emisor_vinculado:
+                return emisor_vinculado[0], "emisor_fiscal_id"
+
+        if emisor_fiscal_id and EmisorService.obtener(emisor_fiscal_id):
+            return emisor_fiscal_id, "id_directo_legacy"
+
+        if cuit_fiscal:
+            for emisor in emisores_internos:
+                cuit_interno = cls._normalizar_cuit(emisor[4] if len(emisor) > 4 else "")
+                if cuit_interno and cuit_interno == cuit_fiscal:
+                    return emisor[0], "cuit"
+
+        if nombre_fiscal_normalizado:
+            for emisor in emisores_internos:
+                alias_normalizado = cls._normalizar_etiqueta_emisor(emisor[1] if len(emisor) > 1 else "")
+                if alias_normalizado and alias_normalizado == nombre_fiscal_normalizado:
+                    return emisor[0], "alias"
+
+        if nombre_fiscal_normalizado:
+            for emisor in emisores_internos:
+                nombre_normalizado = cls._normalizar_etiqueta_emisor(emisor[3] if len(emisor) > 3 else "")
+                titular_normalizado = cls._normalizar_etiqueta_emisor(emisor[2] if len(emisor) > 2 else "")
+                if nombre_normalizado == nombre_fiscal_normalizado or titular_normalizado == nombre_fiscal_normalizado:
+                    return emisor[0], "nombre_exacto_normalizado"
+
+        return None, "sin_vinculo"
+
+    @classmethod
+    def emitir_desde_resumen(cls, resumen_id, contexto=None):
+        resultado = {
+            "ok": False,
+            "etapa": "inicio",
+            "factura_id": None,
+            "resumen_id": resumen_id,
+            "numero_factura": "",
+            "cae": "",
+            "vencimiento_cae": "",
+            "ruta_pdf": "",
+            "errores": [],
+            "observaciones": "",
+            "detalle_arca": None,
+            "tipo_mensaje": "error",
+            "mensaje": "",
+            "datos_modal": {},
+            "ruta_pdf_resumen_recomendada": "",
+        }
+
+        if resumen_id is None:
+            resultado["etapa"] = "resumen_no_encontrado"
+            resultado["mensaje"] = "No se encontró el resumen recién generado."
+            return resultado
+
+        resumen = ResumenService.obtener(resumen_id)
+        if not resumen:
+            resultado["etapa"] = "resumen_no_encontrado"
+            resultado["mensaje"] = "No se encontró el resumen recién generado."
+            return resultado
+
+        facturas_existentes = FacturaArcaService.listar_por_resumen(resumen.id)
+        if facturas_existentes:
+            factura_existente = facturas_existentes[0]
+            numero_factura = str(factura_existente[9] if len(factura_existente) > 9 else "" or "-").strip()
+            cae = str(factura_existente[10] if len(factura_existente) > 10 else "" or "-").strip()
+            resultado["etapa"] = "resumen_ya_con_factura"
+            resultado["tipo_mensaje"] = "warning"
+            resultado["numero_factura"] = numero_factura
+            resultado["cae"] = cae
+            resultado["mensaje"] = (
+                "El resumen ya tiene una factura asociada. No se realizará una nueva emisión.\n\n"
+                f"Comprobante: {numero_factura}\n"
+                f"CAE: {cae}"
+            )
+            return resultado
+
+        if str(resumen.estado_facturacion or "").strip().lower() == "facturado":
+            numero_factura = str(getattr(resumen, "numero_factura", "") or "-").strip()
+            cae = str(getattr(resumen, "cae", "") or "-").strip()
+            resultado["etapa"] = "resumen_ya_facturado"
+            resultado["tipo_mensaje"] = "warning"
+            resultado["numero_factura"] = numero_factura
+            resultado["cae"] = cae
+            resultado["mensaje"] = (
+                "El resumen ya figura como facturado. No se realizará una nueva emisión.\n\n"
+                f"Comprobante: {numero_factura}\n"
+                f"CAE: {cae}"
+            )
+            return resultado
+
+        validacion_resumen = cls.validar_resumen_para_facturar(resumen.id)
+        if not validacion_resumen.get("ok"):
+            errores_validacion = validacion_resumen.get("errores") or ["El resumen no cumple las validaciones previas para facturar."]
+            resultado["etapa"] = "validacion_resumen"
+            resultado["errores"] = list(errores_validacion)
+            resultado["mensaje"] = (
+                "No se puede facturar porque el resumen no cumple las validaciones previas:\n- "
+                + "\n- ".join(str(error) for error in errores_validacion)
+            )
+            return resultado
+
+        resolucion_cliente = cls.resolver_cliente(resumen.id)
+        if not resolucion_cliente.get("ok"):
+            errores_cliente = resolucion_cliente.get("errores") or ["cliente_no_encontrado"]
+            resultado["etapa"] = "cliente"
+            resultado["errores"] = list(errores_cliente)
+            resultado["mensaje"] = (
+                "No se encontraron los datos del cliente para facturar:\n- "
+                + "\n- ".join(str(error) for error in errores_cliente)
+            )
+            return resultado
+        cliente = resolucion_cliente.get("cliente")
+
+        datos_contexto = contexto if isinstance(contexto, dict) else {}
+        modalidad = str(datos_contexto.get("modalidad_comprobante") or "Solo Resumen").strip()
+        emisor_habitual = str(datos_contexto.get("emisor_habitual") or "").strip()
+        tipo_factura = str(datos_contexto.get("tipo_factura") or "").strip()
+        condicion_iva = str(datos_contexto.get("condicion_iva") or "").strip()
+
+        faltantes = []
+        if not tipo_factura:
+            faltantes.append("Tipo de factura")
+        if not condicion_iva:
+            faltantes.append("Condición de IVA")
+
+        resolucion_conceptos = cls.resolver_conceptos(resumen.id)
+        if not resolucion_conceptos.get("ok"):
+            errores_conceptos = resolucion_conceptos.get("errores") or ["resumen_sin_conceptos"]
+            resultado["etapa"] = "conceptos"
+            resultado["errores"] = list(errores_conceptos)
+            resultado["mensaje"] = (
+                "No se puede facturar porque faltan datos obligatorios:\n- "
+                + "\n- ".join(str(error) for error in errores_conceptos)
+            )
+            return resultado
+        resumen_actual = resolucion_conceptos.get("resumen")
+        conceptos_resumen = resolucion_conceptos.get("conceptos") or []
+        if not conceptos_resumen:
+            faltantes.append("Ítems del resumen")
+
+        if faltantes:
+            resultado["etapa"] = "faltantes"
+            resultado["errores"] = list(faltantes)
+            resultado["mensaje"] = "No se puede facturar porque faltan datos obligatorios:\n- " + "\n- ".join(faltantes)
+            return resultado
+
+        tipo_factura_normalizado = str(tipo_factura or "").strip()
+        if tipo_factura_normalizado not in {"Factura C", "Factura A"}:
+            resultado["etapa"] = "tipo_factura"
+            resultado["mensaje"] = "El tipo de factura configurado no es compatible con este flujo automático (solo Factura C / Factura A)."
+            return resultado
+
+        resolucion_emisor = cls.resolver_emisor(resumen.id)
+        if not resolucion_emisor.get("ok"):
+            errores_emisor = resolucion_emisor.get("errores") or ["emisor_fiscal_no_encontrado"]
+            resultado["etapa"] = "emisor"
+            resultado["errores"] = list(errores_emisor)
+            resultado["mensaje"] = (
+                "No se encontró el emisor configurado para iniciar la emisión:\n- "
+                + "\n- ".join(str(error) for error in errores_emisor)
+            )
+            return resultado
+        emisor_fiscal = resolucion_emisor.get("emisor_fiscal")
+
+        emisor_facturacion_id, campo_vinculo = cls._resolver_emisor_facturacion_id(emisor_fiscal)
+        if emisor_facturacion_id is None:
+            resultado["etapa"] = "vinculo_emisor"
+            resultado["observaciones"] = f"campo_usado_vinculo={campo_vinculo}"
+            resultado["mensaje"] = "No se pudo vincular el emisor interno de facturación para registrar la factura."
+            return resultado
+
+        cuit_emisor = str(emisor_fiscal[3] if len(emisor_fiscal) > 3 else "" or "").strip()
+        punto_venta = emisor_fiscal[6] if len(emisor_fiscal) > 6 else ""
+        ruta_certificado = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
+        ruta_clave = str(emisor_fiscal[14] if len(emisor_fiscal) > 14 else "" or "").strip()
+        carpeta_facturas = str(emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or "").strip()
+
+        cuit_emisor_normalizado = cls._normalizar_cuit(cuit_emisor)
+        punto_venta_normalizado = cls._normalizar_punto_venta(punto_venta)
+        if not cuit_emisor_normalizado:
+            resultado["etapa"] = "cuit_emisor"
+            resultado["mensaje"] = "El CUIT del emisor habitual es inválido."
+            return resultado
+        if punto_venta_normalizado is None:
+            resultado["etapa"] = "punto_venta"
+            resultado["mensaje"] = "El punto de venta del emisor habitual es inválido."
+            return resultado
+
+        condicion_iva_emisor = str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or "").strip().lower()
+        if tipo_factura_normalizado == "Factura A" and "responsable" not in condicion_iva_emisor:
+            resultado["etapa"] = "condicion_emisor"
+            resultado["mensaje"] = "No se puede emitir Factura A: el emisor no está configurado como Responsable Inscripto."
+            return resultado
+
+        if not resumen_actual:
+            resultado["etapa"] = "resumen_recarga"
+            resultado["mensaje"] = "No se pudo recargar el resumen recién guardado para emitir."
+            return resultado
+
+        items_factura = cls._armar_items_factura_desde_resumen(resumen_actual)
+        if not items_factura:
+            resultado["etapa"] = "items"
+            resultado["mensaje"] = "El resumen no tiene ítems válidos para facturación."
+            return resultado
+
+        suma_items = cls._sumar_importes_items(items_factura)
+        total_resumen = float(getattr(resumen_actual, "total", 0) or 0)
+        diferencia = round(suma_items - total_resumen, 2)
+        if abs(diferencia) > 0.01:
+            resultado["etapa"] = "diferencia_totales"
+            resultado["errores"] = ["diferencia_totales"]
+            resultado["datos_modal"] = {
+                "suma_items": float(suma_items),
+                "total_resumen": float(total_resumen),
+                "diferencia": float(diferencia),
+                "items_factura": list(items_factura or []),
+            }
+            return resultado
+
+        total_factura = float(round(suma_items, 2))
+        if total_factura <= 0:
+            resultado["etapa"] = "total_factura"
+            resultado["mensaje"] = "El total del resumen es inválido para facturación."
+            return resultado
+
+        documento_cliente = str(cliente[10] if len(cliente) > 10 else "" or "").strip()
+        documento_normalizado = "".join(char for char in documento_cliente if char.isdigit())
+        condicion_iva_normalizada = condicion_iva.lower()
+        if not documento_normalizado and condicion_iva_normalizada != "consumidor final":
+            resultado["etapa"] = "documento_cliente"
+            resultado["mensaje"] = "No se puede facturar porque falta CUIT o documento del cliente."
+            return resultado
+
+        if tipo_factura_normalizado == "Factura A":
+            if "responsable" not in condicion_iva_normalizada:
+                resultado["etapa"] = "condicion_cliente"
+                resultado["mensaje"] = "No se puede emitir Factura A: el cliente debe ser Responsable Inscripto."
+                return resultado
+            if len(documento_normalizado) != 11:
+                resultado["etapa"] = "cuit_cliente"
+                resultado["mensaje"] = "No se puede emitir Factura A: el cliente debe tener CUIT válido de 11 dígitos."
+                return resultado
+            tipo_documento = 80
+            documento_receptor = int(documento_normalizado)
+        elif documento_normalizado and len(documento_normalizado) == 11:
+            if condicion_iva_normalizada == "consumidor final":
+                tipo_documento = 96
+                documento_receptor = int(documento_normalizado[2:-1])
+            else:
+                tipo_documento = 80
+                documento_receptor = int(documento_normalizado)
+        else:
+            tipo_documento = 99
+            documento_receptor = 0
+
+        fiscal = cls.calcular_importes_fiscales(resumen.id, tipo_factura=tipo_factura_normalizado)
+        if not fiscal.get("ok"):
+            errores_fiscales = list(fiscal.get("errores") or ["Cálculo fiscal inválido."])
+            resultado["etapa"] = "calculo_fiscal"
+            resultado["errores"] = errores_fiscales
+            return resultado
+
+        tipo_comprobante = int(fiscal.get("tipo_comprobante") or 0)
+        neto_factura = float(fiscal.get("neto_factura") or 0.0)
+        alicuota_iva = float(fiscal.get("alicuota_iva") or 0.0)
+        importe_iva_factura = float(fiscal.get("importe_iva_factura") or 0.0)
+        total_factura_fiscal = float(fiscal.get("total_factura_fiscal") or 0.0)
+        importe_exento_factura = float(fiscal.get("importe_exento_factura") or 0.0)
+        importe_tot_conc = float(fiscal.get("importe_tot_conc") or 0.0)
+        importe_tributos = float(fiscal.get("importe_tributos") or 0.0)
+        alicuotas_iva = list(fiscal.get("alicuotas_iva") or [])
+        condicion_iva_receptor_id = int(fiscal.get("condicion_iva_receptor_id") or 0)
+
+        pre_guardado = FacturaArcaService.validar_pre_guardado(
+            cliente_id=cliente[0],
+            emisor_id=emisor_facturacion_id,
+            resumen_id=resumen.id,
+            fecha=date.today().isoformat(),
+            punto_venta=str(punto_venta_normalizado),
+            tipo_comprobante=tipo_factura_normalizado,
+            importe_total=total_factura_fiscal,
+            estado="Facturada manualmente",
+        )
+        if not pre_guardado.get("ok"):
+            resultado["etapa"] = "pre_guardado"
+            resultado["errores"] = list(pre_guardado.get("errores") or ["Validación local fallida."])
+            return resultado
+
+        try:
+            resultado_arca = cls.emitir_en_arca(
+                ruta_certificado=ruta_certificado,
+                ruta_clave=ruta_clave,
+                cuit_emisor=cuit_emisor_normalizado,
+                punto_venta=punto_venta_normalizado,
+                tipo_comprobante=tipo_comprobante,
+                condicion_iva_receptor_id=condicion_iva_receptor_id,
+                tipo_documento=tipo_documento,
+                documento_receptor=documento_receptor,
+                importe_total=total_factura_fiscal,
+                importe_neto=neto_factura,
+                importe_iva=importe_iva_factura,
+                importe_exento=importe_exento_factura,
+                carpeta_trabajo=carpeta_facturas,
+                importe_tot_conc=importe_tot_conc,
+                importe_tributos=importe_tributos,
+                alicuotas_iva=alicuotas_iva,
+                concepto=1,
+            )
+            if not resultado_arca.get("ok"):
+                detalle_arca = resultado_arca.get("emision") if resultado_arca.get("etapa") != "consulta" else resultado_arca.get("consulta")
+                resultado["etapa"] = "arca"
+                resultado["detalle_arca"] = detalle_arca or {}
+                resultado["errores"] = list(resultado_arca.get("errores") or [])
+                return resultado
+
+            consulta = resultado_arca.get("consulta") or {}
+            fecha_comprobante = str(resultado_arca.get("fecha_comprobante") or "")
+            numero_comprobante = int(resultado_arca.get("numero_comprobante") or 0)
+            punto_venta_num = int(resultado_arca.get("punto_venta_num") or punto_venta_normalizado)
+            numero_factura = cls._formatear_codigo_factura(punto_venta_num, numero_comprobante)
+            cae = str(resultado_arca.get("cae") or "")
+            vencimiento_cae = str(resultado_arca.get("vencimiento_cae") or "")
+
+            observaciones_factura = (
+                f"Emitida desde Resúmenes ({modalidad}). Emisor habitual: {emisor_habitual}. "
+                f"Fiscal: neto={neto_factura:.2f}; iva_alicuota={alicuota_iva:.2f}%; "
+                f"iva_importe={importe_iva_factura:.2f}; total={total_factura_fiscal:.2f}"
+            )
+            registro_emision = cls.registrar_emision_aprobada(
+                cliente_id=cliente[0],
+                emisor_id=emisor_facturacion_id,
+                resumen_id=resumen.id,
+                fecha=date.today().isoformat(),
+                punto_venta=str(punto_venta_num),
+                tipo_comprobante=tipo_factura_normalizado,
+                importe_total=total_factura_fiscal,
+                numero_factura=numero_factura,
+                cae=cae,
+                vencimiento_cae=vencimiento_cae,
+                observaciones=observaciones_factura,
+            )
+            if not registro_emision.get("ok"):
+                resultado["etapa"] = "registro"
+                resultado["errores"] = list(registro_emision.get("errores") or ["No se pudo persistir la emisión aprobada."])
+                resultado["numero_factura"] = numero_factura
+                resultado["cae"] = cae
+                resultado["vencimiento_cae"] = vencimiento_cae
+                resultado["observaciones"] = observaciones_factura
+                return resultado
+
+            factura_id = registro_emision.get("factura_id")
+            codigo_factura = cls._formatear_codigo_factura(punto_venta_num, numero_comprobante)
+            periodo_desde, periodo_hasta = cls._obtener_periodo_facturado(resumen_actual)
+
+            pdf = cls.generar_pdf_fiscal(
+                cliente_id=cliente[0],
+                tipo_factura=tipo_factura,
+                tipo_factura_comprobante=tipo_factura_normalizado,
+                numero_comprobante=numero_comprobante,
+                codigo_factura=codigo_factura,
+                carpeta_facturas=carpeta_facturas,
+                emisor_fiscal=emisor_fiscal,
+                cuit_emisor=cuit_emisor_normalizado,
+                punto_venta_num=punto_venta_num,
+                cliente=cliente,
+                condicion_iva=condicion_iva,
+                documento_normalizado=documento_normalizado,
+                consulta=consulta,
+                fecha_comprobante=fecha_comprobante,
+                resumen_actual=resumen_actual,
+                periodo_desde=periodo_desde,
+                periodo_hasta=periodo_hasta,
+                neto_factura=neto_factura,
+                importe_iva_factura=importe_iva_factura,
+                alicuota_iva=alicuota_iva,
+                total_factura_fiscal=total_factura_fiscal,
+                items_factura=items_factura,
+                cae=cae,
+                vencimiento_cae=vencimiento_cae,
+            )
+            if not pdf.get("ok"):
+                resultado["etapa"] = "pdf"
+                resultado["tipo_mensaje"] = "warning"
+                resultado["errores"] = list(pdf.get("errores") or ["No se pudo generar el PDF fiscal."])
+                resultado["factura_id"] = factura_id
+                resultado["numero_factura"] = numero_factura
+                resultado["cae"] = cae
+                resultado["vencimiento_cae"] = vencimiento_cae
+                resultado["observaciones"] = observaciones_factura
+                resultado["datos_modal"] = {
+                    "cliente_fila": cliente,
+                    "emisor_fiscal": emisor_fiscal,
+                    "tipo_factura": tipo_factura_normalizado,
+                    "punto_venta_num": punto_venta_num,
+                    "numero_comprobante": numero_comprobante,
+                    "codigo_factura": codigo_factura,
+                    "neto_factura": neto_factura,
+                    "importe_iva_factura": importe_iva_factura,
+                    "total_factura_fiscal": total_factura_fiscal,
+                }
+                return resultado
+
+            ruta_pdf = str(pdf.get("ruta_pdf") or "").strip()
+
+            resultado["ok"] = True
+            resultado["etapa"] = "ok"
+            resultado["factura_id"] = factura_id
+            resultado["resumen_id"] = resumen.id
+            resultado["numero_factura"] = numero_factura
+            resultado["cae"] = cae
+            resultado["vencimiento_cae"] = vencimiento_cae
+            resultado["ruta_pdf"] = ruta_pdf
+            resultado["observaciones"] = observaciones_factura
+            resultado["datos_modal"] = {
+                "cliente_fila": cliente,
+                "emisor_fiscal": emisor_fiscal,
+                "tipo_factura": tipo_factura_normalizado,
+                "punto_venta_num": punto_venta_num,
+                "numero_comprobante": numero_comprobante,
+                "codigo_factura": codigo_factura,
+                "neto_factura": neto_factura,
+                "importe_iva_factura": importe_iva_factura,
+                "total_factura_fiscal": total_factura_fiscal,
+            }
+            return resultado
+        except Exception as error:
+            resultado["etapa"] = "excepcion"
+            resultado["errores"] = [str(error)]
+            return resultado
 
     @classmethod
     def validar_resumen_para_facturar(cls, resumen_id):

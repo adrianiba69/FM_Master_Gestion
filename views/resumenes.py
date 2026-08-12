@@ -625,415 +625,24 @@ class ResumenesFrame(ctk.CTkFrame):
             )
             return
 
-        facturas_existentes = FacturaArcaService.listar_por_resumen(resumen.id)
-        if facturas_existentes:
-            factura_existente = facturas_existentes[0]
-            numero_factura = str(factura_existente[9] if len(factura_existente) > 9 else "" or "-").strip()
-            cae = str(factura_existente[10] if len(factura_existente) > 10 else "" or "-").strip()
-            messagebox.showwarning(
-                "Emitir factura",
-                "El resumen ya tiene una factura asociada. No se realizará una nueva emisión.\n\n"
-                f"Comprobante: {numero_factura}\n"
-                f"CAE: {cae}",
-                parent=self,
-            )
-            return
-
-        if str(resumen.estado_facturacion or "").strip().lower() == "facturado":
-            numero_factura = str(getattr(resumen, "numero_factura", "") or "-").strip()
-            cae = str(getattr(resumen, "cae", "") or "-").strip()
-            messagebox.showwarning(
-                "Emitir factura",
-                "El resumen ya figura como facturado. No se realizará una nueva emisión.\n\n"
-                f"Comprobante: {numero_factura}\n"
-                f"CAE: {cae}",
-                parent=self,
-            )
-            return
-
-        validacion_resumen = FacturacionService.validar_resumen_para_facturar(resumen.id)
-        if not validacion_resumen.get("ok"):
-            errores_validacion = validacion_resumen.get("errores") or ["El resumen no cumple las validaciones previas para facturar."]
-            messagebox.showerror(
-                "Emitir factura",
-                "No se puede facturar porque el resumen no cumple las validaciones previas:\n- "
-                + "\n- ".join(str(error) for error in errores_validacion),
-                parent=self,
-            )
-            return
-
-        resolucion_cliente = FacturacionService.resolver_cliente(resumen.id)
-        if not resolucion_cliente.get("ok"):
-            errores_cliente = resolucion_cliente.get("errores") or ["cliente_no_encontrado"]
-            messagebox.showerror(
-                "Emitir factura",
-                "No se encontraron los datos del cliente para facturar:\n- "
-                + "\n- ".join(str(error) for error in errores_cliente),
-                parent=self,
-            )
-            return
-        cliente = resolucion_cliente.get("cliente")
-
-        modalidad = str(contexto.get("modalidad_comprobante") or "Solo Resumen").strip()
-        emisor_habitual = str(contexto.get("emisor_habitual") or "").strip()
-        tipo_factura = str(contexto.get("tipo_factura") or "").strip()
-        condicion_iva = str(contexto.get("condicion_iva") or "").strip()
-
-        faltantes = []
-        if not tipo_factura:
-            faltantes.append("Tipo de factura")
-        if not condicion_iva:
-            faltantes.append("Condición de IVA")
-
-        resolucion_conceptos = FacturacionService.resolver_conceptos(resumen.id)
-        if not resolucion_conceptos.get("ok"):
-            errores_conceptos = resolucion_conceptos.get("errores") or ["resumen_sin_conceptos"]
-            messagebox.showerror(
-                "Emitir factura",
-                "No se puede facturar porque faltan datos obligatorios:\n- "
-                + "\n- ".join(str(error) for error in errores_conceptos),
-                parent=self,
-            )
-            return
-        resumen_actual = resolucion_conceptos.get("resumen")
-        conceptos_resumen = resolucion_conceptos.get("conceptos") or []
-        if not conceptos_resumen:
-            faltantes.append("Ítems del resumen")
-
-        if faltantes:
-            messagebox.showerror(
-                "Emitir factura",
-                "No se puede facturar porque faltan datos obligatorios:\n- " + "\n- ".join(faltantes),
-                parent=self,
-            )
-            return
-
-        tipo_factura_normalizado = str(tipo_factura or "").strip()
-        if tipo_factura_normalizado not in {"Factura C", "Factura A"}:
-            messagebox.showerror(
-                "Emitir factura",
-                "El tipo de factura configurado no es compatible con este flujo automático (solo Factura C / Factura A).",
-                parent=self,
-            )
-            return
-
-        resolucion_emisor = FacturacionService.resolver_emisor(resumen.id)
-        if not resolucion_emisor.get("ok"):
-            errores_emisor = resolucion_emisor.get("errores") or ["emisor_fiscal_no_encontrado"]
-            messagebox.showerror(
-                "Emitir factura",
-                "No se encontró el emisor configurado para iniciar la emisión:\n- "
-                + "\n- ".join(str(error) for error in errores_emisor),
-                parent=self,
-            )
-            return
-        emisor_fiscal = resolucion_emisor.get("emisor_fiscal")
-
-        emisor_fiscal_id = emisor_fiscal[0]
-        emisor_facturacion_id, campo_vinculo = self._resolver_emisor_facturacion_id(cliente, emisor_fiscal)
-        if emisor_facturacion_id is None:
-            print("DIAGNOSTICO VINCULACION EMISOR")
-            print(f"emisor_fiscal_id_recibido: {emisor_fiscal_id}")
-            print("emisor_interno_encontrado: None")
-            print(f"campo_usado_vinculo: {campo_vinculo}")
-            messagebox.showerror(
-                "Emitir factura",
-                "No se pudo vincular el emisor interno de facturación para registrar la factura.",
-                parent=self,
-            )
-            return
-
-        cuit_emisor = str(emisor_fiscal[3] if len(emisor_fiscal) > 3 else "" or "").strip()
-        punto_venta = emisor_fiscal[6] if len(emisor_fiscal) > 6 else ""
-        ruta_certificado = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
-        ruta_clave = str(emisor_fiscal[14] if len(emisor_fiscal) > 14 else "" or "").strip()
-        carpeta_facturas = str(emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or "").strip()
-
-        cuit_emisor_normalizado = self._normalizar_cuit(cuit_emisor)
-        punto_venta_normalizado = self._normalizar_punto_venta(punto_venta)
-        if not cuit_emisor_normalizado:
-            messagebox.showerror(
-                "Emitir factura",
-                "El CUIT del emisor habitual es inválido.",
-                parent=self,
-            )
-            return
-        if punto_venta_normalizado is None:
-            messagebox.showerror(
-                "Emitir factura",
-                "El punto de venta del emisor habitual es inválido.",
-                parent=self,
-            )
-            return
-
-        condicion_iva_emisor = str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or "").strip().lower()
-        if tipo_factura_normalizado == "Factura A" and "responsable" not in condicion_iva_emisor:
-            messagebox.showerror(
-                "Emitir factura",
-                "No se puede emitir Factura A: el emisor no está configurado como Responsable Inscripto.",
-                parent=self,
-            )
-            return
-
-        if not resumen_actual:
-            messagebox.showerror(
-                "Emitir factura",
-                "No se pudo recargar el resumen recién guardado para emitir.",
-                parent=self,
-            )
-            return
-
-        items_factura = self._armar_items_factura_desde_resumen(resumen_actual)
-        if not items_factura:
-            messagebox.showerror(
-                "Emitir factura",
-                "El resumen no tiene ítems válidos para facturación.",
-                parent=self,
-            )
-            return
-
-        suma_items = FacturacionService._sumar_importes_items(items_factura)
-        total_resumen = float(getattr(resumen_actual, "total", 0) or 0)
-        diferencia = round(suma_items - total_resumen, 2)
-
-        print("DIAGNOSTICO PREVIO EMISION ARCA")
-        print(f"resumen_id: {resumen_actual.id}")
-        print(f"cantidad_items: {len(items_factura)}")
-        for idx, item in enumerate(items_factura, 1):
-            print(
-                f"item_{idx}: descripcion={item['descripcion']} | cantidad={item['cantidad']} | "
-                f"precio_unitario={item['precio_unitario']} | importe={item['importe']}"
-            )
-        print(f"suma_items: {suma_items}")
-        print(f"total_resumen: {total_resumen}")
-
-        if abs(diferencia) > 0.01:
-            detalle_diferencia = [
-                "No se emitió la factura porque los importes no coinciden.",
-                "",
-                f"Suma de ítems: {self.formatear_moneda(suma_items)}",
-                f"Total del resumen: {self.formatear_moneda(total_resumen)}",
-                f"Diferencia: {self.formatear_moneda(diferencia)}",
-                "",
-                "Detalle utilizado:",
-            ]
-            for item in items_factura:
-                detalle_diferencia.append(
-                    f"- {item['descripcion']} | Cant: {item['cantidad']} | Unit: {self.formatear_moneda(item['precio_unitario'])} | "
-                    f"Importe: {self.formatear_moneda(item['importe'])}"
-                )
-
-            messagebox.showerror(
-                "Emitir factura",
-                "\n".join(detalle_diferencia),
-                parent=self,
-            )
-            return
-
-        total_factura = float(round(suma_items, 2))
-        if total_factura <= 0:
-            messagebox.showerror(
-                "Emitir factura",
-                "El total del resumen es inválido para facturación.",
-                parent=self,
-            )
-            return
-
-        documento_cliente = str(cliente[10] if len(cliente) > 10 else "" or "").strip()
-        documento_normalizado = "".join(char for char in documento_cliente if char.isdigit())
-        condicion_iva_normalizada = condicion_iva.lower()
-        if not documento_normalizado and condicion_iva_normalizada != "consumidor final":
-            messagebox.showerror(
-                "Emitir factura",
-                "No se puede facturar porque falta CUIT o documento del cliente.",
-                parent=self,
-            )
-            return
-
-        if tipo_factura_normalizado == "Factura A":
-            if "responsable" not in condicion_iva_normalizada:
-                messagebox.showerror(
-                    "Emitir factura",
-                    "No se puede emitir Factura A: el cliente debe ser Responsable Inscripto.",
-                    parent=self,
-                )
-                return
-            if len(documento_normalizado) != 11:
-                messagebox.showerror(
-                    "Emitir factura",
-                    "No se puede emitir Factura A: el cliente debe tener CUIT válido de 11 dígitos.",
-                    parent=self,
-                )
-                return
-            tipo_documento = 80
-            documento_receptor = int(documento_normalizado)
-        elif documento_normalizado and len(documento_normalizado) == 11:
-            if condicion_iva_normalizada == "consumidor final":
-                tipo_documento = 96
-                documento_receptor = int(documento_normalizado[2:-1])
-            else:
-                tipo_documento = 80
-                documento_receptor = int(documento_normalizado)
-        else:
-            tipo_documento = 99
-            documento_receptor = 0
-
-        fiscal = FacturacionService.calcular_importes_fiscales(resumen.id, tipo_factura=tipo_factura_normalizado)
-        if not fiscal.get("ok"):
-            errores_fiscales = "\n- ".join(fiscal.get("errores") or ["Cálculo fiscal inválido."])
-            messagebox.showerror(
-                "Emitir factura",
-                "No se puede emitir por inconsistencias fiscales:\n\n- " + errores_fiscales,
-                parent=self,
-            )
-            return
-
-        tipo_comprobante = int(fiscal.get("tipo_comprobante") or 0)
-        neto_factura = float(fiscal.get("neto_factura") or 0.0)
-        alicuota_iva = float(fiscal.get("alicuota_iva") or 0.0)
-        importe_iva_factura = float(fiscal.get("importe_iva_factura") or 0.0)
-        total_factura_fiscal = float(fiscal.get("total_factura_fiscal") or 0.0)
-        importe_exento_factura = float(fiscal.get("importe_exento_factura") or 0.0)
-        importe_tot_conc = float(fiscal.get("importe_tot_conc") or 0.0)
-        importe_tributos = float(fiscal.get("importe_tributos") or 0.0)
-        alicuotas_iva = list(fiscal.get("alicuotas_iva") or [])
-        condicion_iva_receptor_id = int(fiscal.get("condicion_iva_receptor_id") or 0)
-
-        pre_guardado = FacturaArcaService.validar_pre_guardado(
-            cliente_id=cliente[0],
-            emisor_id=emisor_facturacion_id,
-            resumen_id=resumen.id,
-            fecha=date.today().isoformat(),
-            punto_venta=str(punto_venta_normalizado),
-            tipo_comprobante=tipo_factura_normalizado,
-            importe_total=total_factura_fiscal,
-            estado="Facturada manualmente",
+        resultado = FacturacionService.emitir_desde_resumen(
+            resumen_id=getattr(resumen, "id", None),
+            contexto=contexto,
         )
-        if not pre_guardado.get("ok"):
-            errores_pre = "\n- ".join(pre_guardado.get("errores") or ["Validación local fallida."])
-            messagebox.showerror(
-                "Emitir factura",
-                "No se puede emitir en ARCA porque la factura no se puede persistir localmente.\n\n- " + errores_pre,
-                parent=self,
-            )
-            return
 
-        try:
-            nombre_emisor = EmisorFiscalService.etiqueta_visible(emisor_fiscal)
-            print("DIAGNOSTICO EMISION RESUMENES")
-            print(f"emisor_id: {emisor_fiscal_id}")
-            print(f"nombre_emisor: {nombre_emisor}")
-            print(f"certificado_recibido: {ruta_certificado}")
-            print(f"clave_privada_recibida: {ruta_clave}")
-            print(f"carpeta_facturas_recibida: {carpeta_facturas}")
-            print(f"emisor_interno_encontrado: {emisor_facturacion_id}")
-            print(f"campo_usado_vinculo: {campo_vinculo}")
-            print("funcion_emision: HomologacionService.emitir_comprobante_prueba")
-            print(f"tipo_factura_emision: {tipo_factura_normalizado}")
-            print(f"importe_neto_enviado_arca: {neto_factura}")
-            print(f"importe_iva_enviado_arca: {importe_iva_factura}")
-            print(f"importe_total_enviado_arca: {total_factura_fiscal}")
+        if not resultado.get("ok"):
+            etapa = str(resultado.get("etapa") or "")
 
-            resultado_arca = FacturacionService.emitir_en_arca(
-                ruta_certificado=ruta_certificado,
-                ruta_clave=ruta_clave,
-                cuit_emisor=cuit_emisor_normalizado,
-                punto_venta=punto_venta_normalizado,
-                tipo_comprobante=tipo_comprobante,
-                condicion_iva_receptor_id=condicion_iva_receptor_id,
-                tipo_documento=tipo_documento,
-                documento_receptor=documento_receptor,
-                importe_total=total_factura_fiscal,
-                importe_neto=neto_factura,
-                importe_iva=importe_iva_factura,
-                importe_exento=importe_exento_factura,
-                carpeta_trabajo=carpeta_facturas,
-                importe_tot_conc=importe_tot_conc,
-                importe_tributos=importe_tributos,
-                alicuotas_iva=alicuotas_iva,
-                concepto=1,
-            )
-            if not resultado_arca.get("ok"):
-                detalle_arca = resultado_arca.get("emision") if resultado_arca.get("etapa") != "consulta" else resultado_arca.get("consulta")
+            if etapa == "arca":
                 messagebox.showerror(
                     "Emitir factura",
-                    self._mensaje_errores_emision(detalle_arca or {}),
+                    self._mensaje_errores_emision(resultado.get("detalle_arca") or {}),
                     parent=self,
                 )
                 return
 
-            emision = resultado_arca.get("emision") or {}
-            consulta = resultado_arca.get("consulta") or {}
-            fecha_comprobante = str(resultado_arca.get("fecha_comprobante") or "")
-            numero_comprobante = int(resultado_arca.get("numero_comprobante") or 0)
-            punto_venta_num = int(resultado_arca.get("punto_venta_num") or punto_venta_normalizado)
-            numero_factura = self._formatear_codigo_factura(punto_venta_num, numero_comprobante)
-            cae = str(resultado_arca.get("cae") or "")
-            vencimiento_cae = str(resultado_arca.get("vencimiento_cae") or "")
-
-            observaciones_factura = (
-                f"Emitida desde Resúmenes ({modalidad}). Emisor habitual: {emisor_habitual}. "
-                f"Fiscal: neto={neto_factura:.2f}; iva_alicuota={alicuota_iva:.2f}%; "
-                f"iva_importe={importe_iva_factura:.2f}; total={total_factura_fiscal:.2f}"
-            )
-            registro_emision = FacturacionService.registrar_emision_aprobada(
-                cliente_id=cliente[0],
-                emisor_id=emisor_facturacion_id,
-                resumen_id=resumen.id,
-                fecha=date.today().isoformat(),
-                punto_venta=str(punto_venta_num),
-                tipo_comprobante=tipo_factura_normalizado,
-                importe_total=total_factura_fiscal,
-                numero_factura=numero_factura,
-                cae=cae,
-                vencimiento_cae=vencimiento_cae,
-                observaciones=observaciones_factura,
-            )
-            if not registro_emision.get("ok"):
-                errores_registro = "\n- ".join(registro_emision.get("errores") or ["No se pudo persistir la emisión aprobada."])
-                messagebox.showerror(
-                    "Emitir factura",
-                    "La emisión fue autorizada por ARCA, pero falló el guardado local:\n\n- " + errores_registro,
-                    parent=self,
-                )
-                return
-
-            factura_id = registro_emision.get("factura_id")
-            print(f"factura_id_registrado: {factura_id}")
-            print(f"comprobante_registrado: {numero_factura}")
-
-            codigo_factura = self._formatear_codigo_factura(punto_venta_num, numero_comprobante)
-            periodo_desde, periodo_hasta = self._obtener_periodo_facturado(resumen_actual)
-            print(f"importe_enviado_pdf: {total_factura_fiscal}")
-
-            pdf = FacturacionService.generar_pdf_fiscal(
-                cliente_id=cliente[0],
-                tipo_factura=tipo_factura,
-                tipo_factura_comprobante=tipo_factura_normalizado,
-                numero_comprobante=numero_comprobante,
-                codigo_factura=codigo_factura,
-                carpeta_facturas=carpeta_facturas,
-                emisor_fiscal=emisor_fiscal,
-                cuit_emisor=cuit_emisor_normalizado,
-                punto_venta_num=punto_venta_num,
-                cliente=cliente,
-                condicion_iva=condicion_iva,
-                documento_normalizado=documento_normalizado,
-                consulta=consulta,
-                fecha_comprobante=fecha_comprobante,
-                resumen_actual=resumen_actual,
-                periodo_desde=periodo_desde,
-                periodo_hasta=periodo_hasta,
-                neto_factura=neto_factura,
-                importe_iva_factura=importe_iva_factura,
-                alicuota_iva=alicuota_iva,
-                total_factura_fiscal=total_factura_fiscal,
-                items_factura=items_factura,
-                cae=cae,
-                vencimiento_cae=vencimiento_cae,
-            )
-            if not pdf.get("ok"):
-                errores_pdf = "\n".join(pdf.get("errores") or ["No se pudo generar el PDF fiscal."])
+            if etapa == "pdf":
+                errores_pdf = "\n".join(resultado.get("errores") or ["No se pudo generar el PDF fiscal."])
                 messagebox.showwarning(
                     "Emitir factura",
                     "Factura autorizada correctamente, pero falló la generación del PDF fiscal.\n\n"
@@ -1043,32 +652,93 @@ class ResumenesFrame(ctk.CTkFrame):
                 self.cargar_resumenes()
                 return
 
-            ruta_pdf = str(pdf.get("ruta_pdf") or "").strip()
-            ruta_pdf_resumen = self._obtener_ruta_pdf_resumen_existente(resumen.id)
-            self.cargar_resumenes()
-            self._mostrar_modal_factura_emitida(
-                cliente_fila=cliente,
-                emisor_fiscal=emisor_fiscal,
-                tipo_factura=tipo_factura_normalizado,
-                punto_venta_num=punto_venta_num,
-                numero_comprobante=numero_comprobante,
-                codigo_factura=codigo_factura,
-                cae=cae,
-                vencimiento_cae=vencimiento_cae,
-                neto_factura=neto_factura,
-                importe_iva_factura=importe_iva_factura,
-                total_factura_fiscal=total_factura_fiscal,
-                factura_id=factura_id,
-                resumen_id=resumen.id,
-                ruta_pdf_factura=ruta_pdf,
-                ruta_pdf_resumen=ruta_pdf_resumen,
-            )
-        except Exception as error:
-            messagebox.showerror(
-                "Emitir factura",
-                f"Error inesperado durante la emisión:\n{error}",
-                parent=self,
-            )
+            if etapa == "registro":
+                errores_registro = "\n- ".join(resultado.get("errores") or ["No se pudo persistir la emisión aprobada."])
+                messagebox.showerror(
+                    "Emitir factura",
+                    "La emisión fue autorizada por ARCA, pero falló el guardado local:\n\n- " + errores_registro,
+                    parent=self,
+                )
+                return
+
+            if etapa == "calculo_fiscal":
+                errores_fiscales = "\n- ".join(resultado.get("errores") or ["Cálculo fiscal inválido."])
+                messagebox.showerror(
+                    "Emitir factura",
+                    "No se puede emitir por inconsistencias fiscales:\n\n- " + errores_fiscales,
+                    parent=self,
+                )
+                return
+
+            if etapa == "pre_guardado":
+                errores_pre = "\n- ".join(resultado.get("errores") or ["Validación local fallida."])
+                messagebox.showerror(
+                    "Emitir factura",
+                    "No se puede emitir en ARCA porque la factura no se puede persistir localmente.\n\n- " + errores_pre,
+                    parent=self,
+                )
+                return
+
+            mensaje = str(resultado.get("mensaje") or "").strip()
+            if not mensaje and etapa == "diferencia_totales":
+                datos_diferencia = dict(resultado.get("datos_modal") or {})
+                suma_items = float(datos_diferencia.get("suma_items") or 0.0)
+                total_resumen = float(datos_diferencia.get("total_resumen") or 0.0)
+                diferencia = float(datos_diferencia.get("diferencia") or 0.0)
+                items_factura = list(datos_diferencia.get("items_factura") or [])
+
+                detalle_diferencia = [
+                    "No se emitió la factura porque los importes no coinciden.",
+                    "",
+                    f"Suma de ítems: {self.formatear_moneda(suma_items)}",
+                    f"Total del resumen: {self.formatear_moneda(total_resumen)}",
+                    f"Diferencia: {self.formatear_moneda(diferencia)}",
+                    "",
+                    "Detalle utilizado:",
+                ]
+                for item in items_factura:
+                    detalle_diferencia.append(
+                        f"- {item['descripcion']} | Cant: {item['cantidad']} | Unit: {self.formatear_moneda(item['precio_unitario'])} | "
+                        f"Importe: {self.formatear_moneda(item['importe'])}"
+                    )
+                mensaje = "\n".join(detalle_diferencia)
+            if not mensaje and etapa == "excepcion":
+                errores = list(resultado.get("errores") or [])
+                detalle_error = str(errores[0]) if errores else ""
+                mensaje = f"Error inesperado durante la emisión:\n{detalle_error}" if detalle_error else "Error inesperado durante la emisión."
+            if not mensaje:
+                mensaje = "No se pudo completar la emisión."
+
+            tipo_mensaje = str(resultado.get("tipo_mensaje") or "error").strip().lower()
+            if tipo_mensaje == "warning":
+                messagebox.showwarning("Emitir factura", mensaje, parent=self)
+            else:
+                messagebox.showerror("Emitir factura", mensaje, parent=self)
+            return
+
+        datos_modal = dict(resultado.get("datos_modal") or {})
+        ruta_pdf = str(resultado.get("ruta_pdf") or "").strip()
+        resumen_id = int(resultado.get("resumen_id") or resumen.id)
+        ruta_pdf_resumen = self._obtener_ruta_pdf_resumen_existente(resumen_id)
+
+        self.cargar_resumenes()
+        self._mostrar_modal_factura_emitida(
+            cliente_fila=datos_modal.get("cliente_fila"),
+            emisor_fiscal=datos_modal.get("emisor_fiscal"),
+            tipo_factura=datos_modal.get("tipo_factura"),
+            punto_venta_num=datos_modal.get("punto_venta_num"),
+            numero_comprobante=datos_modal.get("numero_comprobante"),
+            codigo_factura=datos_modal.get("codigo_factura"),
+            cae=str(resultado.get("cae") or ""),
+            vencimiento_cae=str(resultado.get("vencimiento_cae") or ""),
+            neto_factura=float(datos_modal.get("neto_factura") or 0.0),
+            importe_iva_factura=float(datos_modal.get("importe_iva_factura") or 0.0),
+            total_factura_fiscal=float(datos_modal.get("total_factura_fiscal") or 0.0),
+            factura_id=resultado.get("factura_id"),
+            resumen_id=resumen_id,
+            ruta_pdf_factura=ruta_pdf,
+            ruta_pdf_resumen=ruta_pdf_resumen,
+        )
 
     def _mostrar_modal_factura_emitida(
         self,
