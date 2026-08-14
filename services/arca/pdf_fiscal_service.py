@@ -4,6 +4,7 @@ from pathlib import Path
 from reportlab.lib.colors import HexColor, black, white
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 from pdf.identidad_emisor import (
@@ -12,6 +13,7 @@ from pdf.identidad_emisor import (
     resolver_logo_emisor as identidad_resolver_logo_emisor,
     resolver_tipo_identidad_emisor as identidad_resolver_tipo_identidad_emisor,
     obtener_dimensiones_logo_emisor as identidad_obtener_dimensiones_logo_emisor,
+    obtener_configuracion_logo_fiscal as identidad_obtener_configuracion_logo_fiscal,
 )
 
 try:
@@ -118,6 +120,7 @@ class PDFFiscalService:
         emisor_domicilio = str(PDFFiscalService._pick(datos_emisor, "domicilio", default=""))
         emisor_punto_venta = str(PDFFiscalService._pick(datos_emisor, "punto_venta", default=punto_venta))
         logo_path = PDFFiscalService._resolver_logo_emisor(datos_emisor)
+        tipo_identidad_emisor = PDFFiscalService._resolver_tipo_identidad_emisor(datos_emisor)
 
         # ══════════════════ ENCABEZADO PROFESIONAL ══════════════════
         y = alto - 30
@@ -134,23 +137,40 @@ class PDFFiscalService:
 
         # Información del emisor (columna central-izquierda)
         pdf.setFillColor(PDFFiscalService.COLOR_TEXTO)
-        pdf.setFont("Helvetica-Bold", 16)
-        pdf.drawString(170, y - 5, emisor_nombre_fantasia)
+        titulo_emisor_tamano = 14 if tipo_identidad_emisor == "publicidad_servicios_sh" else 16
+        x_emisor_texto = 164.0 if tipo_identidad_emisor == "publicidad_servicios_sh" else 170.0
+        pdf.setFont("Helvetica-Bold", titulo_emisor_tamano)
+        pdf.drawString(x_emisor_texto, y - 5, emisor_nombre_fantasia)
 
-        pdf.setFont("Helvetica", 10)
-        pdf.drawString(170, y - 20, emisor_razon_social)
+        razon_social_tamano = 10
+        if tipo_identidad_emisor == "publicidad_servicios_sh":
+            x_caja_objetivo = 350.27559055118115
+            margen_visual = 4.0
+            ancho_disponible = x_caja_objetivo - x_emisor_texto - margen_visual
+            for tam in (10, 9, 8, 7):
+                if stringWidth(emisor_razon_social, "Helvetica", tam) <= ancho_disponible:
+                    razon_social_tamano = tam
+                    break
+            else:
+                razon_social_tamano = 7
+
+        pdf.setFont("Helvetica", razon_social_tamano)
+        pdf.drawString(x_emisor_texto, y - 20, emisor_razon_social)
 
         pdf.setFont("Helvetica", 9)
-        pdf.drawString(170, y - 32, f"CUIT: {emisor_cuit}  |  Pto. Venta: {emisor_punto_venta}")
-        pdf.drawString(170, y - 42, f"IVA: {emisor_iva}")
-        pdf.drawString(170, y - 52, f"Ingresos Brutos: {emisor_ingresos_brutos}")
-        pdf.drawString(170, y - 62, f"Inicio de Actividades: {emisor_fecha_inicio_actividades}")
-        pdf.drawString(170, y - 72, f"Domicilio: {emisor_domicilio}")
+        pdf.drawString(x_emisor_texto, y - 32, f"CUIT: {emisor_cuit}  |  Pto. Venta: {emisor_punto_venta}")
+        pdf.drawString(x_emisor_texto, y - 42, f"IVA: {emisor_iva}")
+        pdf.drawString(x_emisor_texto, y - 52, f"Ingresos Brutos: {emisor_ingresos_brutos}")
+        pdf.drawString(x_emisor_texto, y - 62, f"Inicio de Actividades: {emisor_fecha_inicio_actividades}")
+        pdf.drawString(x_emisor_texto, y - 72, f"Domicilio: {emisor_domicilio}")
 
         # Bloque con datos del comprobante (sin fondo rojo, sobre blanco)
         # Alineado al margen derecho del contenido para separar mejor del emisor.
         ancho_bloque_comp = 225
         x_bloque_comp = (ancho - 30) - ancho_bloque_comp
+        if tipo_identidad_emisor in {"publicidad_servicios", "publicidad_servicios_sh"}:
+            ancho_bloque_comp = 210
+            x_bloque_comp = 350.27559055118115
         centro_bloque_comp = x_bloque_comp + (ancho_bloque_comp / 2)
         pdf.setFillColor(white)
         pdf.setStrokeColor(PDFFiscalService.COLOR_BORDE)
@@ -327,7 +347,13 @@ class PDFFiscalService:
                 return False
             imagen = ImageReader(str(ruta))
             w_orig, h_orig = imagen.getSize()
-            max_width, max_height = PDFFiscalService._obtener_dimensiones_logo_emisor(datos_emisor)
+
+            configuracion_logo = identidad_obtener_configuracion_logo_fiscal(datos_emisor)
+            max_width = float(configuracion_logo.get("max_width", PDFFiscalService.LOGO_MAX_WIDTH) or PDFFiscalService.LOGO_MAX_WIDTH)
+            max_height = float(configuracion_logo.get("max_height", PDFFiscalService.LOGO_MAX_HEIGHT) or PDFFiscalService.LOGO_MAX_HEIGHT)
+            x_offset = float(configuracion_logo.get("x_offset", 0.0) or 0.0)
+            y_offset = float(configuracion_logo.get("y_offset", 0.0) or 0.0)
+
             escala = min(
                 max_width / float(w_orig),
                 max_height / float(h_orig),
@@ -335,10 +361,11 @@ class PDFFiscalService:
             w = w_orig * escala
             h = h_orig * escala
             # Centrar verticalmente dentro de la banda
-            y = y_banda_inferior + (altura_banda - h) / 2
+            x_final = float(x) + x_offset
+            y = y_banda_inferior + (altura_banda - h) / 2 + y_offset
             pdf.drawImage(
                 imagen,
-                x,
+                x_final,
                 y,
                 width=w,
                 height=h,

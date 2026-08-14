@@ -203,6 +203,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self.menu_contextual = Menu(self, tearoff=0)
         self.menu_contextual.add_command(label="Abrir PDF", command=self._abrir_pdf_desde_menu)
         self.menu_contextual.add_command(
+            label="Regenerar PDF",
+            command=self._regenerar_pdf_desde_menu,
+        )
+        self.menu_contextual.add_command(
             label="Enviar por WhatsApp",
             command=self._enviar_whatsapp_desde_menu,
         )
@@ -314,6 +318,15 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             width=180,
         )
         self.boton_abrir_pdf_panel.pack(fill="x", pady=(0, 6))
+
+        self.boton_regenerar_pdf_panel = ctk.CTkButton(
+            acciones_panel,
+            text="Regenerar PDF",
+            command=self._regenerar_pdf_desde_menu,
+            state="disabled",
+            width=180,
+        )
+        self.boton_regenerar_pdf_panel.pack(fill="x", pady=6)
 
         self.boton_whatsapp_panel = ctk.CTkButton(
             acciones_panel,
@@ -821,6 +834,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
     def _actualizar_estado_botones_panel(self, habilitado):
         estado = "normal" if habilitado else "disabled"
         self.boton_abrir_pdf_panel.configure(state=estado)
+        self.boton_regenerar_pdf_panel.configure(state=estado)
         self.boton_whatsapp_panel.configure(state=estado)
         self.boton_abrir_cliente_panel.configure(state=estado)
         self.boton_abrir_resumen_panel.configure(state=estado)
@@ -869,6 +883,78 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             return False
 
     def _resolver_pdf_factura_seleccionada(self):
+        contexto = self._resolver_contexto_factura_pdf_seleccionada()
+        if not contexto:
+            return None
+
+        factura_id = contexto["factura_id"]
+        factura = contexto["factura"]
+        valores_fila = contexto["valores_fila"]
+        tipo_factura = contexto["tipo_factura"]
+        emisor_fiscal = contexto["emisor_fiscal"]
+        carpeta_facturas = contexto["carpeta_facturas"]
+        cliente_id = contexto["cliente_id"]
+        codigo_factura = contexto["codigo_factura"]
+        ruta_pdf_estandar = contexto["ruta_pdf_estandar"]
+        ruta_pdf = contexto["ruta_pdf"]
+
+        ruta_pdf_inicial = ruta_pdf
+        regenerado = False
+        if tipo_factura == "Factura A":
+            try:
+                ruta_pdf, regenerado = self._regenerar_pdf_fiscal_factura(
+                    factura=factura,
+                    valores_fila=valores_fila,
+                    emisor_fiscal=emisor_fiscal,
+                    carpeta_facturas=carpeta_facturas,
+                    ruta_pdf_estandar=ruta_pdf_estandar,
+                    ruta_pdf_resuelta=ruta_pdf,
+                    cliente_id=cliente_id,
+                    tipo_factura=tipo_factura,
+                    codigo_factura=codigo_factura,
+                    forzar_regeneracion=False,
+                    forzar_reemplazo_estandar=True,
+                )
+            except PermissionError:
+                messagebox.showwarning(
+                    "Facturas electrónicas",
+                    "No se puede regenerar el PDF porque el archivo está abierto.\n"
+                    "Cerralo e intentá nuevamente.",
+                    parent=self,
+                )
+                return None
+            except OSError as error:
+                if self._es_error_archivo_bloqueado(error):
+                    messagebox.showwarning(
+                        "Facturas electrónicas",
+                        "No se puede regenerar el PDF porque el archivo está abierto.\n"
+                        "Cerralo e intentá nuevamente.",
+                        parent=self,
+                    )
+                    return None
+                return None
+
+        if not ruta_pdf.is_file():
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se encontró el PDF asociado a esta factura.",
+                parent=self,
+            )
+            return None
+
+        coincide_con_estandar = False
+        try:
+            coincide_con_estandar = ruta_pdf.resolve() == ruta_pdf_estandar.resolve()
+        except OSError:
+            coincide_con_estandar = False
+
+        return {
+            "factura": factura,
+            "valores_fila": valores_fila,
+            "ruta_pdf": ruta_pdf,
+        }
+
+    def _resolver_contexto_factura_pdf_seleccionada(self):
         seleccion = self.tabla.selection()
         if not seleccion:
             messagebox.showwarning(
@@ -959,53 +1045,20 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 )
                 return None
 
-        ruta_pdf_inicial = ruta_pdf
-        regenerado = False
-        if tipo_factura == "Factura A":
-            ruta_pdf, regenerado = self._asegurar_pdf_fiscal_actualizado_factura_a(
-                factura=factura,
-                valores_fila=valores_fila,
-                emisor_fiscal=emisor_fiscal,
-                carpeta_facturas=carpeta_facturas,
-                ruta_pdf_estandar=ruta_pdf_estandar,
-                ruta_pdf_resuelta=ruta_pdf,
-                cliente_id=cliente_id,
-                tipo_factura=tipo_factura,
-                codigo_factura=codigo_factura,
-            )
-
-        if not ruta_pdf.is_file():
-            messagebox.showwarning(
-                "Facturas electrónicas",
-                "No se encontró el PDF asociado a esta factura.",
-                parent=self,
-            )
-            return None
-
-        coincide_con_estandar = False
-        try:
-            coincide_con_estandar = ruta_pdf.resolve() == ruta_pdf_estandar.resolve()
-        except OSError:
-            coincide_con_estandar = False
-
-        print(
-            "DIAGNOSTICO PDF FACTURAS ELECTRONICAS | "
-            f"factura_id={factura_id} | tipo={tipo_factura} | "
-            f"ruta_elegida_inicial={ruta_pdf_inicial} | "
-            f"archivo={ruta_pdf.name} | "
-            f"fecha_archivo={self._fecha_modificacion_archivo(ruta_pdf)} | "
-            f"regenerado={regenerado} | "
-            f"coincide_con_ruta_estandar={coincide_con_estandar} | "
-            f"ruta_final_abierta={ruta_pdf}"
-        )
-
         return {
+            "factura_id": factura_id,
             "factura": factura,
             "valores_fila": valores_fila,
+            "emisor_fiscal": emisor_fiscal,
+            "carpeta_facturas": carpeta_facturas,
+            "cliente_id": cliente_id,
+            "tipo_factura": tipo_factura,
+            "codigo_factura": codigo_factura,
+            "ruta_pdf_estandar": ruta_pdf_estandar,
             "ruta_pdf": ruta_pdf,
         }
 
-    def _asegurar_pdf_fiscal_actualizado_factura_a(
+    def _regenerar_pdf_fiscal_factura(
         self,
         factura,
         valores_fila,
@@ -1016,14 +1069,21 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         cliente_id,
         tipo_factura,
         codigo_factura,
+        forzar_regeneracion=False,
+        forzar_reemplazo_estandar=False,
     ):
         ruta_estandar = Path(ruta_pdf_estandar)
         ruta_resuelta = Path(ruta_pdf_resuelta)
+        ruta_destino = ruta_estandar
+        if forzar_reemplazo_estandar:
+            ruta_destino = ruta_estandar
+        elif forzar_regeneracion and ruta_resuelta.is_file():
+            ruta_destino = ruta_resuelta
 
-        requiere_regenerar = False
-        if not ruta_estandar.is_file():
+        requiere_regenerar = bool(forzar_regeneracion)
+        if not requiere_regenerar and not ruta_estandar.is_file():
             requiere_regenerar = True
-        else:
+        elif not requiere_regenerar and tipo_factura == "Factura A":
             tiene_desglose = self._pdf_contiene_desglose_factura_a(ruta_estandar)
             if not tiene_desglose:
                 requiere_regenerar = True
@@ -1050,8 +1110,18 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         if not datos_pdf:
             return ruta_resuelta, False
 
+        if forzar_reemplazo_estandar and ruta_estandar.is_file():
+            try:
+                ruta_estandar.unlink()
+            except PermissionError:
+                raise
+            except OSError as error:
+                if self._es_error_archivo_bloqueado(error):
+                    raise PermissionError(str(error)) from error
+                return ruta_resuelta, False
+
         resultado = PDFFiscalService.generar_factura_c(
-            ruta_destino=str(ruta_estandar),
+            ruta_destino=str(ruta_destino),
             datos_emisor=datos_pdf["datos_emisor"],
             datos_receptor=datos_pdf["datos_receptor"],
             datos_comprobante=datos_pdf["datos_comprobante"],
@@ -1059,7 +1129,132 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         if not resultado.get("ok"):
             return ruta_resuelta, False
 
-        return Path(str(resultado.get("ruta_pdf") or ruta_estandar)), True
+        ruta_generada = Path(str(resultado.get("ruta_pdf") or ruta_destino))
+        if forzar_reemplazo_estandar:
+            try:
+                if ruta_generada.resolve() != ruta_estandar.resolve():
+                    return ruta_generada, False
+            except OSError:
+                return ruta_generada, False
+
+        return ruta_generada, True
+
+    def _regenerar_pdf_desde_menu(self):
+        contexto = self._resolver_contexto_factura_pdf_seleccionada()
+        if not contexto:
+            return
+
+        tipo_factura = str(contexto["tipo_factura"] or "").strip()
+        if tipo_factura not in {"Factura A", "Factura C"}:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "Solo se puede regenerar PDF para Factura A o Factura C.",
+                parent=self,
+            )
+            return
+
+        faltantes = self._validar_datos_minimos_regeneracion_pdf(
+            factura=contexto["factura"],
+            valores_fila=contexto["valores_fila"],
+        )
+        if faltantes:
+            detalle = "\n".join(f"- {campo}" for campo in faltantes)
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se puede regenerar el PDF porque faltan datos fiscales obligatorios."
+                f"\n\n{detalle}",
+                parent=self,
+            )
+            return
+
+        try:
+            ruta_pdf, regenerado = self._regenerar_pdf_fiscal_factura(
+                factura=contexto["factura"],
+                valores_fila=contexto["valores_fila"],
+                emisor_fiscal=contexto["emisor_fiscal"],
+                carpeta_facturas=contexto["carpeta_facturas"],
+                ruta_pdf_estandar=contexto["ruta_pdf_estandar"],
+                ruta_pdf_resuelta=contexto["ruta_pdf"],
+                cliente_id=contexto["cliente_id"],
+                tipo_factura=tipo_factura,
+                codigo_factura=contexto["codigo_factura"],
+                forzar_regeneracion=True,
+                forzar_reemplazo_estandar=True,
+            )
+        except PermissionError:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se puede regenerar el PDF porque el archivo está abierto.\n"
+                "Cerralo e intentá nuevamente.",
+                parent=self,
+            )
+            return
+        except OSError as error:
+            if self._es_error_archivo_bloqueado(error):
+                messagebox.showwarning(
+                    "Facturas electrónicas",
+                    "No se puede regenerar el PDF porque el archivo está abierto.\n"
+                    "Cerralo e intentá nuevamente.",
+                    parent=self,
+                )
+                return
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se pudo regenerar el PDF con los datos locales de la factura.",
+                parent=self,
+            )
+            return
+
+        if not regenerado or not Path(ruta_pdf).is_file():
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                "No se pudo regenerar el PDF con los datos locales de la factura.",
+                parent=self,
+            )
+            return
+
+        messagebox.showinfo(
+            "Facturas electrónicas",
+            f"PDF regenerado correctamente.\n\nArchivo: {ruta_pdf}",
+            parent=self,
+        )
+
+    def _validar_datos_minimos_regeneracion_pdf(self, factura, valores_fila):
+        faltantes = []
+
+        if not factura.get("resumen_id"):
+            faltantes.append("Resumen asociado")
+
+        punto_venta = str(factura.get("punto_venta_raw") or "").strip()
+        if not punto_venta and valores_fila and len(valores_fila) > 3:
+            punto_venta = str(valores_fila[3] or "").strip()
+        if not punto_venta:
+            faltantes.append("Punto de venta")
+
+        numero = str(factura.get("numero_factura_raw") or "").strip()
+        if not numero and valores_fila and len(valores_fila) > 4:
+            numero = str(valores_fila[4] or "").strip()
+        if not numero:
+            faltantes.append("Número de comprobante")
+
+        cae = ""
+        if valores_fila and len(valores_fila) > 6:
+            cae = str(valores_fila[6] or "").strip()
+        if not cae:
+            faltantes.append("CAE")
+
+        fecha_fila = ""
+        if valores_fila and len(valores_fila) > 0:
+            fecha_fila = str(valores_fila[0] or "").strip()
+        try:
+            if fecha_fila:
+                datetime.strptime(fecha_fila, "%d/%m/%Y")
+            else:
+                raise ValueError()
+        except (TypeError, ValueError):
+            faltantes.append("Fecha de comprobante válida")
+
+        return faltantes
 
     def _construir_datos_pdf_fiscal_desde_factura(
         self,
@@ -1199,6 +1394,26 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             return datetime.fromtimestamp(marca).strftime("%Y-%m-%d %H:%M:%S")
         except OSError:
             return "-"
+
+    @staticmethod
+    def _es_error_archivo_bloqueado(error):
+        if isinstance(error, PermissionError):
+            return True
+
+        winerror = getattr(error, "winerror", None)
+        if winerror in {32, 33}:
+            return True
+
+        texto = str(error or "").lower()
+        marcadores = (
+            "being used by another process",
+            "used by another process",
+            "permiso denegado",
+            "permission denied",
+            "acceso denegado",
+            "archivo en uso",
+        )
+        return any(marcador in texto for marcador in marcadores)
 
     @staticmethod
     def _combinar_domicilio_cliente(cliente_fila):

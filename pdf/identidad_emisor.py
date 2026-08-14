@@ -173,3 +173,30 @@ def obtener_dimensiones_logo_emisor(emisor, logo_width, logo_height):
     if identidad in {"publicidad_servicios", "publicidad_servicios_sh"}:
         return logo_width * 2.07, logo_height * 2.07
     return float(logo_width), float(logo_height)
+
+
+def obtener_configuracion_logo_fiscal(emisor):
+    identidad = resolver_tipo_identidad_emisor(emisor)
+
+    if identidad == "publicidad_servicios":
+        return {
+            "max_width": 190.0,
+            "max_height": 127.0,
+            "x_offset": -40.0,
+            "y_offset": 7.0,
+        }
+
+    if identidad == "publicidad_servicios_sh":
+        return {
+            "max_width": 265.0,
+            "max_height": 104.0,
+            "x_offset": -21.0,
+            "y_offset": 4.0,
+        }
+
+    return {
+        "max_width": 120.0,
+        "max_height": 44.0,
+        "x_offset": 0.0,
+        "y_offset": 0.0,
+    }
