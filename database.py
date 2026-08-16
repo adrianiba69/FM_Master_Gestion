@@ -26,6 +26,62 @@ def sumar_un_mes(fecha):
     return date(anio, mes, dia)
 
 
+def crear_tabla_intentos_emision_arca(cur):
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS intentos_emision_arca(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        resumen_id INTEGER NOT NULL,
+        cliente_id INTEGER NOT NULL,
+        emisor_fiscal_id INTEGER NOT NULL,
+        emisor_id INTEGER NOT NULL,
+        cuit_emisor TEXT NOT NULL,
+        punto_venta INTEGER NOT NULL,
+        tipo_comprobante INTEGER NOT NULL,
+        numero_planificado INTEGER NOT NULL,
+        fecha_comprobante TEXT NOT NULL,
+        concepto INTEGER NOT NULL,
+        tipo_documento INTEGER NOT NULL,
+        documento_receptor INTEGER NOT NULL,
+        condicion_iva_receptor_id INTEGER NOT NULL,
+        importe_total TEXT NOT NULL,
+        importe_neto TEXT NOT NULL,
+        importe_iva TEXT NOT NULL,
+        importe_exento TEXT NOT NULL,
+        importe_no_gravado TEXT NOT NULL,
+        importe_tributos TEXT NOT NULL,
+        moneda TEXT NOT NULL,
+        cotizacion TEXT NOT NULL,
+        alicuotas_iva TEXT NOT NULL DEFAULT '[]',
+        estado TEXT NOT NULL,
+        cae TEXT,
+        vencimiento_cae TEXT,
+        error_codigo TEXT,
+        error_mensaje TEXT,
+        detalle_tecnico TEXT,
+        factura_arca_id INTEGER,
+        creado_en TEXT NOT NULL,
+        actualizado_en TEXT NOT NULL,
+        reconciliado_en TEXT,
+        FOREIGN KEY(resumen_id) REFERENCES resumenes(id),
+        FOREIGN KEY(cliente_id) REFERENCES clientes(id),
+        FOREIGN KEY(emisor_fiscal_id) REFERENCES emisores_fiscales(id),
+        FOREIGN KEY(emisor_id) REFERENCES emisores_facturacion(id),
+        FOREIGN KEY(factura_arca_id) REFERENCES factura_arca(id)
+    )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_intentos_emision_arca_estado ON intentos_emision_arca(estado, creado_en)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_intentos_emision_arca_resumen ON intentos_emision_arca(resumen_id)")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_intentos_emision_arca_clave_fiscal "
+        "ON intentos_emision_arca(cuit_emisor, punto_venta, tipo_comprobante, numero_planificado)"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_intentos_emision_arca_clave_activa "
+        "ON intentos_emision_arca(cuit_emisor, punto_venta, tipo_comprobante, numero_planificado) "
+        "WHERE estado IN ('PENDIENTE_RECONCILIAR', 'ENVIANDO', 'CONFLICTO_MANUAL')"
+    )
+
+
 def crear_base():
 
     conn = conectar()
@@ -630,6 +686,11 @@ def crear_base():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_emisor ON factura_arca(emisor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_resumen ON factura_arca(resumen_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_estado ON factura_arca(estado)")
+
+    # ==========================
+    # TABLA INTENTOS DE EMISION ARCA
+    # ==========================
+    crear_tabla_intentos_emision_arca(cur)
 
     # ==========================
     # MIGRACIÓN TABLA FACTURA ARCA

@@ -1,0 +1,221 @@
+import json
+import sqlite3
+from datetime import datetime
+from decimal import Decimal
+
+from database import conectar
+from models.intento_emision_arca import IntentoEmisionArca
+from services.arca.reconciliacion_contracts import (
+    EstadoIntentoEmision,
+    ResultadoReconciliacion,
+    SnapshotFiscalEsperado,
+    normalizar_importe,
+)
+
+
+class IntentoEmisionArcaService:
+
+    _COLUMNAS = (
+        "id, resumen_id, cliente_id, emisor_fiscal_id, emisor_id, cuit_emisor, "
+        "punto_venta, tipo_comprobante, numero_planificado, fecha_comprobante, concepto, "
+        "tipo_documento, documento_receptor, condicion_iva_receptor_id, importe_total, "
+        "importe_neto, importe_iva, importe_exento, importe_no_gravado, importe_tributos, "
+        "moneda, cotizacion, alicuotas_iva, estado, cae, vencimiento_cae, error_codigo, "
+        "error_mensaje, detalle_tecnico, factura_arca_id, creado_en, actualizado_en, reconciliado_en"
+    )
+    _ESTADOS_ACTIVOS = (
+        EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value,
+        EstadoIntentoEmision.ENVIANDO.value,
+        EstadoIntentoEmision.CONFLICTO_MANUAL.value,
+    )
+
+    def __init__(self, conexion_factory=conectar):
+        self._conexion_factory = conexion_factory
+
+    @staticmethod
+    def _ahora():
+        return datetime.now().isoformat(timespec="seconds")
+
+    @staticmethod
+    def _serializar_alicuotas(alicuotas):
+        def convertir(valor):
+            if isinstance(valor, Decimal):
+                return format(normalizar_importe(valor), "f")
+            if isinstance(valor, dict):
+                return {str(clave): convertir(contenido) for clave, contenido in valor.items()}
+            if isinstance(valor, (tuple, list)):
+                return [convertir(contenido) for contenido in valor]
+            return valor
+
+        return json.dumps(convertir(tuple(alicuotas or ())), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _deserializar_alicuotas(valor):
+        try:
+            datos = json.loads(str(valor or "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError("Alicuotas IVA persistidas inválidas.") from error
+        if not isinstance(datos, list):
+            raise ValueError("Alicuotas IVA persistidas inválidas.")
+        return tuple(datos)
+
+    @staticmethod
+    def _validar_estado(estado):
+        try:
+            valor = estado.value if isinstance(estado, EstadoIntentoEmision) else str(estado)
+            return EstadoIntentoEmision(valor).value
+        except ValueError as error:
+            raise ValueError(f"Estado de intento inválido: {estado!r}") from error
+
+    @staticmethod
+    def _normalizar_cuit(cuit):
+        return "".join(caracter for caracter in str(cuit or "") if caracter.isdigit())
+
+    @classmethod
+    def _desde_fila(cls, fila):
+        if not fila:
+            return None
+        datos = list(fila)
+        for indice in (14, 15, 16, 17, 18, 19, 21):
+            datos[indice] = normalizar_importe(datos[indice])
+        datos[22] = cls._deserializar_alicuotas(datos[22])
+        return IntentoEmisionArca(*datos)
+
+    @classmethod
+    def _parametros_snapshot(cls, snapshot, estado, ahora):
+        if not isinstance(snapshot, SnapshotFiscalEsperado):
+            raise TypeError("snapshot debe ser SnapshotFiscalEsperado.")
+        return (
+            snapshot.resumen_id, snapshot.cliente_id, snapshot.emisor_fiscal_id, snapshot.emisor_id,
+            cls._normalizar_cuit(snapshot.cuit_emisor), snapshot.punto_venta, snapshot.tipo_comprobante,
+            snapshot.numero_planificado, snapshot.fecha_comprobante, snapshot.concepto, snapshot.tipo_documento,
+            snapshot.documento_receptor, snapshot.condicion_iva_receptor_id,
+            format(normalizar_importe(snapshot.importe_total), "f"),
+            format(normalizar_importe(snapshot.importe_neto), "f"),
+            format(normalizar_importe(snapshot.importe_iva), "f"),
+            format(normalizar_importe(snapshot.importe_exento), "f"),
+            format(normalizar_importe(snapshot.importe_no_gravado), "f"),
+            format(normalizar_importe(snapshot.importe_tributos), "f"),
+            str(snapshot.moneda or "").strip(), format(normalizar_importe(snapshot.cotizacion), "f"),
+            cls._serializar_alicuotas(snapshot.alicuotas_iva), estado, ahora, ahora,
+        )
+
+    def crear_intento(self, snapshot, estado=EstadoIntentoEmision.PENDIENTE_RECONCILIAR):
+        estado_normalizado = self._validar_estado(estado)
+        ahora = self._ahora()
+        conexion = self._conexion_factory()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute(
+                """
+                INSERT INTO intentos_emision_arca(
+                    resumen_id, cliente_id, emisor_fiscal_id, emisor_id, cuit_emisor,
+                    punto_venta, tipo_comprobante, numero_planificado, fecha_comprobante,
+                    concepto, tipo_documento, documento_receptor, condicion_iva_receptor_id,
+                    importe_total, importe_neto, importe_iva, importe_exento,
+                    importe_no_gravado, importe_tributos, moneda, cotizacion, alicuotas_iva,
+                    estado, creado_en, actualizado_en
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                self._parametros_snapshot(snapshot, estado_normalizado, ahora),
+            )
+            intento_id = cursor.lastrowid
+            conexion.commit()
+            return intento_id
+        except Exception:
+            conexion.rollback()
+            raise
+        finally:
+            conexion.close()
+
+    def obtener(self, intento_id):
+        conexion = self._conexion_factory()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute(f"SELECT {self._COLUMNAS} FROM intentos_emision_arca WHERE id=?", (int(intento_id),))
+            return self._desde_fila(cursor.fetchone())
+        finally:
+            conexion.close()
+
+    def actualizar_estado(self, intento_id, estado, error_codigo=None, error_mensaje=None, detalle_tecnico=None):
+        estado_normalizado = self._validar_estado(estado)
+        conexion = self._conexion_factory()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute(
+                "UPDATE intentos_emision_arca SET estado=?, error_codigo=?, error_mensaje=?, detalle_tecnico=?, actualizado_en=? WHERE id=?",
+                (estado_normalizado, error_codigo, error_mensaje, detalle_tecnico, self._ahora(), int(intento_id)),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError(f"Intento de emisión ARCA inexistente: {intento_id}")
+            conexion.commit()
+        except Exception:
+            conexion.rollback()
+            raise
+        finally:
+            conexion.close()
+
+    def guardar_resultado_reconciliacion(
+        self, intento_id, resultado, cae="", vencimiento_cae="", factura_arca_id=None,
+        error_codigo=None, error_mensaje=None, detalle_tecnico=None,
+    ):
+        try:
+            valor = resultado.value if isinstance(resultado, ResultadoReconciliacion) else str(resultado)
+            resultado_normalizado = ResultadoReconciliacion(valor).value
+        except ValueError as error:
+            raise ValueError(f"Resultado de reconciliación inválido: {resultado!r}") from error
+        estado = {
+            ResultadoReconciliacion.AUTORIZADO.value: EstadoIntentoEmision.RECONCILIADO.value,
+            ResultadoReconciliacion.NO_AUTORIZADO.value: EstadoIntentoEmision.NO_AUTORIZADO.value,
+            ResultadoReconciliacion.CONFLICTO.value: EstadoIntentoEmision.CONFLICTO_MANUAL.value,
+            ResultadoReconciliacion.CONSULTA_INCIERTA.value: EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value,
+        }[resultado_normalizado]
+        ahora = self._ahora()
+        reconciliado_en = ahora if estado != EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value else None
+        conexion = self._conexion_factory()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute(
+                """
+                UPDATE intentos_emision_arca
+                SET estado=?, cae=?, vencimiento_cae=?, error_codigo=?, error_mensaje=?, detalle_tecnico=?,
+                    factura_arca_id=?, actualizado_en=?, reconciliado_en=?
+                WHERE id=?
+                """,
+                (estado, str(cae or ""), str(vencimiento_cae or ""), error_codigo, error_mensaje,
+                 detalle_tecnico, factura_arca_id, ahora, reconciliado_en, int(intento_id)),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError(f"Intento de emisión ARCA inexistente: {intento_id}")
+            conexion.commit()
+        except Exception:
+            conexion.rollback()
+            raise
+        finally:
+            conexion.close()
+
+    def listar_pendientes_reconciliacion(self):
+        marcadores = ",".join("?" for _ in self._ESTADOS_ACTIVOS)
+        conexion = self._conexion_factory()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute(
+                f"SELECT {self._COLUMNAS} FROM intentos_emision_arca WHERE estado IN ({marcadores}) ORDER BY creado_en, id",
+                self._ESTADOS_ACTIVOS,
+            )
+            return [self._desde_fila(fila) for fila in cursor.fetchall()]
+        finally:
+            conexion.close()
+
+    def obtener_por_clave_fiscal(self, cuit_emisor, punto_venta, tipo_comprobante, numero_planificado):
+        conexion = self._conexion_factory()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute(
+                f"SELECT {self._COLUMNAS} FROM intentos_emision_arca "
+                "WHERE cuit_emisor=? AND punto_venta=? AND tipo_comprobante=? AND numero_planificado=? ORDER BY id DESC",
+                (self._normalizar_cuit(cuit_emisor), int(punto_venta), int(tipo_comprobante), int(numero_planificado)),
+            )
+            return [self._desde_fila(fila) for fila in cursor.fetchall()]
+        finally:
+            conexion.close()
