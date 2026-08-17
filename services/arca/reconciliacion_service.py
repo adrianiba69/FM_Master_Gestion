@@ -9,8 +9,10 @@ from services.arca.reconciliacion_contracts import (
     SnapshotFiscalEsperado,
     comparar_snapshot_con_comprobante,
 )
+from services.arca.recuperacion_local_service import RecuperacionLocalArcaService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.intento_emision_arca_service import IntentoEmisionArcaService
+from services.arca.reconciliacion_contracts import EstadoIntentoEmision
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,19 @@ class ResultadoEjecucionReconciliacion:
     mensaje: str = ""
     comparacion: ResultadoComparacionFiscal = None
     consulta: dict = None
+    estado_intento: str = ""
+    factura_arca_id: int = None
+    cae: str = ""
+    vencimiento_cae: str = ""
+    recuperado: bool = False
+    diferencias: tuple = ()
+    campos_faltantes: tuple = ()
+    errores: tuple = ()
+    detalle: str = ""
+
+    @property
+    def resultado_reconciliacion(self):
+        return self.resultado
 
 
 class ReconciliacionArcaService:
@@ -31,10 +46,12 @@ class ReconciliacionArcaService:
         intentos_service=None,
         emisor_fiscal_provider=None,
         consultar_comprobante=None,
+        recuperacion_service=None,
     ):
         self._intentos_service = intentos_service or IntentoEmisionArcaService()
         self._emisor_fiscal_provider = emisor_fiscal_provider or EmisorFiscalService
         self._consultar_comprobante = consultar_comprobante or HomologacionService.consultar_comprobante_emitido
+        self._recuperacion_service = recuperacion_service or RecuperacionLocalArcaService()
 
     @staticmethod
     def _snapshot_desde_intento(intento):
@@ -88,12 +105,63 @@ class ReconciliacionArcaService:
             resultado=ResultadoReconciliacion.CONSULTA_INCIERTA,
             mensaje=mensaje,
             consulta=consulta if isinstance(consulta, dict) else None,
+            estado_intento=EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value,
+            errores=(mensaje,),
+            detalle=self._detalle_consulta(consulta),
         )
+
+    @staticmethod
+    def _resultado_terminal(intento):
+        estado = str(intento.estado or "").strip()
+        if estado == EstadoIntentoEmision.RECONCILIADO.value:
+            if intento.factura_arca_id:
+                return ResultadoEjecucionReconciliacion(
+                    ok=True,
+                    intento_id=intento.id,
+                    resultado=ResultadoReconciliacion.AUTORIZADO,
+                    estado_intento=estado,
+                    factura_arca_id=intento.factura_arca_id,
+                    cae=str(intento.cae or ""),
+                    vencimiento_cae=str(intento.vencimiento_cae or ""),
+                    recuperado=True,
+                    detalle="Intento ya reconciliado; no se consultó ARCA.",
+                )
+            return ResultadoEjecucionReconciliacion(
+                ok=False,
+                intento_id=intento.id,
+                resultado=ResultadoReconciliacion.CONSULTA_INCIERTA,
+                estado_intento=estado,
+                errores=("Intento RECONCILIADO sin factura_arca_id.",),
+                detalle="Inconsistencia local; no se corrigió automáticamente.",
+            )
+
+        if estado in {
+            EstadoIntentoEmision.CONFLICTO_MANUAL.value,
+            EstadoIntentoEmision.RECHAZADO.value,
+        }:
+            resultado = (
+                ResultadoReconciliacion.CONFLICTO
+                if estado == EstadoIntentoEmision.CONFLICTO_MANUAL.value
+                else ResultadoReconciliacion.CONSULTA_INCIERTA
+            )
+            return ResultadoEjecucionReconciliacion(
+                ok=False,
+                intento_id=intento.id,
+                resultado=resultado,
+                estado_intento=estado,
+                errores=(str(intento.error_mensaje or "Estado terminal; no se consultó ARCA."),),
+                detalle="Intento terminal; no se consultó ARCA.",
+            )
+        return None
 
     def reconciliar_intento(self, intento_id):
         intento = self._intentos_service.obtener(intento_id)
         if not intento:
             raise LookupError(f"Intento de emisión ARCA inexistente: {intento_id}")
+
+        terminal = self._resultado_terminal(intento)
+        if terminal is not None:
+            return terminal
 
         emisor_fiscal = self._emisor_fiscal_provider.obtener(intento.emisor_fiscal_id)
         if not emisor_fiscal:
@@ -142,12 +210,94 @@ class ReconciliacionArcaService:
         if comparacion.campos_faltantes:
             mensaje = "; ".join(f"Falta {campo}" for campo in comparacion.campos_faltantes)
 
+        if comparacion.resultado == ResultadoReconciliacion.AUTORIZADO:
+            try:
+                recuperacion = self._recuperacion_service.registrar_factura_recuperada(
+                    intento,
+                    self._snapshot_desde_intento(intento),
+                    consulta,
+                )
+            except Exception as error:
+                mensaje_error = f"Falló la recuperación local: {error}"
+                self._intentos_service.guardar_resultado_reconciliacion(
+                    intento.id,
+                    ResultadoReconciliacion.CONSULTA_INCIERTA,
+                    error_codigo="RECUPERACION_LOCAL_INCIERTA",
+                    error_mensaje=mensaje_error,
+                    detalle_tecnico=self._detalle_consulta(consulta, comparacion),
+                )
+                return ResultadoEjecucionReconciliacion(
+                    ok=False,
+                    intento_id=intento.id,
+                    resultado=ResultadoReconciliacion.CONSULTA_INCIERTA,
+                    estado_intento=EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value,
+                    consulta=consulta,
+                    comparacion=comparacion,
+                    cae=str(consulta.get("cae") or ""),
+                    vencimiento_cae=str(consulta.get("vencimiento_cae") or ""),
+                    recuperado=False,
+                    errores=(mensaje_error,),
+                    detalle=self._detalle_consulta(consulta, comparacion),
+                )
+
+            if recuperacion.resultado != ResultadoReconciliacion.AUTORIZADO:
+                mensaje_recuperacion = recuperacion.mensaje or "La recuperación local no se completó."
+                estado = (
+                    EstadoIntentoEmision.CONFLICTO_MANUAL.value
+                    if recuperacion.resultado == ResultadoReconciliacion.CONFLICTO
+                    else EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value
+                )
+                if estado == EstadoIntentoEmision.CONFLICTO_MANUAL.value:
+                    self._intentos_service.guardar_resultado_reconciliacion(
+                        intento.id,
+                        ResultadoReconciliacion.CONFLICTO,
+                        error_codigo="CONFLICTO_RECUPERACION_LOCAL",
+                        error_mensaje=mensaje_recuperacion,
+                        detalle_tecnico=self._detalle_consulta(consulta, comparacion),
+                    )
+                else:
+                    self._intentos_service.guardar_resultado_reconciliacion(
+                        intento.id,
+                        ResultadoReconciliacion.CONSULTA_INCIERTA,
+                        error_codigo="RECUPERACION_LOCAL_INCIERTA",
+                        error_mensaje=mensaje_recuperacion,
+                        detalle_tecnico=self._detalle_consulta(consulta, comparacion),
+                    )
+                return ResultadoEjecucionReconciliacion(
+                    ok=False,
+                    intento_id=intento.id,
+                    resultado=recuperacion.resultado,
+                    estado_intento=estado,
+                    factura_arca_id=recuperacion.factura_arca_id,
+                    cae=str(consulta.get("cae") or ""),
+                    vencimiento_cae=str(consulta.get("vencimiento_cae") or ""),
+                    recuperado=False,
+                    errores=(mensaje_recuperacion,),
+                    detalle=self._detalle_consulta(consulta, comparacion),
+                )
+
+            return ResultadoEjecucionReconciliacion(
+                ok=True,
+                intento_id=intento.id,
+                resultado=ResultadoReconciliacion.AUTORIZADO,
+                estado_intento=EstadoIntentoEmision.RECONCILIADO.value,
+                factura_arca_id=recuperacion.factura_arca_id,
+                cae=str(consulta.get("cae") or ""),
+                vencimiento_cae=str(consulta.get("vencimiento_cae") or ""),
+                recuperado=True,
+                diferencias=tuple(comparacion.diferencias_texto),
+                campos_faltantes=tuple(comparacion.campos_faltantes),
+                detalle="Comprobante autorizado y recuperación local completada.",
+                comparacion=comparacion,
+                consulta=consulta,
+            )
+
         self._intentos_service.guardar_resultado_reconciliacion(
             intento.id,
             comparacion.resultado,
             cae=str(consulta.get("cae") or ""),
             vencimiento_cae=str(consulta.get("vencimiento_cae") or ""),
-            error_codigo="CONFLICTO_FISCAL" if es_conflicto else None,
+            error_codigo="CONFLICTO_FISCAL" if es_conflicto else "CONSULTA_INCIERTA",
             error_mensaje=mensaje or None,
             detalle_tecnico=self._detalle_consulta(consulta, comparacion),
         )
@@ -158,4 +308,13 @@ class ReconciliacionArcaService:
             mensaje=mensaje,
             comparacion=comparacion,
             consulta=consulta,
+            estado_intento=(
+                EstadoIntentoEmision.CONFLICTO_MANUAL.value
+                if es_conflicto
+                else EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value
+            ),
+            diferencias=tuple(comparacion.diferencias_texto),
+            campos_faltantes=tuple(comparacion.campos_faltantes),
+            errores=(mensaje,) if mensaje else (),
+            detalle=self._detalle_consulta(consulta, comparacion),
         )
