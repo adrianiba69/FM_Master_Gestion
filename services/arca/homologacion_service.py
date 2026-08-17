@@ -3,6 +3,8 @@ from pathlib import Path
 from services.arca.wsaa_login_service import WSAALoginService
 from services.arca.wsaa_service import WSAAService
 from services.arca.wsfe_service import WSFEService
+from services.arca.preenvio_arca_service import PreenvioArcaService
+from services.arca.reconciliacion_contracts import SnapshotFiscalEsperado
 
 
 class HomologacionService:
@@ -21,6 +23,7 @@ class HomologacionService:
     ):
         resultado = {
             "ok": False,
+            "intento_id": None,
             "resultado": "",
             "cuit_emisor": "",
             "punto_venta": 0,
@@ -117,6 +120,9 @@ class HomologacionService:
         fecha_servicio_desde=None,
         fecha_servicio_hasta=None,
         fecha_vencimiento_pago=None,
+        datos_intento=None,
+        preenvio_service=None,
+        solicitar_cae=None,
     ):
         try:
             tipo_comprobante_int = int(tipo_comprobante)
@@ -235,12 +241,55 @@ class HomologacionService:
             return resultado
 
         solicitud = armado.get("solicitud") or {}
-        emision = WSFEService.fe_cae_solicitar(
-            token=token,
-            sign=sign,
-            cuit=cuit_emisor,
-            solicitud=solicitud,
+        if not isinstance(datos_intento, dict):
+            resultado["errores"].append("Faltan datos del intento persistente antes de enviar a ARCA.")
+            return resultado
+
+        try:
+            solicitud_cae = solicitud["FeCAEReq"]
+            cabecera = solicitud_cae["FeCabReq"]
+            detalle = solicitud_cae["FeDetReq"]["FECAEDetRequest"][0]
+            alicuotas_snapshot = detalle.get("Iva", {}).get("AlicIva", [])
+            snapshot = SnapshotFiscalEsperado(
+                resumen_id=int(datos_intento["resumen_id"]),
+                cliente_id=int(datos_intento["cliente_id"]),
+                emisor_fiscal_id=int(datos_intento["emisor_fiscal_id"]),
+                emisor_id=int(datos_intento["emisor_id"]),
+                cuit_emisor=str(solicitud.get("Cuit") or ""),
+                punto_venta=int(cabecera["PtoVta"]),
+                tipo_comprobante=int(cabecera["CbteTipo"]),
+                numero_planificado=int(detalle["CbteDesde"]),
+                fecha_comprobante=str(detalle["CbteFch"]),
+                concepto=int(detalle["Concepto"]),
+                tipo_documento=int(detalle["DocTipo"]),
+                documento_receptor=int(detalle["DocNro"]),
+                condicion_iva_receptor_id=int(detalle["CondicionIVAReceptorId"]),
+                importe_total=detalle["ImpTotal"],
+                importe_neto=detalle["ImpNeto"],
+                importe_iva=detalle["ImpIVA"],
+                importe_exento=detalle["ImpOpEx"],
+                importe_no_gravado=detalle["ImpTotConc"],
+                importe_tributos=detalle["ImpTrib"],
+                moneda=str(detalle["MonId"]),
+                cotizacion=detalle["MonCotiz"],
+                alicuotas_iva=tuple(alicuotas_snapshot),
+            )
+        except (IndexError, KeyError, TypeError, ValueError) as error:
+            resultado["errores"].append(f"No se pudo preparar el intento ARCA: {error}")
+            return resultado
+
+        enviar = solicitar_cae or WSFEService.fe_cae_solicitar
+        preenvio = preenvio_service or PreenvioArcaService()
+        protegido = preenvio.enviar_una_vez(
+            snapshot,
+            lambda: enviar(token=token, sign=sign, cuit=cuit_emisor, solicitud=solicitud),
         )
+        resultado["intento_id"] = protegido.intento_id
+        if not protegido.ok:
+            resultado["errores"].extend(protegido.errores or ("No se pudo enviar FECAESolicitar.",))
+            return resultado
+
+        emision = protegido.respuesta or {}
 
         resultado["resultado"] = str(emision.get("resultado") or "")
         resultado["cae"] = str(emision.get("cae") or "")

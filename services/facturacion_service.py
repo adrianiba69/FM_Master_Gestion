@@ -6,10 +6,12 @@ from models.factura_arca import FacturaArca
 from pdf.nombre_archivos import nombre_factura_pdf
 from services.arca.homologacion_service import HomologacionService
 from services.arca.pdf_fiscal_service import PDFFiscalService
+from services.arca.reconciliacion_contracts import ResultadoReconciliacion, SnapshotFiscalEsperado
 from services.cliente_service import ClienteService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
+from services.intento_emision_arca_service import IntentoEmisionArcaService
 from services.resumen_service import ResumenService
 
 
@@ -449,6 +451,12 @@ class FacturacionService:
                 importe_tributos=importe_tributos,
                 alicuotas_iva=alicuotas_iva,
                 concepto=1,
+                datos_intento={
+                    "resumen_id": resumen.id,
+                    "cliente_id": cliente[0],
+                    "emisor_fiscal_id": emisor_fiscal[0],
+                    "emisor_id": emisor_facturacion_id,
+                },
             )
             if not resultado_arca.get("ok"):
                 detalle_arca = resultado_arca.get("emision") if resultado_arca.get("etapa") != "consulta" else resultado_arca.get("consulta")
@@ -493,6 +501,27 @@ class FacturacionService:
                 return resultado
 
             factura_id = registro_emision.get("factura_id")
+            intento_id = resultado_arca.get("intento_id")
+            if intento_id is not None:
+                try:
+                    IntentoEmisionArcaService().guardar_resultado_reconciliacion(
+                        intento_id,
+                        ResultadoReconciliacion.AUTORIZADO,
+                        cae=cae,
+                        vencimiento_cae=vencimiento_cae,
+                        factura_arca_id=factura_id,
+                    )
+                except Exception as error:
+                    resultado["etapa"] = "cierre_intento"
+                    resultado["tipo_mensaje"] = "warning"
+                    resultado["errores"] = [str(error)]
+                    resultado["factura_id"] = factura_id
+                    resultado["numero_factura"] = numero_factura
+                    resultado["cae"] = cae
+                    resultado["vencimiento_cae"] = vencimiento_cae
+                    resultado["observaciones"] = observaciones_factura
+                    return resultado
+
             codigo_factura = cls._formatear_codigo_factura(punto_venta_num, numero_comprobante)
             periodo_desde, periodo_hasta = cls._obtener_periodo_facturado(resumen_actual)
 
@@ -795,6 +824,7 @@ class FacturacionService:
         importe_tributos,
         alicuotas_iva,
         concepto=1,
+        datos_intento=None,
     ):
         resultado = {
             "ok": False,
@@ -806,6 +836,7 @@ class FacturacionService:
             "numero_emitido": 0,
             "numero_comprobante": 0,
             "punto_venta_num": 0,
+            "intento_id": None,
             "cae": "",
             "vencimiento_cae": "",
         }
@@ -832,8 +863,10 @@ class FacturacionService:
             importe_tot_conc=importe_tot_conc,
             importe_tributos=importe_tributos,
             alicuotas_iva=alicuotas_iva,
+            datos_intento=datos_intento,
         )
         resultado["emision"] = emision
+        resultado["intento_id"] = emision.get("intento_id")
         if not emision.get("ok"):
             resultado["errores"] = list(emision.get("errores") or [])
             return resultado
