@@ -165,3 +165,42 @@ class FacturaArcaService:
         filas = cur.fetchall()
         conn.close()
         return filas
+
+    @staticmethod
+    def buscar_por_resumen_id(resumen_id):
+        return FacturaArcaService.listar_por_resumen(resumen_id)
+
+    @staticmethod
+    def buscar_por_factura_arca_id(factura_arca_id):
+        return FacturaArcaService.obtener(factura_arca_id)
+
+    @staticmethod
+    def buscar_por_cae(cae):
+        conn = conectar()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion FROM factura_arca WHERE cae=? ORDER BY id",
+                (str(cae or "").strip(),),
+            )
+            return cur.fetchall()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def buscar_por_identidad_fiscal(emisor_id, punto_venta, tipo_comprobante, numero_factura):
+        conn = conectar()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion FROM factura_arca WHERE emisor_id=? AND TRIM(COALESCE(punto_venta, ''))=? AND TRIM(COALESCE(tipo_comprobante, ''))=? AND TRIM(COALESCE(numero_factura, ''))=? ORDER BY id",
+                (
+                    int(emisor_id),
+                    str(punto_venta or "").strip(),
+                    str(tipo_comprobante or "").strip(),
+                    str(numero_factura or "").strip(),
+                ),
+            )
+            return cur.fetchall()
+        finally:
+            conn.close()
