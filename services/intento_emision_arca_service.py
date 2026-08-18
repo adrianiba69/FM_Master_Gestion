@@ -207,6 +207,27 @@ class IntentoEmisionArcaService:
         finally:
             conexion.close()
 
+    def contar_pendientes_reconciliacion(self):
+        conexion = self._conexion_factory()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute(
+                "SELECT estado, COUNT(*) FROM intentos_emision_arca "
+                "WHERE estado IN (?,?,?) GROUP BY estado",
+                self._ESTADOS_ACTIVOS,
+            )
+            conteos = {estado: 0 for estado in self._ESTADOS_ACTIVOS}
+            for estado, cantidad in cursor.fetchall():
+                conteos[estado] = int(cantidad or 0)
+            return {
+                "total": sum(conteos.values()),
+                "ENVIANDO": conteos[EstadoIntentoEmision.ENVIANDO.value],
+                "PENDIENTE_RECONCILIAR": conteos[EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value],
+                "CONFLICTO_MANUAL": conteos[EstadoIntentoEmision.CONFLICTO_MANUAL.value],
+            }
+        finally:
+            conexion.close()
+
     def listar_activos_por_resumen(self, resumen_id):
         marcadores = ",".join("?" for _ in self._ESTADOS_ACTIVOS)
         conexion = self._conexion_factory()

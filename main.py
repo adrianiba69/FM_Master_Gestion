@@ -5,6 +5,7 @@ from config import COLOR_NEGRO, COLOR_PRINCIPAL
 from database import crear_base
 from services.backup_service import BackupService
 from services.notificacion_service import NotificacionService
+from services.intento_emision_arca_service import IntentoEmisionArcaService
 from services.usuario_service import UsuarioService
 from views.agenda import AgendaFrame
 from views.usuarios import UsuariosFrame
@@ -494,6 +495,40 @@ def iniciar_sesion(app):
     return True
 
 
+def programar_aviso_pendientes_inicio(app, intentos_service=None, messagebox_module=messagebox):
+    if getattr(app, "_aviso_pendientes_arca_programado", False):
+        return False
+
+    app._aviso_pendientes_arca_programado = True
+    servicio = intentos_service or IntentoEmisionArcaService()
+
+    def mostrar_aviso():
+        try:
+            conteos = servicio.contar_pendientes_reconciliacion()
+            total = int(conteos.get("total") or 0)
+            if total <= 0:
+                return
+
+            plural = "emisión" if total == 1 else "emisiones"
+            mensaje = (
+                f"Hay {total} {plural} pendiente(s) de verificar con ARCA.\n\n"
+                "Ingrese a Facturas Electrónicas y utilice\n"
+                "'Reconciliar pendientes' antes de intentar volver a emitir esos resúmenes."
+            )
+            if int(conteos.get("CONFLICTO_MANUAL") or 0) > 0:
+                mensaje += "\n\nHay casos con conflicto que requieren revisión manual."
+            messagebox_module.showwarning(
+                "Emisiones ARCA pendientes",
+                mensaje,
+                parent=app,
+            )
+        except Exception as error:
+            print(f"AVISO ARCA - No se pudieron leer emisiones pendientes: {error}")
+
+    app.after(600, mostrar_aviso)
+    return True
+
+
 def iniciar_servicios_post_login(app):
     backup_automatico = None
     error_backup = None
@@ -535,6 +570,8 @@ def iniciar_servicios_post_login(app):
                 parent=app,
             ),
         )
+
+    programar_aviso_pendientes_inicio(app)
 
 
 if __name__ == "__main__":
