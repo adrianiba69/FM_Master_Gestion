@@ -204,6 +204,24 @@ class FacturacionService:
             resultado["mensaje"] = "No se encontró el resumen recién generado."
             return resultado
 
+        intentos_activos = IntentoEmisionArcaService().listar_activos_por_resumen(resumen.id)
+        if intentos_activos:
+            intento = intentos_activos[0]
+            resultado["etapa"] = "resumen_bloqueado"
+            resultado["tipo_mensaje"] = "warning"
+            resultado["errores"] = ["El resumen tiene una emisión pendiente de verificar con ARCA."]
+            resultado["datos_modal"] = {
+                "intento_id": intento.id,
+                "estado_intento": intento.estado,
+            }
+            resultado["mensaje"] = (
+                "Hay una emisión pendiente de verificar con ARCA.\n\n"
+                f"Intento: {intento.id}\n"
+                f"Estado: {intento.estado}\n\n"
+                "Debe reconciliarla antes de intentar emitir nuevamente."
+            )
+            return resultado
+
         facturas_existentes = FacturaArcaService.listar_por_resumen(resumen.id)
         if facturas_existentes:
             factura_existente = facturas_existentes[0]

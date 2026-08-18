@@ -53,6 +53,7 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch.object(FacturacionService, "generar_pdf_fiscal", side_effect=lambda **kwargs: orden.append("pdf") or {"ok": False, "errores": ["pdf"]}),
             patch("services.facturacion_service.IntentoEmisionArcaService") as intentos_cls,
         ):
+            intentos_cls.return_value.listar_activos_por_resumen.return_value = []
             intentos_cls.return_value.guardar_resultado_reconciliacion.side_effect = cierre
             resultado = self._emitir_desde_resumen_minimo()
 
@@ -72,6 +73,7 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch.object(FacturacionService, "registrar_emision_aprobada", return_value={"ok": False, "errores": ["db"]}),
             patch("services.facturacion_service.IntentoEmisionArcaService") as intentos_cls,
         ):
+            intentos_cls.return_value.listar_activos_por_resumen.return_value = []
             resultado = self._emitir_desde_resumen_minimo()
         self.assertEqual(resultado["etapa"], "registro")
         intentos_cls.return_value.guardar_resultado_reconciliacion.assert_not_called()
@@ -119,6 +121,7 @@ class CierreIntentoExitosoTest(unittest.TestCase):
         with (
             patch("services.facturacion_service.ResumenService.obtener", return_value=resumen),
             patch("services.facturacion_service.FacturaArcaService.listar_por_resumen", return_value=[]),
+            patch("services.facturacion_service.IntentoEmisionArcaService.listar_activos_por_resumen", return_value=[]),
             patch.object(FacturacionService, "validar_resumen_para_facturar", return_value={"ok": True}),
             patch.object(FacturacionService, "resolver_cliente", return_value={"ok": True, "cliente": cliente}),
             patch.object(FacturacionService, "resolver_conceptos", return_value={"ok": True, "resumen": resumen, "conceptos": [object()]}),

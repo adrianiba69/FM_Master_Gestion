@@ -207,6 +207,20 @@ class IntentoEmisionArcaService:
         finally:
             conexion.close()
 
+    def listar_activos_por_resumen(self, resumen_id):
+        marcadores = ",".join("?" for _ in self._ESTADOS_ACTIVOS)
+        conexion = self._conexion_factory()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute(
+                f"SELECT {self._COLUMNAS} FROM intentos_emision_arca "
+                f"WHERE resumen_id=? AND estado IN ({marcadores}) ORDER BY id DESC",
+                (int(resumen_id), *self._ESTADOS_ACTIVOS),
+            )
+            return [self._desde_fila(fila) for fila in cursor.fetchall()]
+        finally:
+            conexion.close()
+
     def obtener_por_clave_fiscal(self, cuit_emisor, punto_venta, tipo_comprobante, numero_planificado):
         conexion = self._conexion_factory()
         try:

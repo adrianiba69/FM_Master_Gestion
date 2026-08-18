@@ -14,6 +14,7 @@ from services.cobro_service import CobroService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
+from services.arca.reconciliacion_pendientes_service import ReconciliacionPendientesService
 from services.resumen_service import ResumenService
 from services.whatsapp_service import WhatsAppService
 from views.cliente_ficha import FichaClienteFrame
@@ -141,6 +142,14 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             command=self._alternar_vista_pendientes,
         )
         self.boton_pendientes_cobro.grid(row=0, column=6, sticky="e", padx=(12, 0))
+
+        self.boton_reconciliar_pendientes = ctk.CTkButton(
+            buscador_frame,
+            text="Reconciliar pendientes",
+            width=205,
+            command=self._reconciliar_pendientes,
+        )
+        self.boton_reconciliar_pendientes.grid(row=0, column=7, sticky="e", padx=(12, 0))
 
         resumen_frame = ctk.CTkFrame(self, fg_color="#F4F4F4", corner_radius=8)
         resumen_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 8))
@@ -376,6 +385,39 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             factura["factura_id"]: factura for factura in self._facturas_en_memoria
         }
         self._aplicar_filtro()
+
+    def _reconciliar_pendientes(self):
+        servicio = ReconciliacionPendientesService()
+        pendientes = servicio.listar_pendientes()
+        if not pendientes:
+            messagebox.showinfo(
+                "Reconciliar pendientes",
+                "No hay emisiones pendientes de verificar con ARCA.",
+                parent=self,
+            )
+            return
+
+        confirmado = messagebox.askyesno(
+            "Reconciliar pendientes",
+            f"Hay {len(pendientes)} emisión(es) pendiente(s) de verificar con ARCA.\n\n"
+            "La operación solo consultará y recuperará comprobantes; no emitirá nuevos.\n\n"
+            "¿Desea continuar?",
+            parent=self,
+        )
+        if not confirmado:
+            return
+
+        lote = servicio.reconciliar_todos()
+        messagebox.showinfo(
+            "Reconciliar pendientes",
+            "Proceso finalizado.\n\n"
+            f"Reconciliados/recuperados: {lote.reconciliados}\n"
+            f"Pendientes inciertos: {lote.inciertos}\n"
+            f"Conflictos manuales: {lote.conflictos}\n"
+            f"Errores: {lote.errores}",
+            parent=self,
+        )
+        self.cargar_facturas()
 
     def _normalizar_fila(self, fila, cobrado_total):
         cliente = self._resolver_nombre_cliente(fila[1])
