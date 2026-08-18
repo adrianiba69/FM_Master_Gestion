@@ -5,6 +5,7 @@ from pathlib import Path
 from models.factura_arca import FacturaArca
 from pdf.nombre_archivos import nombre_factura_pdf
 from services.arca.homologacion_service import HomologacionService
+from services.arca.cierre_local_arca_service import CierreLocalArcaService
 from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.arca.reconciliacion_contracts import ResultadoReconciliacion, SnapshotFiscalEsperado
 from services.cliente_service import ClienteService
@@ -496,49 +497,48 @@ class FacturacionService:
                 f"Fiscal: neto={neto_factura:.2f}; iva_alicuota={alicuota_iva:.2f}%; "
                 f"iva_importe={importe_iva_factura:.2f}; total={total_factura_fiscal:.2f}"
             )
-            registro_emision = cls.registrar_emision_aprobada(
-                cliente_id=cliente[0],
-                emisor_id=emisor_facturacion_id,
-                resumen_id=resumen.id,
-                fecha=date.today().isoformat(),
-                punto_venta=str(punto_venta_num),
-                tipo_comprobante=tipo_factura_normalizado,
-                importe_total=total_factura_fiscal,
-                numero_factura=numero_factura,
-                cae=cae,
-                vencimiento_cae=vencimiento_cae,
-                observaciones=observaciones_factura,
-            )
-            if not registro_emision.get("ok"):
-                resultado["etapa"] = "registro"
-                resultado["errores"] = list(registro_emision.get("errores") or ["No se pudo persistir la emisión aprobada."])
+            intento_id = resultado_arca.get("intento_id")
+            if intento_id is None:
+                resultado["etapa"] = "cierre_local"
+                resultado["errores"] = ["La emisión aprobada no tiene intento ARCA asociado."]
+                return resultado
+
+            try:
+                cierre_local = CierreLocalArcaService().cerrar_emision_confirmada(
+                    intento_id=intento_id,
+                    resumen_id=resumen.id,
+                    cliente_id=cliente[0],
+                    emisor_id=emisor_facturacion_id,
+                    fecha=date.today().isoformat(),
+                    punto_venta=str(punto_venta_num),
+                    tipo_comprobante=tipo_factura_normalizado,
+                    importe_total=total_factura_fiscal,
+                    numero_factura=numero_factura,
+                    cae=cae,
+                    vencimiento_cae=vencimiento_cae,
+                    observaciones=observaciones_factura,
+                )
+            except Exception as error:
+                resultado["etapa"] = "cierre_local"
+                resultado["tipo_mensaje"] = "warning"
+                resultado["errores"] = [str(error)]
                 resultado["numero_factura"] = numero_factura
                 resultado["cae"] = cae
                 resultado["vencimiento_cae"] = vencimiento_cae
                 resultado["observaciones"] = observaciones_factura
                 return resultado
 
-            factura_id = registro_emision.get("factura_id")
-            intento_id = resultado_arca.get("intento_id")
-            if intento_id is not None:
-                try:
-                    IntentoEmisionArcaService().guardar_resultado_reconciliacion(
-                        intento_id,
-                        ResultadoReconciliacion.AUTORIZADO,
-                        cae=cae,
-                        vencimiento_cae=vencimiento_cae,
-                        factura_arca_id=factura_id,
-                    )
-                except Exception as error:
-                    resultado["etapa"] = "cierre_intento"
-                    resultado["tipo_mensaje"] = "warning"
-                    resultado["errores"] = [str(error)]
-                    resultado["factura_id"] = factura_id
-                    resultado["numero_factura"] = numero_factura
-                    resultado["cae"] = cae
-                    resultado["vencimiento_cae"] = vencimiento_cae
-                    resultado["observaciones"] = observaciones_factura
-                    return resultado
+            if not cierre_local.ok:
+                resultado["etapa"] = "cierre_local"
+                resultado["tipo_mensaje"] = "warning"
+                resultado["errores"] = [cierre_local.mensaje or "No se pudo cerrar localmente la emisión."]
+                resultado["numero_factura"] = numero_factura
+                resultado["cae"] = cae
+                resultado["vencimiento_cae"] = vencimiento_cae
+                resultado["observaciones"] = observaciones_factura
+                return resultado
+
+            factura_id = cierre_local.factura_arca_id
 
             codigo_factura = cls._formatear_codigo_factura(punto_venta_num, numero_comprobante)
             periodo_desde, periodo_hasta = cls._obtener_periodo_facturado(resumen_actual)

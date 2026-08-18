@@ -45,38 +45,32 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             "numero_comprobante": 123, "punto_venta_num": 5, "cae": "71345678901234", "vencimiento_cae": "20260826",
         }
         registro = {"ok": True, "factura_id": 99}
-        cierre = MagicMock(side_effect=lambda *args, **kwargs: orden.append("cierre"))
+        cierre = MagicMock(side_effect=lambda *args, **kwargs: orden.append("cierre") or type("Cierre", (), {"ok": True, "factura_arca_id": 99})())
 
         with (
             patch.object(FacturacionService, "emitir_en_arca", return_value=resultado_arca),
             patch.object(FacturacionService, "registrar_emision_aprobada", return_value=registro),
             patch.object(FacturacionService, "generar_pdf_fiscal", side_effect=lambda **kwargs: orden.append("pdf") or {"ok": False, "errores": ["pdf"]}),
-            patch("services.facturacion_service.IntentoEmisionArcaService") as intentos_cls,
+            patch("services.facturacion_service.CierreLocalArcaService") as cierre_cls,
         ):
-            intentos_cls.return_value.listar_activos_por_resumen.return_value = []
-            intentos_cls.return_value.guardar_resultado_reconciliacion.side_effect = cierre
+            cierre_cls.return_value.cerrar_emision_confirmada.side_effect = cierre
             resultado = self._emitir_desde_resumen_minimo()
 
         self.assertEqual(resultado["etapa"], "pdf")
         self.assertEqual(orden, ["cierre", "pdf"])
-        intentos_cls.return_value.guardar_resultado_reconciliacion.assert_called_once_with(
-            77,
-            ResultadoReconciliacion.AUTORIZADO,
-            cae="71345678901234",
-            vencimiento_cae="20260826",
-            factura_arca_id=99,
-        )
+        cierre_cls.return_value.cerrar_emision_confirmada.assert_called_once()
 
-    def test_fallo_registro_no_cierra_intento(self):
+    def test_fallo_cierre_local_no_genera_pdf(self):
         with (
             patch.object(FacturacionService, "emitir_en_arca", return_value=self._resultado_arca()),
-            patch.object(FacturacionService, "registrar_emision_aprobada", return_value={"ok": False, "errores": ["db"]}),
-            patch("services.facturacion_service.IntentoEmisionArcaService") as intentos_cls,
+            patch("services.facturacion_service.CierreLocalArcaService") as cierre_cls,
+            patch.object(FacturacionService, "generar_pdf_fiscal") as pdf,
         ):
-            intentos_cls.return_value.listar_activos_por_resumen.return_value = []
+            cierre_cls.return_value.cerrar_emision_confirmada.return_value = type("Cierre", (), {"ok": False, "mensaje": "cierre"})()
             resultado = self._emitir_desde_resumen_minimo()
-        self.assertEqual(resultado["etapa"], "registro")
-        intentos_cls.return_value.guardar_resultado_reconciliacion.assert_not_called()
+        self.assertEqual(resultado["etapa"], "cierre_local")
+        cierre_cls.return_value.cerrar_emision_confirmada.assert_called_once()
+        pdf.assert_not_called()
 
     def test_fallo_guardar_factura_no_marca_resumen(self):
         with (
