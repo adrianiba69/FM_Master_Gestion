@@ -15,6 +15,7 @@ from pdf.identidad_emisor import (
     obtener_dimensiones_logo_emisor as identidad_obtener_dimensiones_logo_emisor,
     obtener_configuracion_logo_fiscal as identidad_obtener_configuracion_logo_fiscal,
 )
+from services.arca import ambiente_arca
 
 try:
     from runtime_paths import ASSETS_DIR as _ASSETS_DIR
@@ -106,6 +107,11 @@ class PDFFiscalService:
         cae = str(PDFFiscalService._pick(datos_comprobante, "cae", default=""))
         vto_cae = str(PDFFiscalService._pick(datos_comprobante, "vencimiento_cae", "cae_vencimiento", default=""))
         ambiente = str(PDFFiscalService._pick(datos_comprobante, "ambiente", default="HOMOLOGACION"))
+        # Ante ambiente vacio/desconocido, nunca se asume Produccion (se conserva la marca de agua).
+        try:
+            ambiente_es_produccion = ambiente_arca.normalizar_ambiente_arca(ambiente) == ambiente_arca.AMBIENTE_PRODUCCION
+        except ambiente_arca.AmbienteArcaInvalidoError:
+            ambiente_es_produccion = False
 
         # Extraer datos del emisor
         emisor_nombre_fantasia = str(PDFFiscalService._pick(datos_emisor, "nombre_fantasia", default=""))
@@ -192,7 +198,7 @@ class PDFFiscalService:
         pdf.setLineWidth(1)
         pdf.line(30, y - 80, ancho - 30, y - 80)
 
-        PDFFiscalService._dibujar_marca_homologacion(pdf, ancho, alto)
+        PDFFiscalService._dibujar_marca_homologacion(pdf, ancho, alto, mostrar=not ambiente_es_produccion)
 
         # Datos del receptor
         y = y - 110
@@ -422,7 +428,9 @@ class PDFFiscalService:
         return destino.with_name(f"{base}_{sello}.pdf")
 
     @staticmethod
-    def _dibujar_marca_homologacion(pdf, ancho, alto):
+    def _dibujar_marca_homologacion(pdf, ancho, alto, mostrar=True):
+        if not mostrar:
+            return
         pdf.saveState()
         pdf.translate(ancho / 2, alto / 2)
         pdf.rotate(28)

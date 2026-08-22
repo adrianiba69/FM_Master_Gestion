@@ -4,9 +4,12 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
+from services.arca import ambiente_arca
+
 
 class WSFEService:
-    WSFE_HOMOLOGACION_URL = "https://wswhomo.afip.gov.ar/wsfev1/service.asmx"
+    WSFE_HOMOLOGACION_URL = ambiente_arca.WSFE_URLS[ambiente_arca.AMBIENTE_HOMOLOGACION]
+    WSFE_PRODUCCION_URL = ambiente_arca.WSFE_URLS[ambiente_arca.AMBIENTE_PRODUCCION]
     SOAP_ACTION_FEDUMMY = "http://ar.gov.afip.dif.FEV1/FEDummy"
     SOAP_ACTION_ULTIMO_AUTORIZADO = "http://ar.gov.afip.dif.FEV1/FECompUltimoAutorizado"
     SOAP_ACTION_COMP_CONSULTAR = "http://ar.gov.afip.dif.FEV1/FECompConsultar"
@@ -398,7 +401,7 @@ class WSFEService:
         return resultado
 
     @staticmethod
-    def fe_comp_ultimo_autorizado(token, sign, cuit, punto_venta, tipo_comprobante):
+    def fe_comp_ultimo_autorizado(token, sign, cuit, punto_venta, tipo_comprobante, url=None):
         resultado = {
             "ok": False,
             "ultimo_numero": 0,
@@ -445,7 +448,7 @@ class WSFEService:
             cbte_tipo,
         )
         request = urllib.request.Request(
-            url=WSFEService.WSFE_HOMOLOGACION_URL,
+            url=(url or WSFEService.WSFE_HOMOLOGACION_URL),
             data=soap_body.encode("utf-8"),
             method="POST",
             headers={
@@ -506,7 +509,7 @@ class WSFEService:
         return resultado
 
     @staticmethod
-    def fe_cae_solicitar(token, sign, cuit, solicitud):
+    def fe_cae_solicitar(token, sign, cuit, solicitud, url=None):
         resultado = {
             "ok": False,
             "resultado": "",
@@ -579,7 +582,7 @@ class WSFEService:
         #     print(f"DEBUG ARCA SOAP - Error al guardar: {e}")
 
         request = urllib.request.Request(
-            url=WSFEService.WSFE_HOMOLOGACION_URL,
+            url=(url or WSFEService.WSFE_HOMOLOGACION_URL),
             data=soap_body.encode("utf-8"),
             method="POST",
             headers={
@@ -648,7 +651,7 @@ class WSFEService:
         return resultado
 
     @staticmethod
-    def fe_comp_consultar(token, sign, cuit, punto_venta, tipo_comprobante, numero_comprobante):
+    def fe_comp_consultar(token, sign, cuit, punto_venta, tipo_comprobante, numero_comprobante, url=None):
         resultado = {
             "ok": False,
             "resultado": "",
@@ -723,7 +726,7 @@ class WSFEService:
             numero_comprobante=cbte_nro,
         )
         request = urllib.request.Request(
-            url=WSFEService.WSFE_HOMOLOGACION_URL,
+            url=(url or WSFEService.WSFE_HOMOLOGACION_URL),
             data=soap_body.encode("utf-8"),
             method="POST",
             headers={

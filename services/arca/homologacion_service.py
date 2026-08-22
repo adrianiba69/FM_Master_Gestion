@@ -5,6 +5,7 @@ from services.arca.wsaa_service import WSAAService
 from services.arca.wsfe_service import WSFEService
 from services.arca.preenvio_arca_service import PreenvioArcaService
 from services.arca.reconciliacion_contracts import SnapshotFiscalEsperado
+from services.arca import ambiente_arca
 
 
 class HomologacionService:
@@ -20,7 +21,10 @@ class HomologacionService:
         carpeta_trabajo,
         token=None,
         sign=None,
+        ambiente=ambiente_arca.AMBIENTE_HOMOLOGACION,
     ):
+        ambiente_normalizado = ambiente_arca.normalizar_ambiente_arca(ambiente)
+        wsfe_url = ambiente_arca.resolver_endpoint_wsfe(ambiente_normalizado)
         resultado = {
             "ok": False,
             "intento_id": None,
@@ -67,6 +71,7 @@ class HomologacionService:
                 ruta_tra=ruta_tra,
                 ruta_certificado=ruta_certificado,
                 ruta_clave=ruta_clave,
+                ambiente=ambiente_normalizado,
             )
 
             if not login.get("ok"):
@@ -91,6 +96,7 @@ class HomologacionService:
             punto_venta=punto_venta,
             tipo_comprobante=tipo_comprobante,
             numero_comprobante=numero_comprobante,
+            url=wsfe_url,
         )
 
         return consulta
@@ -123,6 +129,7 @@ class HomologacionService:
         datos_intento=None,
         preenvio_service=None,
         solicitar_cae=None,
+        ambiente=ambiente_arca.AMBIENTE_HOMOLOGACION,
     ):
         try:
             tipo_comprobante_int = int(tipo_comprobante)
@@ -148,13 +155,23 @@ class HomologacionService:
             "errores": [],
         }
 
+        # Bloqueo explicito de pre-Produccion: debe ocurrir antes de crear
+        # cualquier intento o de tocar WSAA/WSFE, para nunca emitir real todavia.
+        try:
+            ambiente_normalizado = ambiente_arca.asegurar_emision_habilitada(ambiente)
+        except (ambiente_arca.AmbienteArcaInvalidoError, ambiente_arca.EmisionProduccionNoHabilitadaError) as error:
+            resultado["errores"].append(str(error))
+            return resultado
+
         carpeta_texto = str(carpeta_trabajo or "").strip()
         if not carpeta_texto:
             resultado["errores"].append("Carpeta de trabajo no informada.")
             return resultado
 
-        # Guardia explicita: esta orquestacion solo puede operar contra Homologacion.
-        if "wswhomo.afip.gov.ar" not in str(WSFEService.WSFE_HOMOLOGACION_URL or ""):
+        wsfe_url = ambiente_arca.resolver_endpoint_wsfe(ambiente_normalizado)
+
+        # Guardia explicita: en Homologacion, el endpoint WSFE resuelto debe seguir siendo el de Homologacion.
+        if ambiente_normalizado == ambiente_arca.AMBIENTE_HOMOLOGACION and "wswhomo.afip.gov.ar" not in wsfe_url:
             resultado["errores"].append("Endpoint WSFE invalido para Homologacion.")
             return resultado
 
@@ -168,6 +185,7 @@ class HomologacionService:
             ruta_tra=ruta_tra,
             ruta_certificado=ruta_certificado,
             ruta_clave=ruta_clave,
+            ambiente=ambiente_normalizado,
         )
         if not login.get("ok"):
             resultado["errores"].extend(login.get("errores") or ["No se pudo autenticar en WSAA."])
@@ -193,6 +211,7 @@ class HomologacionService:
             cuit=cuit_emisor,
             punto_venta=punto_venta,
             tipo_comprobante=tipo_comprobante_int,
+            url=wsfe_url,
         )
         if not consulta_ultimo.get("ok"):
             resultado["errores"].extend(
@@ -282,7 +301,7 @@ class HomologacionService:
         preenvio = preenvio_service or PreenvioArcaService()
         protegido = preenvio.enviar_una_vez(
             snapshot,
-            lambda: enviar(token=token, sign=sign, cuit=cuit_emisor, solicitud=solicitud),
+            lambda: enviar(token=token, sign=sign, cuit=cuit_emisor, solicitud=solicitud, url=wsfe_url),
         )
         resultado["intento_id"] = protegido.intento_id
         if not protegido.ok:

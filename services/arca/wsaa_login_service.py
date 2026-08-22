@@ -8,40 +8,44 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from services.arca.certificado_service import CertificadoService
+from services.arca import ambiente_arca
 
 
 class WSAALoginService:
-    WSAA_HOMOLOGACION_URL = "https://wsaahomo.afip.gov.ar/ws/services/LoginCms"
+    WSAA_HOMOLOGACION_URL = ambiente_arca.WSAA_URLS[ambiente_arca.AMBIENTE_HOMOLOGACION]
+    WSAA_PRODUCCION_URL = ambiente_arca.WSAA_URLS[ambiente_arca.AMBIENTE_PRODUCCION]
     TIMEOUT_SEGUNDOS = 20
     
-    # Cache de TA en memoria (por sesión), segmentado por identidad de emisor.
+    # Cache de TA en memoria (por sesión), segmentado por identidad de emisor + ambiente.
     _ta_cache = {}
     
-    # Archivo de caché en disco (persiste entre ejecuciones)
-    _TA_CACHE_FILENAME_PREFIX = "ta_cache_homologacion"
+    # Archivo de caché en disco (persiste entre ejecuciones); prefijo por defecto = Homologación.
+    _TA_CACHE_FILENAME_PREFIX = ambiente_arca.prefijo_cache_wsaa(ambiente_arca.AMBIENTE_HOMOLOGACION)
 
     @staticmethod
-    def _cache_key(ruta_certificado, ruta_clave):
+    def _cache_key(ruta_certificado, ruta_clave, url=None):
         cert = str(Path(str(ruta_certificado or "")).resolve()) if str(ruta_certificado or "").strip() else ""
         clave = str(Path(str(ruta_clave or "")).resolve()) if str(ruta_clave or "").strip() else ""
-        base = f"{cert}|{clave}|{WSAALoginService.WSAA_HOMOLOGACION_URL}"
+        url_resuelta = url or WSAALoginService.WSAA_HOMOLOGACION_URL
+        base = f"{cert}|{clave}|{url_resuelta}"
         return hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
     @staticmethod
-    def _ruta_cache_disco(ruta_tra, cache_key):
+    def _ruta_cache_disco(ruta_tra, cache_key, prefix=None):
         """Devuelve la ruta del archivo de caché junto al TRA."""
         try:
             carpeta = Path(str(ruta_tra)).parent
-            nombre = f"{WSAALoginService._TA_CACHE_FILENAME_PREFIX}_{cache_key}.json"
+            prefijo_resuelto = prefix or WSAALoginService._TA_CACHE_FILENAME_PREFIX
+            nombre = f"{prefijo_resuelto}_{cache_key}.json"
             return carpeta / nombre
         except Exception:
             return None
 
     @staticmethod
-    def _leer_cache_disco(ruta_tra, cache_key):
+    def _leer_cache_disco(ruta_tra, cache_key, prefix=None):
         """Lee el TA guardado en disco. Devuelve dict o None."""
         try:
-            ruta = WSAALoginService._ruta_cache_disco(ruta_tra, cache_key)
+            ruta = WSAALoginService._ruta_cache_disco(ruta_tra, cache_key, prefix)
             if ruta and ruta.exists():
                 datos = json.loads(ruta.read_text(encoding="utf-8"))
                 return datos
@@ -50,10 +54,10 @@ class WSAALoginService:
         return None
 
     @staticmethod
-    def _guardar_cache_disco(ruta_tra, cache_key, token, sign, expiration):
+    def _guardar_cache_disco(ruta_tra, cache_key, token, sign, expiration, prefix=None):
         """Guarda el TA en disco para persistir entre ejecuciones."""
         try:
-            ruta = WSAALoginService._ruta_cache_disco(ruta_tra, cache_key)
+            ruta = WSAALoginService._ruta_cache_disco(ruta_tra, cache_key, prefix)
             if ruta:
                 datos = {"token": token, "sign": sign, "expiration": expiration}
                 ruta.write_text(json.dumps(datos, indent=2), encoding="utf-8")
@@ -77,7 +81,17 @@ class WSAALoginService:
             return False
 
     @staticmethod
-    def login_homologacion(ruta_tra, ruta_certificado, ruta_clave):
+    def login_homologacion(ruta_tra, ruta_certificado, ruta_clave, ambiente=ambiente_arca.AMBIENTE_HOMOLOGACION):
+        """Login WSAA. Por defecto opera en Homologacion (compatibilidad total).
+
+        Si se pasa ambiente=AMBIENTE_PRODUCCION, resuelve la URL WSAA productiva
+        y un prefijo de cache TA separado; no habilita por si solo la emision
+        (ese bloqueo vive en ambiente_arca.asegurar_emision_habilitada).
+        """
+        ambiente_normalizado = ambiente_arca.normalizar_ambiente_arca(ambiente)
+        url = ambiente_arca.resolver_endpoint_wsaa(ambiente_normalizado)
+        cache_prefix = ambiente_arca.prefijo_cache_wsaa(ambiente_normalizado)
+
         resultado = {
             "ok": False,
             "token": "",
@@ -91,7 +105,7 @@ class WSAALoginService:
             "errores": [],
         }
 
-        cache_key = WSAALoginService._cache_key(ruta_certificado, ruta_clave)
+        cache_key = WSAALoginService._cache_key(ruta_certificado, ruta_clave, url)
         cache_memoria = WSAALoginService._ta_cache.get(cache_key, {})
         
         # DEBUG: Verificar si existe TA en caché válido
@@ -118,7 +132,7 @@ class WSAALoginService:
             return resultado
         
         # 2. Verificar caché en disco (entre ejecuciones)
-        cache_disco = WSAALoginService._leer_cache_disco(ruta_tra, cache_key)
+        cache_disco = WSAALoginService._leer_cache_disco(ruta_tra, cache_key, cache_prefix)
         if cache_disco:
             token_d = cache_disco.get("token", "")
             sign_d = cache_disco.get("sign", "")
@@ -174,7 +188,7 @@ class WSAALoginService:
         soap_body = WSAALoginService._construir_sobre_soap(cms_base64)
 
         request = urllib.request.Request(
-            url=WSAALoginService.WSAA_HOMOLOGACION_URL,
+            url=url,
             data=soap_body.encode("utf-8"),
             method="POST",
             headers={
@@ -217,7 +231,7 @@ class WSAALoginService:
                     resultado["expiration"] = cache_memoria.get("expiration", "")
                     return resultado
 
-                cache_disco = WSAALoginService._leer_cache_disco(ruta_tra, cache_key)
+                cache_disco = WSAALoginService._leer_cache_disco(ruta_tra, cache_key, cache_prefix)
                 if cache_disco and WSAALoginService._validar_ta(
                     cache_disco.get("token", ""),
                     cache_disco.get("sign", ""),
@@ -269,7 +283,7 @@ class WSAALoginService:
                 resultado["expiration"] = cache_memoria.get("expiration", "")
                 return resultado
             # Intentar reutilizar TA del caché en disco
-            cache_disco = WSAALoginService._leer_cache_disco(ruta_tra, cache_key)
+            cache_disco = WSAALoginService._leer_cache_disco(ruta_tra, cache_key, cache_prefix)
             if cache_disco and cache_disco.get("token"):
                 print("  Reutilizando TA del caché (disco)")
                 resultado["ok"] = True
@@ -332,6 +346,7 @@ class WSAALoginService:
             resultado["token"],
             resultado["sign"],
             resultado["expiration"],
+            cache_prefix,
         )
         
         return resultado
