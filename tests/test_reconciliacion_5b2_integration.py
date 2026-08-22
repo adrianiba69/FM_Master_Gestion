@@ -95,7 +95,10 @@ class Reconciliacion5B2IntegrationTest(unittest.TestCase):
                     cae TEXT,
                     vencimiento_cae TEXT,
                     observaciones TEXT,
-                    fecha_creacion TEXT
+                    fecha_creacion TEXT,
+                    punto_venta_num INTEGER,
+                    tipo_comprobante_num INTEGER,
+                    numero_comprobante_num INTEGER
                 );
                 """
             )

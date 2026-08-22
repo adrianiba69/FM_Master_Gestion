@@ -20,7 +20,7 @@ class RecuperacionLocalArcaServiceTest(unittest.TestCase):
             cursor = conexion.cursor()
             cursor.executescript("""
                 CREATE TABLE resumenes(id INTEGER PRIMARY KEY, estado_facturacion TEXT, fecha_facturacion TEXT, cae TEXT, vencimiento_cae TEXT, numero_factura TEXT);
-                CREATE TABLE factura_arca(id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER NOT NULL, emisor_id INTEGER NOT NULL, resumen_id INTEGER NOT NULL, fecha TEXT NOT NULL, punto_venta TEXT, tipo_comprobante TEXT, importe_total REAL NOT NULL, estado TEXT NOT NULL, numero_factura TEXT, cae TEXT, vencimiento_cae TEXT, observaciones TEXT, fecha_creacion TEXT);
+                CREATE TABLE factura_arca(id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER NOT NULL, emisor_id INTEGER NOT NULL, resumen_id INTEGER NOT NULL, fecha TEXT NOT NULL, punto_venta TEXT, tipo_comprobante TEXT, importe_total REAL NOT NULL, estado TEXT NOT NULL, numero_factura TEXT, cae TEXT, vencimiento_cae TEXT, observaciones TEXT, fecha_creacion TEXT, punto_venta_num INTEGER, tipo_comprobante_num INTEGER, numero_comprobante_num INTEGER);
                 CREATE TABLE intentos_emision_arca(id INTEGER PRIMARY KEY, estado TEXT, cae TEXT, vencimiento_cae TEXT, factura_arca_id INTEGER, error_codigo TEXT, error_mensaje TEXT, actualizado_en TEXT, reconciliado_en TEXT);
             """)
             cursor.execute("INSERT INTO resumenes VALUES(10, 'Pendiente', '', '', '', '')")
@@ -116,7 +116,7 @@ class RecuperacionLocalArcaServiceTest(unittest.TestCase):
 
     def test_conflicto_por_identidad_local(self):
         conexion = sqlite3.connect(self.ruta)
-        conexion.execute("INSERT INTO factura_arca VALUES(NULL,99,40,10,'20260817','5','Factura C',100,'Facturada manualmente','00005-00000123','86330766550000','20260827','','')")
+        conexion.execute("INSERT INTO factura_arca(id,cliente_id,emisor_id,resumen_id,fecha,punto_venta,tipo_comprobante,importe_total,estado,numero_factura,cae,vencimiento_cae,observaciones,fecha_creacion) VALUES(NULL,99,40,10,'20260817','5','Factura C',100,'Facturada manualmente','00005-00000123','86330766550000','20260827','','')")
         conexion.commit(); conexion.close()
         resultado = self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
         self.assertEqual(resultado.resultado, ResultadoReconciliacion.CONFLICTO)
@@ -124,7 +124,7 @@ class RecuperacionLocalArcaServiceTest(unittest.TestCase):
 
     def test_conflicto_por_cae_local(self):
         conexion = sqlite3.connect(self.ruta)
-        conexion.execute("INSERT INTO factura_arca VALUES(NULL,20,40,99,'20260817','5','Factura C',100,'Facturada manualmente','00005-00000123','86330766550000','20260827','','')")
+        conexion.execute("INSERT INTO factura_arca(id,cliente_id,emisor_id,resumen_id,fecha,punto_venta,tipo_comprobante,importe_total,estado,numero_factura,cae,vencimiento_cae,observaciones,fecha_creacion) VALUES(NULL,20,40,99,'20260817','5','Factura C',100,'Facturada manualmente','00005-00000123','86330766550000','20260827','','')")
         conexion.commit(); conexion.close()
         resultado = self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
         self.assertEqual(resultado.resultado, ResultadoReconciliacion.CONFLICTO)

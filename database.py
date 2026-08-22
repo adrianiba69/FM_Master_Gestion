@@ -3,6 +3,7 @@ import calendar
 from datetime import date, datetime
 
 from runtime_paths import DATABASE_PATH
+from services.arca.fiscal_normalization import normalizar_identidad_factura
 
 DB_NAME = str(DATABASE_PATH)
 
@@ -17,6 +18,29 @@ def agregar_columna_si_falta(cur, tabla, columna, definicion):
 
     if columna not in columnas:
         cur.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
+
+def migrar_factura_arca_columnas_normalizadas(cur):
+    for columna in ("punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num"):
+        agregar_columna_si_falta(cur, "factura_arca", columna, "INTEGER")
+
+    cur.execute(
+        "SELECT id, punto_venta, tipo_comprobante, numero_factura "
+        "FROM factura_arca WHERE punto_venta_num IS NULL OR tipo_comprobante_num IS NULL "
+        "OR (TRIM(COALESCE(numero_factura, '')) <> '' AND numero_comprobante_num IS NULL)"
+    )
+    for factura_id, punto_venta, tipo_comprobante, numero_factura in cur.fetchall():
+        punto_num, tipo_num, numero_num = normalizar_identidad_factura(
+            punto_venta, tipo_comprobante, numero_factura
+        )
+        if str(numero_factura or "").strip() and punto_num is None:
+            print(f"MIGRACION factura_arca {factura_id}: identidad fiscal contradictoria; sin cambios.")
+            continue
+        if punto_num is None or tipo_num is None:
+            continue
+        cur.execute(
+            "UPDATE factura_arca SET punto_venta_num=?, tipo_comprobante_num=?, numero_comprobante_num=? WHERE id=?",
+            (punto_num, tipo_num, numero_num, factura_id),
+        )
 
 
 def sumar_un_mes(fecha):
@@ -686,6 +710,7 @@ def crear_base():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_emisor ON factura_arca(emisor_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_resumen ON factura_arca(resumen_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_estado ON factura_arca(estado)")
+    migrar_factura_arca_columnas_normalizadas(cur)
 
     # ==========================
     # TABLA INTENTOS DE EMISION ARCA

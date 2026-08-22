@@ -36,7 +36,7 @@ class CierreLocalArcaServiceTest(unittest.TestCase):
             conexion.executescript(
                 """
                 CREATE TABLE resumenes(id INTEGER PRIMARY KEY, estado_facturacion TEXT, fecha_facturacion TEXT, cae TEXT, vencimiento_cae TEXT, numero_factura TEXT);
-                CREATE TABLE factura_arca(id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER NOT NULL, emisor_id INTEGER NOT NULL, resumen_id INTEGER NOT NULL, fecha TEXT NOT NULL, punto_venta TEXT, tipo_comprobante TEXT, importe_total REAL NOT NULL, estado TEXT NOT NULL, numero_factura TEXT, cae TEXT, vencimiento_cae TEXT, observaciones TEXT, fecha_creacion TEXT);
+                CREATE TABLE factura_arca(id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER NOT NULL, emisor_id INTEGER NOT NULL, resumen_id INTEGER NOT NULL, fecha TEXT NOT NULL, punto_venta TEXT, tipo_comprobante TEXT, importe_total REAL NOT NULL, estado TEXT NOT NULL, numero_factura TEXT, cae TEXT, vencimiento_cae TEXT, observaciones TEXT, fecha_creacion TEXT, punto_venta_num INTEGER, tipo_comprobante_num INTEGER, numero_comprobante_num INTEGER);
                 CREATE TABLE intentos_emision_arca(id INTEGER PRIMARY KEY, estado TEXT, cae TEXT, vencimiento_cae TEXT, factura_arca_id INTEGER, error_codigo TEXT, error_mensaje TEXT, actualizado_en TEXT, reconciliado_en TEXT);
                 """
             )
@@ -79,6 +79,7 @@ class CierreLocalArcaServiceTest(unittest.TestCase):
         self.assertTrue(resultado.ok)
         self.assertTrue(resultado.insertada)
         self.assertEqual(self.filas("factura_arca")[0][6], "Factura C")
+        self.assertEqual(self.filas("factura_arca")[0][-3:], (5, 11, 123))
         self.assertEqual(self.filas("resumenes")[0][1], "Facturado")
         self.assertEqual(self.filas("intentos_emision_arca")[0][1], "RECONCILIADO")
 
@@ -89,6 +90,7 @@ class CierreLocalArcaServiceTest(unittest.TestCase):
         resultado = self.service.cerrar_emision_confirmada(**datos)
         self.assertTrue(resultado.ok)
         self.assertEqual(self.filas("factura_arca")[0][6], "Factura A")
+        self.assertEqual(self.filas("factura_arca")[0][-3:], (5, 1, 124))
 
     def test_repetido_es_idempotente(self):
         primero = self.service.cerrar_emision_confirmada(**self.datos())

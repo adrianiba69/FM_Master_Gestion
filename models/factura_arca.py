@@ -17,3 +17,6 @@ class FacturaArca:
     vencimiento_cae: str = ""
     observaciones: str = ""
     fecha_creacion: str = ""
+    punto_venta_num: int = None
+    tipo_comprobante_num: int = None
+    numero_comprobante_num: int = None

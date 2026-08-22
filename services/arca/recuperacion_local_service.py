@@ -9,6 +9,7 @@ from services.arca.reconciliacion_contracts import (
     comparar_snapshot_con_comprobante,
     normalizar_importe,
 )
+from services.arca.fiscal_normalization import normalizar_identidad_factura
 
 
 @dataclass(frozen=True)
@@ -183,18 +184,23 @@ class RecuperacionLocalArcaService:
                     ),
                 )
             else:
+                punto_num, tipo_num, numero_num = normalizar_identidad_factura(
+                    snapshot.punto_venta, self._tipo_factura(snapshot.tipo_comprobante), numero_factura
+                )
                 cursor.execute(
                     """
                     INSERT INTO factura_arca(
                         cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante,
-                        importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion,
+                        punto_venta_num, tipo_comprobante_num, numero_comprobante_num
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         intento.cliente_id, intento.emisor_id, intento.resumen_id, snapshot.fecha_comprobante,
                         str(snapshot.punto_venta), self._tipo_factura(snapshot.tipo_comprobante),
                         float(snapshot.importe_total), "Facturada manualmente", numero_factura, cae, vencimiento,
                         "Factura recuperada desde comprobante autorizado ARCA.", self._ahora(),
+                        punto_num, tipo_num, numero_num,
                     ),
                 )
                 factura_id = cursor.lastrowid

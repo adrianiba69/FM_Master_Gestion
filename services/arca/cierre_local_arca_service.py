@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from database import conectar
+from services.arca.fiscal_normalization import normalizar_identidad_factura
 from services.arca.reconciliacion_contracts import ResultadoReconciliacion, normalizar_importe
 
 
@@ -129,17 +130,22 @@ class CierreLocalArcaService:
             if compatibles:
                 factura_id = int(compatibles[0][0])
             else:
+                punto_num, tipo_num, numero_num = normalizar_identidad_factura(
+                    punto_venta, tipo_comprobante, numero_factura
+                )
                 cursor.execute(
                     """
                     INSERT INTO factura_arca(
                         cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante,
-                        importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion,
+                        punto_venta_num, tipo_comprobante_num, numero_comprobante_num
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         cliente_id, emisor_id, resumen_id, fecha, str(punto_venta), str(tipo_comprobante),
                         float(importe_total), "Facturada manualmente", datos["numero_factura"], datos["cae"],
                         datos["vencimiento_cae"], datos["observaciones"], self._ahora(),
+                        punto_num, tipo_num, numero_num,
                     ),
                 )
                 factura_id = cursor.lastrowid

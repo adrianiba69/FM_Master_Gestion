@@ -2,6 +2,7 @@ from datetime import datetime
 
 from database import conectar
 from models.factura_arca import FacturaArca
+from services.arca.fiscal_normalization import normalizar_identidad_factura
 
 
 class FacturaArcaService:
@@ -106,8 +107,11 @@ class FacturaArcaService:
     def guardar(factura: FacturaArca):
         conn = conectar()
         cur = conn.cursor()
+        punto_num, tipo_num, numero_num = normalizar_identidad_factura(
+            factura.punto_venta, factura.tipo_comprobante, factura.numero_factura
+        )
         cur.execute(
-            "INSERT INTO factura_arca(cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO factura_arca(cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, punto_venta_num, tipo_comprobante_num, numero_comprobante_num) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 factura.cliente_id,
                 factura.emisor_id,
@@ -122,6 +126,9 @@ class FacturaArcaService:
                 factura.vencimiento_cae,
                 factura.observaciones,
                 factura.fecha_creacion or datetime.now().isoformat(timespec="seconds"),
+                punto_num,
+                tipo_num,
+                numero_num,
             ),
         )
         factura_id = cur.lastrowid
