@@ -43,6 +43,51 @@ def migrar_factura_arca_columnas_normalizadas(cur):
         )
 
 
+def _prevalidar_duplicados_cae(cur):
+    cur.execute(
+        "SELECT TRIM(cae), COUNT(*), GROUP_CONCAT(id) FROM factura_arca "
+        "WHERE TRIM(COALESCE(cae, '')) <> '' GROUP BY TRIM(cae) HAVING COUNT(*) > 1"
+    )
+    return cur.fetchall()
+
+
+def _prevalidar_duplicados_identidad(cur):
+    cur.execute(
+        "SELECT emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num, COUNT(*), GROUP_CONCAT(id) "
+        "FROM factura_arca WHERE numero_comprobante_num IS NOT NULL "
+        "GROUP BY emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num HAVING COUNT(*) > 1"
+    )
+    return cur.fetchall()
+
+
+def migrar_indices_unicos_factura_arca(cur):
+    """Crea índices únicos parciales de forma aditiva; nunca borra ni corrige filas."""
+    duplicados_cae = _prevalidar_duplicados_cae(cur)
+    if duplicados_cae:
+        print(f"ADVERTENCIA: idx_factura_arca_cae_unico NO se creó por CAE duplicados: {duplicados_cae}")
+    else:
+        try:
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_factura_arca_cae_unico "
+                "ON factura_arca(cae) WHERE TRIM(COALESCE(cae, '')) <> ''"
+            )
+        except sqlite3.IntegrityError as error:
+            print(f"ADVERTENCIA: idx_factura_arca_cae_unico no se pudo crear (IntegrityError): {error}")
+
+    duplicados_identidad = _prevalidar_duplicados_identidad(cur)
+    if duplicados_identidad:
+        print(f"ADVERTENCIA: idx_factura_arca_identidad_unica NO se creó por identidad fiscal duplicada: {duplicados_identidad}")
+    else:
+        try:
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_factura_arca_identidad_unica "
+                "ON factura_arca(emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num) "
+                "WHERE numero_comprobante_num IS NOT NULL"
+            )
+        except sqlite3.IntegrityError as error:
+            print(f"ADVERTENCIA: idx_factura_arca_identidad_unica no se pudo crear (IntegrityError): {error}")
+
+
 def sumar_un_mes(fecha):
     anio = fecha.year + (1 if fecha.month == 12 else 0)
     mes = 1 if fecha.month == 12 else fecha.month + 1
@@ -711,6 +756,7 @@ def crear_base():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_resumen ON factura_arca(resumen_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_estado ON factura_arca(estado)")
     migrar_factura_arca_columnas_normalizadas(cur)
+    migrar_indices_unicos_factura_arca(cur)
 
     # ==========================
     # TABLA INTENTOS DE EMISION ARCA
