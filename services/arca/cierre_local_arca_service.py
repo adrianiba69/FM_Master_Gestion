@@ -97,6 +97,8 @@ class CierreLocalArcaService:
         vencimiento_cae,
         observaciones="",
         factura_arca_id=None,
+        tipo_documento_receptor=None,
+        documento_receptor=None,
     ):
         datos = {
             "intento_id": intento_id,
@@ -112,6 +114,8 @@ class CierreLocalArcaService:
             "vencimiento_cae": str(vencimiento_cae or "").strip(),
             "observaciones": str(observaciones or ""),
             "factura_arca_id": factura_arca_id,
+            "tipo_documento_receptor": tipo_documento_receptor,
+            "documento_receptor": documento_receptor,
         }
         conexion = self._conexion_factory()
         try:
@@ -138,14 +142,16 @@ class CierreLocalArcaService:
                     INSERT INTO factura_arca(
                         cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante,
                         importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion,
-                        punto_venta_num, tipo_comprobante_num, numero_comprobante_num
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        punto_venta_num, tipo_comprobante_num, numero_comprobante_num,
+                        tipo_documento_receptor, documento_receptor
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         cliente_id, emisor_id, resumen_id, fecha, str(punto_venta), str(tipo_comprobante),
                         float(importe_total), "Facturada manualmente", datos["numero_factura"], datos["cae"],
                         datos["vencimiento_cae"], datos["observaciones"], self._ahora(),
                         punto_num, tipo_num, numero_num,
+                        datos["tipo_documento_receptor"], datos["documento_receptor"],
                     ),
                 )
                 factura_id = cursor.lastrowid

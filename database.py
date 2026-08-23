@@ -43,6 +43,13 @@ def migrar_factura_arca_columnas_normalizadas(cur):
         )
 
 
+def migrar_factura_arca_identidad_receptor(cur):
+    """Agrega columnas nullable para DocTipo/DocNro del receptor. Sin backfill: los
+    historicos no tienen evidencia persistida del valor exactamente enviado a ARCA."""
+    for columna in ("tipo_documento_receptor", "documento_receptor"):
+        agregar_columna_si_falta(cur, "factura_arca", columna, "INTEGER")
+
+
 def _prevalidar_duplicados_cae(cur):
     cur.execute(
         "SELECT TRIM(cae), COUNT(*), GROUP_CONCAT(id) FROM factura_arca "
@@ -756,6 +763,7 @@ def crear_base():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_resumen ON factura_arca(resumen_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_estado ON factura_arca(estado)")
     migrar_factura_arca_columnas_normalizadas(cur)
+    migrar_factura_arca_identidad_receptor(cur)
     migrar_indices_unicos_factura_arca(cur)
 
     # ==========================

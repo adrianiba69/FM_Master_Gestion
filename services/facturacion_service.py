@@ -517,6 +517,8 @@ class FacturacionService:
                     cae=cae,
                     vencimiento_cae=vencimiento_cae,
                     observaciones=observaciones_factura,
+                    tipo_documento_receptor=tipo_documento,
+                    documento_receptor=documento_receptor,
                 )
             except Exception as error:
                 resultado["etapa"] = "cierre_local"

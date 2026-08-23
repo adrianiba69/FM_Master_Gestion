@@ -98,7 +98,9 @@ class Reconciliacion5B2IntegrationTest(unittest.TestCase):
                     fecha_creacion TEXT,
                     punto_venta_num INTEGER,
                     tipo_comprobante_num INTEGER,
-                    numero_comprobante_num INTEGER
+                    numero_comprobante_num INTEGER,
+                    tipo_documento_receptor INTEGER,
+                    documento_receptor INTEGER
                 );
                 """
             )

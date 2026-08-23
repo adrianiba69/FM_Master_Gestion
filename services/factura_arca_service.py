@@ -111,7 +111,7 @@ class FacturaArcaService:
             factura.punto_venta, factura.tipo_comprobante, factura.numero_factura
         )
         cur.execute(
-            "INSERT INTO factura_arca(cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, punto_venta_num, tipo_comprobante_num, numero_comprobante_num) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO factura_arca(cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, documento_receptor) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 factura.cliente_id,
                 factura.emisor_id,
@@ -129,6 +129,8 @@ class FacturaArcaService:
                 punto_num,
                 tipo_num,
                 numero_num,
+                factura.tipo_documento_receptor,
+                factura.documento_receptor,
             ),
         )
         factura_id = cur.lastrowid

@@ -20,3 +20,5 @@ class FacturaArca:
     punto_venta_num: int = None
     tipo_comprobante_num: int = None
     numero_comprobante_num: int = None
+    tipo_documento_receptor: int = None
+    documento_receptor: int = None

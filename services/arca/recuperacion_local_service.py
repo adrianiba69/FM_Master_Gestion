@@ -40,6 +40,17 @@ class RecuperacionLocalArcaService:
         return f"{int(punto_venta):05d}-{int(numero):08d}"
 
     @staticmethod
+    def _identidad_receptor_desde_consulta(consulta):
+        """Usa DocTipo/DocNro de la respuesta ARCA (FECompConsultar) si estan disponibles.
+        Nunca los infiere del cliente ni de otra fuente: ante ausencia o dato invalido, NULL."""
+        if not isinstance(consulta, dict) or "doc_tipo" not in consulta or "doc_nro" not in consulta:
+            return None, None
+        try:
+            return int(consulta["doc_tipo"]), int(consulta["doc_nro"])
+        except (TypeError, ValueError):
+            return None, None
+
+    @staticmethod
     def _snapshot_desde_intento(intento):
         return SnapshotFiscalEsperado(
             resumen_id=intento.resumen_id,
@@ -156,6 +167,7 @@ class RecuperacionLocalArcaService:
             numero_factura = self._numero_factura(snapshot.punto_venta, snapshot.numero_planificado)
             cae = str(consulta.get("cae") or "").strip()
             vencimiento = str(consulta.get("vencimiento_cae") or "").strip()
+            tipo_documento_receptor, documento_receptor = self._identidad_receptor_desde_consulta(consulta)
             cursor.execute(
                 "SELECT estado_facturacion, cae, vencimiento_cae, numero_factura FROM resumenes WHERE id=?",
                 (intento.resumen_id,),
@@ -174,12 +186,13 @@ class RecuperacionLocalArcaService:
                     """
                     UPDATE factura_arca
                     SET fecha=?, punto_venta=?, tipo_comprobante=?, importe_total=?, estado=?,
-                        numero_factura=?, cae=?, vencimiento_cae=?
+                        numero_factura=?, cae=?, vencimiento_cae=?, tipo_documento_receptor=?, documento_receptor=?
                     WHERE id=?
                     """,
                     (
                         snapshot.fecha_comprobante, str(snapshot.punto_venta), self._tipo_factura(snapshot.tipo_comprobante),
                         float(snapshot.importe_total), "Facturada manualmente", numero_factura, cae, vencimiento,
+                        tipo_documento_receptor, documento_receptor,
                         factura_id,
                     ),
                 )
@@ -192,8 +205,9 @@ class RecuperacionLocalArcaService:
                     INSERT INTO factura_arca(
                         cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante,
                         importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion,
-                        punto_venta_num, tipo_comprobante_num, numero_comprobante_num
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        punto_venta_num, tipo_comprobante_num, numero_comprobante_num,
+                        tipo_documento_receptor, documento_receptor
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         intento.cliente_id, intento.emisor_id, intento.resumen_id, snapshot.fecha_comprobante,
@@ -201,6 +215,7 @@ class RecuperacionLocalArcaService:
                         float(snapshot.importe_total), "Facturada manualmente", numero_factura, cae, vencimiento,
                         "Factura recuperada desde comprobante autorizado ARCA.", self._ahora(),
                         punto_num, tipo_num, numero_num,
+                        tipo_documento_receptor, documento_receptor,
                     ),
                 )
                 factura_id = cursor.lastrowid
