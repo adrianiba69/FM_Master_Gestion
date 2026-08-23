@@ -6,6 +6,9 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
+from reportlab.graphics import renderPDF
+from reportlab.graphics.barcode.qr import QrCodeWidget
+from reportlab.graphics.shapes import Drawing
 
 from pdf.identidad_emisor import (
     normalizar_cuit as identidad_normalizar_cuit,
@@ -16,6 +19,7 @@ from pdf.identidad_emisor import (
     obtener_configuracion_logo_fiscal as identidad_obtener_configuracion_logo_fiscal,
 )
 from services.arca import ambiente_arca
+from services.arca.qr_fiscal_service import QrFiscalService
 
 try:
     from runtime_paths import ASSETS_DIR as _ASSETS_DIR
@@ -338,6 +342,91 @@ class PDFFiscalService:
         
         pdf.line(30, y - 42, ancho - 30, y - 42)
 
+        # ══════════════════ INTENTO DE DIBUJAR QR FISCAL ══════════════════
+        # Construir QR desde datos persistidos (no recalcular desde cliente)
+        qr_url = None
+        try:
+            # Extraer datos para QR desde factura_arca persistida
+            # Si no están disponibles, el QR simplemente no se dibuja (fail-safe)
+            punto_venta_num = PDFFiscalService._to_float(
+                PDFFiscalService._pick(datos_comprobante, "punto_venta_num", default=None)
+            )
+            tipo_comprobante_num = PDFFiscalService._to_float(
+                PDFFiscalService._pick(datos_comprobante, "tipo_comprobante_num", default=None)
+            )
+            numero_comprobante_num = PDFFiscalService._to_float(
+                PDFFiscalService._pick(datos_comprobante, "numero_comprobante_num", default=None)
+            )
+            tipo_documento_receptor = PDFFiscalService._pick(
+                datos_comprobante, "tipo_documento_receptor", default=None
+            )
+            documento_receptor = PDFFiscalService._pick(
+                datos_comprobante, "documento_receptor", default=None
+            )
+
+            # Obtener CUIT emisor
+            cuit_emisor = PDFFiscalService._to_float(
+                PDFFiscalService._pick(datos_emisor, "cuit", default=None)
+            )
+
+            # Si tenemos datos suficientes, intentar construir QR
+            if (
+                cuit_emisor
+                and punto_venta_num is not None
+                and tipo_comprobante_num is not None
+                and numero_comprobante_num is not None
+                and cae
+            ):
+                # Normalizar tipos (pueden ser strings)
+                try:
+                    if tipo_documento_receptor is not None:
+                        tipo_documento_receptor = int(tipo_documento_receptor)
+                    if documento_receptor is not None:
+                        documento_receptor = int(documento_receptor)
+                except (TypeError, ValueError):
+                    tipo_documento_receptor = None
+                    documento_receptor = None
+
+                service_qr = QrFiscalService()
+                qr_url, qr_error = service_qr.construir_qr_completo(
+                    ver=1,
+                    fecha=fecha,  # Será normalizada en el servicio
+                    cuit_emisor=int(cuit_emisor),
+                    punto_venta_num=int(punto_venta_num),
+                    tipo_comprobante_num=int(tipo_comprobante_num),
+                    numero_comprobante_num=int(numero_comprobante_num),
+                    importe=importe_total,
+                    cae=str(cae),
+                    tipo_documento_receptor=tipo_documento_receptor,
+                    numero_documento_receptor=documento_receptor,
+                )
+        except Exception as qr_ex:
+            # Fail-safe: si algo falla en construcción de QR, simplemente no se dibuja
+            # El PDF continúa siendo válido sin QR
+            qr_url = None
+
+        # Dibujar QR si se construyó exitosamente
+        if qr_url:
+            try:
+                # Posicionar QR en la esquina inferior derecha
+                # Evitar superposición con CAE/vencimiento/pie
+                tamaño_qr = 90
+                x_qr = ancho - 30 - tamaño_qr
+                y_qr = 50  # Posición Y suficientemente baja para evitar conflictos
+
+                PDFFiscalService._dibujar_qr_fiscal(
+                    pdf,
+                    x_qr,
+                    y_qr,
+                    qr_url,
+                    tamaño_qr_pt=tamaño_qr,
+                    datos_comprobante=datos_comprobante,
+                )
+            except Exception:
+                # Fail-safe: QR falla, PDF continúa
+                pass
+
+        # ══════════════════ PIE DEL DOCUMENTO ══════════════════
         # Leyenda inferior
         pdf.setFont("Helvetica", 8)
         pdf.setFillColor(HexColor("#666666"))
@@ -426,6 +515,59 @@ class PDFFiscalService:
         base = destino.stem
         sello = datetime.now().strftime("%Y%m%d_%H%M%S")
         return destino.with_name(f"{base}_{sello}.pdf")
+
+    @staticmethod
+    def _dibujar_qr_fiscal(
+        pdf,
+        x_posicion,
+        y_posicion,
+        url_qr,
+        tamaño_qr_pt=90,
+        datos_comprobante=None,
+    ):
+        """
+        Dibujar código QR fiscal en el PDF.
+
+        Args:
+            pdf: Canvas de ReportLab
+            x_posicion: Posición X en puntos
+            y_posicion: Posición Y en puntos
+            url_qr: URL QR completa desde QrFiscalService
+            tamaño_qr_pt: Tamaño del QR en puntos (default 90)
+            datos_comprobante: Dict con datos (opcional, para logging)
+
+        Nota:
+            - Fail-safe: Si falla, LOG y continúa sin QR
+            - No modifica datos
+            - No llama ARCA
+        """
+        try:
+            if not url_qr or not isinstance(url_qr, str):
+                return False
+
+            if "?p=" not in url_qr:
+                return False
+
+            qr_widget = QrCodeWidget(url_qr, barBorder=2)
+            x_min, y_min, x_max, y_max = qr_widget.getBounds()
+            qr_width = x_max - x_min
+            qr_height = y_max - y_min
+            escala_x = tamaño_qr_pt / qr_width
+            escala_y = tamaño_qr_pt / qr_height
+            drawing = Drawing(
+                tamaño_qr_pt,
+                tamaño_qr_pt,
+                transform=[escala_x, 0, 0, escala_y, 0, 0],
+            )
+            drawing.add(qr_widget)
+            renderPDF.draw(drawing, pdf, x_posicion, y_posicion)
+
+            return True
+
+        except Exception:
+            # Fail-safe: LOG y continúa sin QR
+            # No raisea excepción
+            return False
 
     @staticmethod
     def _dibujar_marca_homologacion(pdf, ancho, alto, mostrar=True):

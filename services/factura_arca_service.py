@@ -80,7 +80,7 @@ class FacturaArcaService:
     def listar(estado=None):
         conn = conectar()
         cur = conn.cursor()
-        consulta = "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion FROM factura_arca"
+        consulta = "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, documento_receptor FROM factura_arca"
         params = ()
         if estado:
             consulta += " WHERE estado=?"
@@ -96,7 +96,7 @@ class FacturaArcaService:
         conn = conectar()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion FROM factura_arca WHERE id=?",
+            "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, documento_receptor FROM factura_arca WHERE id=?",
             (id_,),
         )
         fila = cur.fetchone()

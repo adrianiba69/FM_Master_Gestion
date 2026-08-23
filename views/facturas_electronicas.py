@@ -441,6 +441,11 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         tipo_factura = str(fila[6] or "").strip()
         punto_venta_raw = str(fila[5] or "").strip()
         numero_factura_raw = str(fila[9] or "").strip()
+        punto_venta_num = fila[14] if len(fila) > 14 else None
+        tipo_comprobante_num = fila[15] if len(fila) > 15 else None
+        numero_comprobante_num = fila[16] if len(fila) > 16 else None
+        tipo_documento_receptor = fila[17] if len(fila) > 17 else None
+        documento_receptor = fila[18] if len(fila) > 18 else None
         return {
             "factura_id": factura_id,
             "cliente_id": cliente_id,
@@ -456,6 +461,11 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "tipo_factura": tipo_factura,
             "punto_venta_raw": punto_venta_raw,
             "numero_factura_raw": numero_factura_raw,
+            "punto_venta_num": punto_venta_num,
+            "tipo_comprobante_num": tipo_comprobante_num,
+            "numero_comprobante_num": numero_comprobante_num,
+            "tipo_documento_receptor": tipo_documento_receptor,
+            "documento_receptor": documento_receptor,
             "valores_tabla": (
                 self._formatear_fecha(fila[4]),
                 cliente,
@@ -1317,6 +1327,20 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         if not resumen or not cliente:
             return None
 
+        factura_id = factura.get("factura_id")
+        tipo_documento_receptor_persistido = None
+        documento_receptor_persistido = None
+        punto_venta_num_persistido = None
+        tipo_comprobante_num_persistido = None
+        numero_comprobante_num_persistido = None
+        
+        if factura_id:
+            punto_venta_num_persistido = factura.get("punto_venta_num")
+            tipo_comprobante_num_persistido = factura.get("tipo_comprobante_num")
+            numero_comprobante_num_persistido = factura.get("numero_comprobante_num")
+            tipo_documento_receptor_persistido = factura.get("tipo_documento_receptor")
+            documento_receptor_persistido = factura.get("documento_receptor")
+
         items = []
         for concepto in list(getattr(resumen, "conceptos", []) or []):
             descripcion = str(getattr(concepto, "descripcion", "") or "").strip()
@@ -1358,17 +1382,23 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         if len(vto_cae) == 10 and "-" in vto_cae:
             vto_cae = vto_cae.replace("-", "")
 
+        # Usar datos persistidos si existen
         numero_comprobante = 0
-        try:
-            numero_comprobante = int(str(codigo_factura).split("-", 1)[1])
-        except (TypeError, ValueError, IndexError):
+        if numero_comprobante_num_persistido is not None:
+            numero_comprobante = int(numero_comprobante_num_persistido)
+        else:
             try:
-                numero_comprobante = int(str(factura.get("numero_factura_raw") or "0").split("-", 1)[-1])
-            except (TypeError, ValueError):
-                numero_comprobante = 0
+                numero_comprobante = int(str(codigo_factura).split("-", 1)[1])
+            except (TypeError, ValueError, IndexError):
+                try:
+                    numero_comprobante = int(str(factura.get("numero_factura_raw") or "0").split("-", 1)[-1])
+                except (TypeError, ValueError):
+                    numero_comprobante = 0
 
         punto_venta = str(factura.get("punto_venta_raw") or "").strip()
-        if not punto_venta and "-" in codigo_factura:
+        if punto_venta_num_persistido is not None:
+            punto_venta = str(int(punto_venta_num_persistido))
+        elif not punto_venta and "-" in codigo_factura:
             punto_venta = str(codigo_factura).split("-", 1)[0]
 
         datos_emisor = {
@@ -1408,6 +1438,11 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "cae": str(valores_fila[6] if valores_fila and len(valores_fila) > 6 else "" or ""),
             "vencimiento_cae": vto_cae,
             "ambiente": str(emisor_fiscal[9] if len(emisor_fiscal) > 9 else "Homologación"),
+            "punto_venta_num": punto_venta_num_persistido,
+            "tipo_comprobante_num": tipo_comprobante_num_persistido,
+            "numero_comprobante_num": numero_comprobante_num_persistido,
+            "tipo_documento_receptor": tipo_documento_receptor_persistido,
+            "documento_receptor": documento_receptor_persistido,
             "punto_venta": punto_venta,
         }
         return {
