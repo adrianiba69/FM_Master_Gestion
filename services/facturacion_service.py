@@ -1,13 +1,21 @@
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from models.factura_arca import FacturaArca
 from pdf.nombre_archivos import nombre_factura_pdf
+from services.arca import ambiente_arca
 from services.arca.homologacion_service import HomologacionService
 from services.arca.cierre_local_arca_service import CierreLocalArcaService
 from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.arca.reconciliacion_contracts import ResultadoReconciliacion, SnapshotFiscalEsperado
+from services.arca.snapshot_fiscal_service import (
+    SnapshotFiscalError,
+    calcular_hash_snapshot,
+    construir_snapshot_fiscal_v1,
+    serializar_snapshot_fiscal,
+)
 from services.cliente_service import ClienteService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
@@ -41,6 +49,177 @@ class FacturacionService:
         if direccion and localidad:
             return f"{direccion} - {localidad}"
         return direccion or localidad
+
+    @staticmethod
+    def _a_fecha_iso_snapshot(valor):
+        """Convierte YYYYMMDD o YYYY-MM-DD a YYYY-MM-DD; None si no reconocible (ausencia valida)."""
+        texto = str(valor or "").strip()
+        if len(texto) == 8 and texto.isdigit():
+            return f"{texto[0:4]}-{texto[4:6]}-{texto[6:8]}"
+        if len(texto) == 10 and texto[4] == "-" and texto[7] == "-":
+            return texto
+        return None
+
+    @classmethod
+    def _construir_snapshot_fiscal_cierre_normal(
+        cls,
+        emisor_fiscal,
+        emisor_facturacion_id,
+        cuit_emisor_normalizado,
+        punto_venta_num,
+        cliente,
+        condicion_iva,
+        documento_normalizado,
+        tipo_documento,
+        documento_receptor,
+        tipo_comprobante,
+        tipo_factura_normalizado,
+        numero_comprobante,
+        numero_factura,
+        fecha_comprobante,
+        periodo_desde,
+        periodo_hasta,
+        vencimiento_pago_arca,
+        moneda,
+        cotizacion,
+        neto_factura,
+        importe_iva_factura,
+        alicuota_iva,
+        total_factura_fiscal,
+        importe_exento_factura,
+        importe_tot_conc,
+        importe_tributos,
+        alicuotas_iva,
+        items_factura,
+        cae,
+        vencimiento_cae,
+        ambiente_normalizado,
+    ):
+        """Congela el snapshot fiscal v1 desde el contexto de emision ya resuelto (sin
+        volver a consultar ClienteService/EmisorFiscalService/ResumenService)."""
+        try:
+            ambiente_snapshot = ambiente_arca.normalizar_ambiente_arca(ambiente_normalizado)
+        except ambiente_arca.AmbienteArcaInvalidoError as error:
+            return {"ok": False, "errores": [f"ambiente_arca_invalido: {error}"]}
+
+        cuit_emisor_fiscal_normalizado = cls._normalizar_cuit(
+            emisor_fiscal[3] if len(emisor_fiscal) > 3 else ""
+        )
+        if cuit_emisor_fiscal_normalizado != cuit_emisor_normalizado:
+            return {
+                "ok": False,
+                "errores": [
+                    "contradiccion_cuit_emisor: el CUIT del emisor fiscal seleccionado no coincide "
+                    "con el CUIT utilizado en la operacion ARCA."
+                ],
+            }
+
+        ahora_iso = datetime.now().isoformat(timespec="seconds")
+        cuit_o_doc = str(documento_normalizado or "").strip() or "0"
+
+        emisor_snapshot = {
+            "emisor_id": int(emisor_facturacion_id),
+            "emisor_fiscal_id": int(emisor_fiscal[0]),
+            "razon_social": str(emisor_fiscal[1] if len(emisor_fiscal) > 1 else "" or ""),
+            "nombre_fantasia": str(emisor_fiscal[2]).strip() if len(emisor_fiscal) > 2 and str(emisor_fiscal[2] or "").strip() else None,
+            "cuit": cuit_emisor_normalizado,
+            "condicion_iva": str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or ""),
+            "domicilio": str(emisor_fiscal[10]).strip() if len(emisor_fiscal) > 10 and str(emisor_fiscal[10] or "").strip() else None,
+            "ingresos_brutos": str(emisor_fiscal[11]).strip() if len(emisor_fiscal) > 11 and str(emisor_fiscal[11] or "").strip() else None,
+            "fecha_inicio_actividades": cls._a_fecha_iso_snapshot(emisor_fiscal[12] if len(emisor_fiscal) > 12 else ""),
+            "punto_venta_num": int(punto_venta_num),
+        }
+
+        receptor_snapshot = {
+            "cliente_id": int(cliente[0]),
+            "razon_social": str(cliente[2] if len(cliente) > 2 else "" or ""),
+            "documento_visible": cuit_o_doc,
+            "condicion_iva": str(condicion_iva or ""),
+            "domicilio": cls._combinar_domicilio_cliente(cliente) or None,
+            "tipo_documento_receptor": int(tipo_documento),
+            "documento_receptor": int(documento_receptor),
+        }
+
+        comprobante_snapshot = {
+            "fecha": cls._a_fecha_iso_snapshot(fecha_comprobante),
+            "fecha_arca": str(fecha_comprobante or ""),
+            "concepto": 1,
+            "concepto_descripcion": "1 - Productos",
+            "punto_venta_num": int(punto_venta_num),
+            "tipo_comprobante_num": int(tipo_comprobante),
+            "tipo_comprobante_texto": str(tipo_factura_normalizado or ""),
+            "numero_comprobante_num": int(numero_comprobante),
+            "numero_textual": str(numero_factura or ""),
+            "periodo_servicio_desde": cls._a_fecha_iso_snapshot(periodo_desde),
+            "periodo_servicio_hasta": cls._a_fecha_iso_snapshot(periodo_hasta),
+            "vencimiento_pago": cls._a_fecha_iso_snapshot(vencimiento_pago_arca),
+            "moneda": str(moneda or "PES"),
+            "cotizacion": Decimal(str(cotizacion or 1)),
+        }
+
+        importes_snapshot = {
+            "total": Decimal(str(total_factura_fiscal)),
+            "neto": Decimal(str(neto_factura)),
+            "iva": Decimal(str(importe_iva_factura)),
+            "exento": Decimal(str(importe_exento_factura)),
+            "no_gravado": Decimal(str(importe_tot_conc)),
+            "tributos": Decimal(str(importe_tributos)),
+        }
+
+        iva_snapshot = [
+            {
+                "id": int(item.get("id")),
+                "base_imponible": Decimal(str(item.get("base_imponible"))),
+                "importe": Decimal(str(item.get("importe"))),
+                "porcentaje": Decimal(str(alicuota_iva)),
+            }
+            for item in (alicuotas_iva or [])
+        ]
+
+        items_snapshot = [
+            {
+                "concepto": (str(item.get("concepto")).strip() or None) if item.get("concepto") is not None else None,
+                "descripcion": str(item.get("descripcion") or ""),
+                "cantidad": Decimal(str(item.get("cantidad"))),
+                "precio_unitario": Decimal(str(item.get("precio_unitario"))),
+                "subtotal": Decimal(str(item.get("importe"))),
+            }
+            for item in (items_factura or [])
+        ]
+
+        autorizacion_snapshot = {
+            "cae": str(cae or ""),
+            "vencimiento_cae": cls._a_fecha_iso_snapshot(vencimiento_cae),
+            "vencimiento_cae_arca": str(vencimiento_cae or ""),
+            "tipo_cod_aut": "E",
+            "resultado": "AUTORIZADO",
+            "cerrado_en": ahora_iso,
+        }
+
+        try:
+            snapshot = construir_snapshot_fiscal_v1(
+                fuente="cierre_normal",
+                creado_en=ahora_iso,
+                ambiente=ambiente_snapshot,
+                emisor=emisor_snapshot,
+                receptor=receptor_snapshot,
+                comprobante=comprobante_snapshot,
+                importes=importes_snapshot,
+                iva=iva_snapshot,
+                items=items_snapshot,
+                autorizacion=autorizacion_snapshot,
+            )
+            json_text = serializar_snapshot_fiscal(snapshot)
+            snapshot_hash = calcular_hash_snapshot(json_text)
+        except SnapshotFiscalError as error:
+            return {"ok": False, "errores": [f"snapshot_fiscal_invalido: {error}"]}
+
+        return {
+            "ok": True,
+            "snapshot_json": json_text,
+            "snapshot_version": snapshot["version"],
+            "snapshot_hash": snapshot_hash,
+        }
 
     @staticmethod
     def _sumar_importes_conceptos(conceptos):
@@ -336,9 +515,18 @@ class FacturacionService:
 
         cuit_emisor = str(emisor_fiscal[3] if len(emisor_fiscal) > 3 else "" or "").strip()
         punto_venta = emisor_fiscal[6] if len(emisor_fiscal) > 6 else ""
+        ambiente_emisor = emisor_fiscal[9] if len(emisor_fiscal) > 9 else ""
         ruta_certificado = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
         ruta_clave = str(emisor_fiscal[14] if len(emisor_fiscal) > 14 else "" or "").strip()
         carpeta_facturas = str(emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or "").strip()
+
+        try:
+            ambiente_normalizado = ambiente_arca.normalizar_ambiente_arca(ambiente_emisor)
+        except ambiente_arca.AmbienteArcaInvalidoError as error:
+            resultado["etapa"] = "ambiente_arca"
+            resultado["errores"] = [str(error)]
+            resultado["mensaje"] = str(error)
+            return resultado
 
         cuit_emisor_normalizado = cls._normalizar_cuit(cuit_emisor)
         punto_venta_normalizado = cls._normalizar_punto_venta(punto_venta)
@@ -476,6 +664,7 @@ class FacturacionService:
                     "emisor_fiscal_id": emisor_fiscal[0],
                     "emisor_id": emisor_facturacion_id,
                 },
+                ambiente=ambiente_normalizado,
             )
             if not resultado_arca.get("ok"):
                 detalle_arca = resultado_arca.get("emision") if resultado_arca.get("etapa") != "consulta" else resultado_arca.get("consulta")
@@ -503,6 +692,48 @@ class FacturacionService:
                 resultado["errores"] = ["La emisión aprobada no tiene intento ARCA asociado."]
                 return resultado
 
+            periodo_desde, periodo_hasta = cls._obtener_periodo_facturado(resumen_actual)
+            vencimiento_pago_arca = cls._a_fecha_arca_yyyymmdd(getattr(resumen_actual, "fecha_vencimiento", ""))
+
+            snapshot_resultado = cls._construir_snapshot_fiscal_cierre_normal(
+                emisor_fiscal=emisor_fiscal,
+                emisor_facturacion_id=emisor_facturacion_id,
+                cuit_emisor_normalizado=cuit_emisor_normalizado,
+                punto_venta_num=punto_venta_num,
+                cliente=cliente,
+                condicion_iva=condicion_iva,
+                documento_normalizado=documento_normalizado,
+                tipo_documento=tipo_documento,
+                documento_receptor=documento_receptor,
+                tipo_comprobante=tipo_comprobante,
+                tipo_factura_normalizado=tipo_factura_normalizado,
+                numero_comprobante=numero_comprobante,
+                numero_factura=numero_factura,
+                fecha_comprobante=fecha_comprobante,
+                periodo_desde=periodo_desde,
+                periodo_hasta=periodo_hasta,
+                vencimiento_pago_arca=vencimiento_pago_arca,
+                moneda=str(consulta.get("moneda") or "PES"),
+                cotizacion=consulta.get("cotizacion") or 1,
+                neto_factura=neto_factura,
+                importe_iva_factura=importe_iva_factura,
+                alicuota_iva=alicuota_iva,
+                total_factura_fiscal=total_factura_fiscal,
+                importe_exento_factura=importe_exento_factura,
+                importe_tot_conc=importe_tot_conc,
+                importe_tributos=importe_tributos,
+                alicuotas_iva=alicuotas_iva,
+                items_factura=items_factura,
+                cae=cae,
+                vencimiento_cae=vencimiento_cae,
+                ambiente_normalizado=ambiente_normalizado,
+            )
+            if not snapshot_resultado.get("ok"):
+                resultado["etapa"] = "snapshot_fiscal"
+                resultado["tipo_mensaje"] = "warning"
+                resultado["errores"] = list(snapshot_resultado.get("errores") or ["No se pudo construir el snapshot fiscal."])
+                return resultado
+
             try:
                 cierre_local = CierreLocalArcaService().cerrar_emision_confirmada(
                     intento_id=intento_id,
@@ -519,6 +750,9 @@ class FacturacionService:
                     observaciones=observaciones_factura,
                     tipo_documento_receptor=tipo_documento,
                     documento_receptor=documento_receptor,
+                    snapshot_fiscal_json=snapshot_resultado["snapshot_json"],
+                    snapshot_version=snapshot_resultado["snapshot_version"],
+                    snapshot_hash=snapshot_resultado["snapshot_hash"],
                 )
             except Exception as error:
                 resultado["etapa"] = "cierre_local"
@@ -543,7 +777,6 @@ class FacturacionService:
             factura_id = cierre_local.factura_arca_id
 
             codigo_factura = cls._formatear_codigo_factura(punto_venta_num, numero_comprobante)
-            periodo_desde, periodo_hasta = cls._obtener_periodo_facturado(resumen_actual)
 
             pdf = cls.generar_pdf_fiscal(
                 cliente_id=cliente[0],
@@ -845,6 +1078,7 @@ class FacturacionService:
         alicuotas_iva,
         concepto=1,
         datos_intento=None,
+        ambiente=ambiente_arca.AMBIENTE_HOMOLOGACION,
     ):
         resultado = {
             "ok": False,
@@ -859,7 +1093,15 @@ class FacturacionService:
             "intento_id": None,
             "cae": "",
             "vencimiento_cae": "",
+            "ambiente": "",
         }
+
+        try:
+            ambiente_normalizado = ambiente_arca.normalizar_ambiente_arca(ambiente)
+        except ambiente_arca.AmbienteArcaInvalidoError as error:
+            resultado["errores"] = [str(error)]
+            return resultado
+        resultado["ambiente"] = ambiente_normalizado
 
         fecha_comprobante = datetime.now().strftime("%Y%m%d")
         resultado["fecha_comprobante"] = fecha_comprobante
@@ -884,6 +1126,7 @@ class FacturacionService:
             importe_tributos=importe_tributos,
             alicuotas_iva=alicuotas_iva,
             datos_intento=datos_intento,
+            ambiente=ambiente_normalizado,
         )
         resultado["emision"] = emision
         resultado["intento_id"] = emision.get("intento_id")
@@ -904,6 +1147,7 @@ class FacturacionService:
             carpeta_trabajo=carpeta_trabajo,
             token=emision.get("token"),
             sign=emision.get("sign"),
+            ambiente=ambiente_normalizado,
         )
         resultado["consulta"] = consulta
         if not consulta.get("ok"):

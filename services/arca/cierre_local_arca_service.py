@@ -4,6 +4,8 @@ from datetime import datetime
 from database import conectar
 from services.arca.fiscal_normalization import normalizar_identidad_factura
 from services.arca.reconciliacion_contracts import ResultadoReconciliacion, normalizar_importe
+from services.arca.snapshot_fiscal_persistence_service import SnapshotFiscalPersistenceService
+from services.arca.snapshot_fiscal_service import CODIGO_VALIDO, validar_integridad_snapshot
 
 
 @dataclass(frozen=True)
@@ -99,7 +101,19 @@ class CierreLocalArcaService:
         factura_arca_id=None,
         tipo_documento_receptor=None,
         documento_receptor=None,
+        snapshot_fiscal_json=None,
+        snapshot_version=None,
+        snapshot_hash=None,
     ):
+        if snapshot_fiscal_json is not None:
+            integridad = validar_integridad_snapshot(snapshot_fiscal_json, snapshot_version, snapshot_hash)
+            if integridad.codigo != CODIGO_VALIDO:
+                return ResultadoCierreLocalArca(
+                    False,
+                    ResultadoReconciliacion.CONFLICTO,
+                    mensaje=f"snapshot_fiscal_invalido ({integridad.codigo}): {'; '.join(integridad.errores)}",
+                )
+
         datos = {
             "intento_id": intento_id,
             "resumen_id": resumen_id,
@@ -116,6 +130,9 @@ class CierreLocalArcaService:
             "factura_arca_id": factura_arca_id,
             "tipo_documento_receptor": tipo_documento_receptor,
             "documento_receptor": documento_receptor,
+            "snapshot_fiscal_json": snapshot_fiscal_json,
+            "snapshot_version": snapshot_version,
+            "snapshot_hash": snapshot_hash,
         }
         conexion = self._conexion_factory()
         try:
@@ -133,26 +150,47 @@ class CierreLocalArcaService:
             insertada = False
             if compatibles:
                 factura_id = int(compatibles[0][0])
+                if datos["snapshot_fiscal_json"] is not None:
+                    resultado_snapshot = SnapshotFiscalPersistenceService().guardar_snapshot_si_ausente(
+                        factura_id,
+                        datos["snapshot_fiscal_json"],
+                        datos["snapshot_version"],
+                        datos["snapshot_hash"],
+                        conn=conexion,
+                    )
+                    if not resultado_snapshot.ok:
+                        conexion.rollback()
+                        return ResultadoCierreLocalArca(
+                            False,
+                            ResultadoReconciliacion.CONFLICTO,
+                            mensaje=f"{resultado_snapshot.codigo}: {resultado_snapshot.mensaje}",
+                        )
             else:
                 punto_num, tipo_num, numero_num = normalizar_identidad_factura(
                     punto_venta, tipo_comprobante, numero_factura
                 )
+                columnas_insert = [
+                    "cliente_id", "emisor_id", "resumen_id", "fecha", "punto_venta", "tipo_comprobante",
+                    "importe_total", "estado", "numero_factura", "cae", "vencimiento_cae", "observaciones",
+                    "fecha_creacion", "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num",
+                    "tipo_documento_receptor", "documento_receptor",
+                ]
+                valores_insert = [
+                    cliente_id, emisor_id, resumen_id, fecha, str(punto_venta), str(tipo_comprobante),
+                    float(importe_total), "Facturada manualmente", datos["numero_factura"], datos["cae"],
+                    datos["vencimiento_cae"], datos["observaciones"], self._ahora(),
+                    punto_num, tipo_num, numero_num,
+                    datos["tipo_documento_receptor"], datos["documento_receptor"],
+                ]
+                if datos["snapshot_fiscal_json"] is not None:
+                    columnas_insert.extend(["snapshot_fiscal_json", "snapshot_version", "snapshot_hash"])
+                    valores_insert.extend(
+                        [datos["snapshot_fiscal_json"], datos["snapshot_version"], datos["snapshot_hash"]]
+                    )
+                placeholders = ",".join("?" for _ in columnas_insert)
                 cursor.execute(
-                    """
-                    INSERT INTO factura_arca(
-                        cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante,
-                        importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion,
-                        punto_venta_num, tipo_comprobante_num, numero_comprobante_num,
-                        tipo_documento_receptor, documento_receptor
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        cliente_id, emisor_id, resumen_id, fecha, str(punto_venta), str(tipo_comprobante),
-                        float(importe_total), "Facturada manualmente", datos["numero_factura"], datos["cae"],
-                        datos["vencimiento_cae"], datos["observaciones"], self._ahora(),
-                        punto_num, tipo_num, numero_num,
-                        datos["tipo_documento_receptor"], datos["documento_receptor"],
-                    ),
+                    f"INSERT INTO factura_arca({','.join(columnas_insert)}) VALUES({placeholders})",
+                    tuple(valores_insert),
                 )
                 factura_id = cursor.lastrowid
                 insertada = True
