@@ -50,6 +50,15 @@ def migrar_factura_arca_identidad_receptor(cur):
         agregar_columna_si_falta(cur, "factura_arca", columna, "INTEGER")
 
 
+def migrar_factura_arca_snapshot_fiscal(cur):
+    for columna, definicion in (
+        ("snapshot_fiscal_json", "TEXT"),
+        ("snapshot_version", "INTEGER"),
+        ("snapshot_hash", "TEXT"),
+    ):
+        agregar_columna_si_falta(cur, "factura_arca", columna, definicion)
+
+
 def _prevalidar_duplicados_cae(cur):
     cur.execute(
         "SELECT TRIM(cae), COUNT(*), GROUP_CONCAT(id) FROM factura_arca "
@@ -764,6 +773,7 @@ def crear_base():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_factura_arca_estado ON factura_arca(estado)")
     migrar_factura_arca_columnas_normalizadas(cur)
     migrar_factura_arca_identidad_receptor(cur)
+    migrar_factura_arca_snapshot_fiscal(cur)
     migrar_indices_unicos_factura_arca(cur)
 
     # ==========================

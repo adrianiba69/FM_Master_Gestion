@@ -22,3 +22,6 @@ class FacturaArca:
     numero_comprobante_num: int = None
     tipo_documento_receptor: int = None
     documento_receptor: int = None
+    snapshot_fiscal_json: str = None
+    snapshot_version: int = None
+    snapshot_hash: str = None

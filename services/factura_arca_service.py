@@ -7,6 +7,30 @@ from services.arca.fiscal_normalization import normalizar_identidad_factura
 
 class FacturaArcaService:
 
+    COLUMNAS_BASE = (
+        "id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, "
+        "importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, "
+        "punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, "
+        "documento_receptor, snapshot_fiscal_json, snapshot_version, snapshot_hash"
+    )
+
+    @staticmethod
+    def _columnas_existentes(cur):
+        cur.execute("PRAGMA table_info(factura_arca)")
+        return {fila[1] for fila in cur.fetchall()}
+
+    @staticmethod
+    def _select_columnas(cur):
+        columnas = FacturaArcaService._columnas_existentes(cur)
+        if {"snapshot_fiscal_json", "snapshot_version", "snapshot_hash"}.issubset(columnas):
+            return FacturaArcaService.COLUMNAS_BASE
+        return (
+            "id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, "
+            "importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, "
+            "punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, "
+            "documento_receptor, NULL AS snapshot_fiscal_json, NULL AS snapshot_version, NULL AS snapshot_hash"
+        )
+
     @staticmethod
     def validar_pre_guardado(
         cliente_id,
@@ -80,7 +104,7 @@ class FacturaArcaService:
     def listar(estado=None):
         conn = conectar()
         cur = conn.cursor()
-        consulta = "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, documento_receptor FROM factura_arca"
+        consulta = f"SELECT {FacturaArcaService._select_columnas(cur)} FROM factura_arca"
         params = ()
         if estado:
             consulta += " WHERE estado=?"
@@ -96,7 +120,7 @@ class FacturaArcaService:
         conn = conectar()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, documento_receptor FROM factura_arca WHERE id=?",
+            f"SELECT {FacturaArcaService._select_columnas(cur)} FROM factura_arca WHERE id=?",
             (id_,),
         )
         fila = cur.fetchone()
@@ -110,33 +134,47 @@ class FacturaArcaService:
         punto_num, tipo_num, numero_num = normalizar_identidad_factura(
             factura.punto_venta, factura.tipo_comprobante, factura.numero_factura
         )
-        cur.execute(
-            "INSERT INTO factura_arca(cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, documento_receptor) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                factura.cliente_id,
-                factura.emisor_id,
-                factura.resumen_id,
-                factura.fecha,
-                factura.punto_venta,
-                factura.tipo_comprobante,
-                factura.importe_total,
-                factura.estado,
-                factura.numero_factura,
-                factura.cae,
-                factura.vencimiento_cae,
-                factura.observaciones,
-                factura.fecha_creacion or datetime.now().isoformat(timespec="seconds"),
-                punto_num,
-                tipo_num,
-                numero_num,
-                factura.tipo_documento_receptor,
-                factura.documento_receptor,
-            ),
-        )
-        factura_id = cur.lastrowid
-        conn.commit()
-        conn.close()
-        return factura_id
+        columnas = [
+            "cliente_id", "emisor_id", "resumen_id", "fecha", "punto_venta", "tipo_comprobante",
+            "importe_total", "estado", "numero_factura", "cae", "vencimiento_cae", "observaciones",
+            "fecha_creacion", "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num",
+            "tipo_documento_receptor", "documento_receptor",
+        ]
+        valores = [
+            factura.cliente_id,
+            factura.emisor_id,
+            factura.resumen_id,
+            factura.fecha,
+            factura.punto_venta,
+            factura.tipo_comprobante,
+            factura.importe_total,
+            factura.estado,
+            factura.numero_factura,
+            factura.cae,
+            factura.vencimiento_cae,
+            factura.observaciones,
+            factura.fecha_creacion or datetime.now().isoformat(timespec="seconds"),
+            punto_num,
+            tipo_num,
+            numero_num,
+            factura.tipo_documento_receptor,
+            factura.documento_receptor,
+        ]
+        columnas_existentes = FacturaArcaService._columnas_existentes(cur)
+        if {"snapshot_fiscal_json", "snapshot_version", "snapshot_hash"}.issubset(columnas_existentes):
+            columnas.extend(["snapshot_fiscal_json", "snapshot_version", "snapshot_hash"])
+            valores.extend([factura.snapshot_fiscal_json, factura.snapshot_version, factura.snapshot_hash])
+        try:
+            placeholders = ",".join("?" for _ in columnas)
+            cur.execute(
+                f"INSERT INTO factura_arca({','.join(columnas)}) VALUES({placeholders})",
+                tuple(valores),
+            )
+            factura_id = cur.lastrowid
+            conn.commit()
+            return factura_id
+        finally:
+            conn.close()
 
     @staticmethod
     def actualizar(factura: FacturaArca):
@@ -168,7 +206,7 @@ class FacturaArcaService:
         conn = conectar()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion FROM factura_arca WHERE resumen_id=?",
+            f"SELECT {FacturaArcaService._select_columnas(cur)} FROM factura_arca WHERE resumen_id=?",
             (resumen_id,),
         )
         filas = cur.fetchall()
@@ -189,7 +227,7 @@ class FacturaArcaService:
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion FROM factura_arca WHERE cae=? ORDER BY id",
+                f"SELECT {FacturaArcaService._select_columnas(cur)} FROM factura_arca WHERE cae=? ORDER BY id",
                 (str(cae or "").strip(),),
             )
             return cur.fetchall()
@@ -202,7 +240,7 @@ class FacturaArcaService:
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion FROM factura_arca WHERE emisor_id=? AND TRIM(COALESCE(punto_venta, ''))=? AND TRIM(COALESCE(tipo_comprobante, ''))=? AND TRIM(COALESCE(numero_factura, ''))=? ORDER BY id",
+                f"SELECT {FacturaArcaService._select_columnas(cur)} FROM factura_arca WHERE emisor_id=? AND TRIM(COALESCE(punto_venta, ''))=? AND TRIM(COALESCE(tipo_comprobante, ''))=? AND TRIM(COALESCE(numero_factura, ''))=? ORDER BY id",
                 (
                     int(emisor_id),
                     str(punto_venta or "").strip(),
