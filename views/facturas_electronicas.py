@@ -9,6 +9,12 @@ from config import COLOR_PRINCIPAL
 from database import conectar
 from pdf.nombre_archivos import nombre_cliente_archivo, nombre_factura_pdf
 from services.arca.pdf_fiscal_service import PDFFiscalService
+from services.arca.snapshot_fiscal_pdf_adapter import (
+    MODO_CORRUPTO,
+    MODO_SNAPSHOT,
+    construir_datos_pdf_desde_snapshot,
+    resolver_modo_regeneracion,
+)
 from views.clientes import ClientesFrame
 from services.cobro_service import CobroService
 from services.emisor_fiscal_service import EmisorFiscalService
@@ -18,6 +24,15 @@ from services.arca.reconciliacion_pendientes_service import ReconciliacionPendie
 from services.resumen_service import ResumenService
 from services.whatsapp_service import WhatsAppService
 from views.cliente_ficha import FichaClienteFrame
+
+
+class SnapshotFiscalCorruptoError(Exception):
+    """El snapshot fiscal persistido para la factura no supera la validacion de integridad."""
+
+    def __init__(self, errores=()):
+        self.errores = tuple(errores or ())
+        detalle = "; ".join(self.errores) if self.errores else "snapshot invalido"
+        super().__init__(detalle)
 
 
 class FacturasElectronicasFrame(ctk.CTkFrame):
@@ -446,12 +461,18 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         numero_comprobante_num = fila[16] if len(fila) > 16 else None
         tipo_documento_receptor = fila[17] if len(fila) > 17 else None
         documento_receptor = fila[18] if len(fila) > 18 else None
+        snapshot_fiscal_json = fila[19] if len(fila) > 19 else None
+        snapshot_version = fila[20] if len(fila) > 20 else None
+        snapshot_hash = fila[21] if len(fila) > 21 else None
         return {
             "factura_id": factura_id,
             "cliente_id": cliente_id,
             "emisor_id": emisor_id,
             "resumen_id": resumen_id,
             "importe_total": importe_total,
+            "snapshot_fiscal_json": snapshot_fiscal_json,
+            "snapshot_version": snapshot_version,
+            "snapshot_hash": snapshot_hash,
             "cobrado_total": cobrado,
             "saldo_cobro": saldo,
             "estado_cobro": estado_cobro,
@@ -967,6 +988,14 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                     forzar_regeneracion=False,
                     forzar_reemplazo_estandar=True,
                 )
+            except SnapshotFiscalCorruptoError:
+                messagebox.showerror(
+                    "Facturas electrónicas",
+                    "No se puede regenerar el comprobante porque su snapshot fiscal "
+                    "almacenado no supera la validación de integridad.",
+                    parent=self,
+                )
+                return None
             except PermissionError:
                 messagebox.showwarning(
                     "Facturas electrónicas",
@@ -1150,7 +1179,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         if not requiere_regenerar:
             return ruta_estandar if ruta_estandar.is_file() else ruta_resuelta, False
 
-        datos_pdf = self._construir_datos_pdf_fiscal_desde_factura(
+        datos_pdf = self._construir_datos_pdf_para_regeneracion(
             factura=factura,
             valores_fila=valores_fila,
             emisor_fiscal=emisor_fiscal,
@@ -1233,6 +1262,14 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 forzar_regeneracion=True,
                 forzar_reemplazo_estandar=True,
             )
+        except SnapshotFiscalCorruptoError:
+            messagebox.showerror(
+                "Facturas electrónicas",
+                "No se puede regenerar el comprobante porque su snapshot fiscal "
+                "almacenado no supera la validación de integridad.",
+                parent=self,
+            )
+            return
         except PermissionError:
             messagebox.showwarning(
                 "Facturas electrónicas",
@@ -1307,6 +1344,43 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             faltantes.append("Fecha de comprobante válida")
 
         return faltantes
+
+    def _construir_datos_pdf_para_regeneracion(
+        self,
+        factura,
+        valores_fila,
+        emisor_fiscal,
+        carpeta_facturas,
+        cliente_id,
+        tipo_factura,
+        codigo_factura,
+    ):
+        """Prioridad snapshot/legacy/corrupto (FASE 5D), centralizada en el adaptador puro."""
+        decision = resolver_modo_regeneracion(
+            factura.get("snapshot_fiscal_json"),
+            factura.get("snapshot_version"),
+            factura.get("snapshot_hash"),
+        )
+
+        if decision.modo == MODO_CORRUPTO:
+            raise SnapshotFiscalCorruptoError(decision.errores)
+
+        if decision.modo == MODO_SNAPSHOT:
+            datos_pdf = construir_datos_pdf_desde_snapshot(decision.snapshot)
+            # El logo es un recurso visual (no fiscal): se resuelve por config. actual del emisor.
+            datos_pdf["datos_emisor"]["carpeta_facturas"] = carpeta_facturas
+            return datos_pdf
+
+        # MODO LEGACY: sin snapshot persistido, comportamiento historico. No se crea snapshot aqui.
+        return self._construir_datos_pdf_fiscal_desde_factura(
+            factura=factura,
+            valores_fila=valores_fila,
+            emisor_fiscal=emisor_fiscal,
+            carpeta_facturas=carpeta_facturas,
+            cliente_id=cliente_id,
+            tipo_factura=tipo_factura,
+            codigo_factura=codigo_factura,
+        )
 
     def _construir_datos_pdf_fiscal_desde_factura(
         self,

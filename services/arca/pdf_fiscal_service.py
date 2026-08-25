@@ -368,6 +368,9 @@ class PDFFiscalService:
             cuit_emisor = PDFFiscalService._to_float(
                 PDFFiscalService._pick(datos_emisor, "cuit", default=None)
             )
+            cotizacion_qr = PDFFiscalService._to_float(
+                PDFFiscalService._pick(datos_comprobante, "cotizacion", default=None)
+            ) or 1.0
 
             # Si tenemos datos suficientes, intentar construir QR
             if (
@@ -399,6 +402,8 @@ class PDFFiscalService:
                     cae=str(cae),
                     tipo_documento_receptor=tipo_documento_receptor,
                     numero_documento_receptor=documento_receptor,
+                    moneda=moneda,
+                    cotizacion=cotizacion_qr,
                 )
         except Exception as qr_ex:
             # Fail-safe: si algo falla en construcción de QR, simplemente no se dibuja
