@@ -10,6 +10,7 @@ from services.arca.homologacion_service import HomologacionService
 from services.arca.cierre_local_arca_service import CierreLocalArcaService
 from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.arca.reconciliacion_contracts import ResultadoReconciliacion, SnapshotFiscalEsperado
+from services.arca.snapshot_fiscal_pdf_adapter import construir_datos_pdf_desde_snapshot
 from services.arca.snapshot_fiscal_service import (
     SnapshotFiscalError,
     calcular_hash_snapshot,
@@ -216,6 +217,7 @@ class FacturacionService:
 
         return {
             "ok": True,
+            "snapshot": snapshot,
             "snapshot_json": json_text,
             "snapshot_version": snapshot["version"],
             "snapshot_hash": snapshot_hash,
@@ -803,6 +805,7 @@ class FacturacionService:
                 items_factura=items_factura,
                 cae=cae,
                 vencimiento_cae=vencimiento_cae,
+                snapshot=snapshot_resultado.get("snapshot"),
             )
             if not pdf.get("ok"):
                 resultado["etapa"] = "pdf"
@@ -1253,6 +1256,7 @@ class FacturacionService:
         items_factura,
         cae,
         vencimiento_cae,
+        snapshot=None,
     ):
         resultado = {
             "ok": False,
@@ -1266,46 +1270,56 @@ class FacturacionService:
                 / nombre_factura_pdf(int(cliente_id), str(tipo_factura or ""), str(codigo_factura or ""))
             )
 
-            datos_emisor = {
-                "razon_social": str(emisor_fiscal[1] if len(emisor_fiscal) > 1 else "" or ""),
-                "nombre_fantasia": str(emisor_fiscal[2] if len(emisor_fiscal) > 2 else "" or ""),
-                "cuit": str(cuit_emisor or ""),
-                "condicion_iva": str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or ""),
-                "domicilio": str(emisor_fiscal[10] if len(emisor_fiscal) > 10 else "" or ""),
-                "ingresos_brutos": str(emisor_fiscal[11] if len(emisor_fiscal) > 11 else "" or ""),
-                "fecha_inicio_actividades": str(emisor_fiscal[12] if len(emisor_fiscal) > 12 else "" or ""),
-                "punto_venta": punto_venta_num,
-                "carpeta_facturas": str(carpeta_facturas or ""),
-            }
+            if snapshot:
+                # FASE 5E: el PDF inicial usa el mismo snapshot recien construido/persistido,
+                # sin reconsultar cliente/emisor/resumen (misma fuente que la regeneracion 5D).
+                datos_pdf = construir_datos_pdf_desde_snapshot(snapshot)
+                datos_pdf["datos_emisor"]["carpeta_facturas"] = str(carpeta_facturas or "")
+                datos_emisor = datos_pdf["datos_emisor"]
+                datos_receptor = datos_pdf["datos_receptor"]
+                datos_comprobante = datos_pdf["datos_comprobante"]
+            else:
+                # MODO LEGACY: sin snapshot disponible, se reconstruye desde el contexto de emision.
+                datos_emisor = {
+                    "razon_social": str(emisor_fiscal[1] if len(emisor_fiscal) > 1 else "" or ""),
+                    "nombre_fantasia": str(emisor_fiscal[2] if len(emisor_fiscal) > 2 else "" or ""),
+                    "cuit": str(cuit_emisor or ""),
+                    "condicion_iva": str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or ""),
+                    "domicilio": str(emisor_fiscal[10] if len(emisor_fiscal) > 10 else "" or ""),
+                    "ingresos_brutos": str(emisor_fiscal[11] if len(emisor_fiscal) > 11 else "" or ""),
+                    "fecha_inicio_actividades": str(emisor_fiscal[12] if len(emisor_fiscal) > 12 else "" or ""),
+                    "punto_venta": punto_venta_num,
+                    "carpeta_facturas": str(carpeta_facturas or ""),
+                }
 
-            cuit_o_doc = str(documento_normalizado or "").strip() or "0"
-            datos_receptor = {
-                "razon_social": str(cliente[2] if len(cliente) > 2 else "" or ""),
-                "cuit": cuit_o_doc,
-                "documento": cuit_o_doc,
-                "condicion_iva": str(condicion_iva or ""),
-                "domicilio": cls._combinar_domicilio_cliente(cliente),
-            }
+                cuit_o_doc = str(documento_normalizado or "").strip() or "0"
+                datos_receptor = {
+                    "razon_social": str(cliente[2] if len(cliente) > 2 else "" or ""),
+                    "cuit": cuit_o_doc,
+                    "documento": cuit_o_doc,
+                    "condicion_iva": str(condicion_iva or ""),
+                    "domicilio": cls._combinar_domicilio_cliente(cliente),
+                }
 
-            datos_comprobante = {
-                "tipo": str(tipo_factura_comprobante or ""),
-                "numero": numero_comprobante,
-                "fecha": str((consulta or {}).get("fecha_comprobante") or fecha_comprobante or ""),
-                "concepto": "1 - Productos",
-                "periodo_servicio_desde": str(periodo_desde or ""),
-                "periodo_servicio_hasta": str(periodo_hasta or ""),
-                "vencimiento_pago": cls._a_fecha_arca_yyyymmdd(getattr(resumen_actual, "fecha_vencimiento", "")),
-                "importe_neto": neto_factura,
-                "importe_iva": importe_iva_factura,
-                "alicuota_iva": alicuota_iva,
-                "importe_total": total_factura_fiscal,
-                "items": list(items_factura or []),
-                "moneda": str((consulta or {}).get("moneda") or "PES"),
-                "cae": str(cae or ""),
-                "vencimiento_cae": str(vencimiento_cae or ""),
-                "ambiente": str(emisor_fiscal[9] if len(emisor_fiscal) > 9 else "Homologación"),
-                "punto_venta": punto_venta_num,
-            }
+                datos_comprobante = {
+                    "tipo": str(tipo_factura_comprobante or ""),
+                    "numero": numero_comprobante,
+                    "fecha": str((consulta or {}).get("fecha_comprobante") or fecha_comprobante or ""),
+                    "concepto": "1 - Productos",
+                    "periodo_servicio_desde": str(periodo_desde or ""),
+                    "periodo_servicio_hasta": str(periodo_hasta or ""),
+                    "vencimiento_pago": cls._a_fecha_arca_yyyymmdd(getattr(resumen_actual, "fecha_vencimiento", "")),
+                    "importe_neto": neto_factura,
+                    "importe_iva": importe_iva_factura,
+                    "alicuota_iva": alicuota_iva,
+                    "importe_total": total_factura_fiscal,
+                    "items": list(items_factura or []),
+                    "moneda": str((consulta or {}).get("moneda") or "PES"),
+                    "cae": str(cae or ""),
+                    "vencimiento_cae": str(vencimiento_cae or ""),
+                    "ambiente": str(emisor_fiscal[9] if len(emisor_fiscal) > 9 else "Homologación"),
+                    "punto_venta": punto_venta_num,
+                }
 
             pdf = PDFFiscalService.generar_factura_c(
                 ruta_destino=ruta_sugerida_pdf,
