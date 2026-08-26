@@ -1051,29 +1051,12 @@ class FichaClienteFrame(ctk.CTkFrame):
             "error": "Falta / Incorrecto: el resumen ya figura como facturado",
         })
 
-        # Obtener explícitamente los datos del emisor para pasar al validador
-        # Recargar el emisor JUSTO AHORA para asegurar que tenemos la versión actualizada
+        # Validar la configuración ARCA del emisor usando la validación centralizada del servicio
         validacion_arca = {"completa": False, "faltantes": [], "errores": []}
         configuracion_arca_ok = False
         
         if emisor_id:
-            # Recargar el emisor actualizado desde la BD (no usar versión anterior)
-            emisor = EmisorFiscalService.obtener(emisor_id)
-            
-        if emisor_id and emisor:
-            ruta_certificado = str(emisor[10] if len(emisor) > 10 else "" or "").strip()
-            ruta_clave_privada = str(emisor[11] if len(emisor) > 11 else "" or "").strip()
-            carpeta_facturas = str(emisor[12] if len(emisor) > 12 else "" or "").strip()
-            ambiente_arca = str(emisor[9] if len(emisor) > 9 else "" or "").strip()
-            
-            # Reutilizar exactamente la misma validación que Emisores Fiscales
-            validacion_arca = EmisorFiscalService.validar_configuracion_arca(
-                emisor_id,
-                ruta_certificado=ruta_certificado,
-                ruta_clave_privada=ruta_clave_privada,
-                carpeta_facturas=carpeta_facturas,
-                ambiente_arca=ambiente_arca,
-            )
+            validacion_arca = EmisorFiscalService.validar_configuracion_arca(emisor_id)
             configuracion_arca_ok = bool(validacion_arca.get("completa"))
         
         # Agregar un solo ítem de validación ARCA que refleja el resultado completo
