@@ -53,12 +53,17 @@ class FacturacionService:
 
     @staticmethod
     def _a_fecha_iso_snapshot(valor):
-        """Convierte YYYYMMDD o YYYY-MM-DD a YYYY-MM-DD; None si no reconocible (ausencia valida)."""
+        """Convierte YYYYMMDD, YYYY-MM-DD o DD/MM/YYYY a YYYY-MM-DD; None si no reconocible (ausencia valida)."""
         texto = str(valor or "").strip()
         if len(texto) == 8 and texto.isdigit():
             return f"{texto[0:4]}-{texto[4:6]}-{texto[6:8]}"
         if len(texto) == 10 and texto[4] == "-" and texto[7] == "-":
             return texto
+        if len(texto) == 10 and texto[2] == "/" and texto[5] == "/":
+            partes = texto.split("/")
+            if len(partes) == 3 and len(partes[0]) == 2 and len(partes[1]) == 2 and len(partes[2]) == 4:
+                if partes[0].isdigit() and partes[1].isdigit() and partes[2].isdigit():
+                    return f"{partes[2]}-{partes[1]}-{partes[0]}"
         return None
 
     @classmethod
@@ -145,7 +150,7 @@ class FacturacionService:
             "fecha": cls._a_fecha_iso_snapshot(fecha_comprobante),
             "fecha_arca": str(fecha_comprobante or ""),
             "concepto": 1,
-            "concepto_descripcion": "1 - Productos",
+            "concepto_descripcion": "Productos",
             "punto_venta_num": int(punto_venta_num),
             "tipo_comprobante_num": int(tipo_comprobante),
             "tipo_comprobante_texto": str(tipo_factura_normalizado or ""),

@@ -147,7 +147,12 @@ def datos_comprobante_desde_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]
 
     concepto_num = str(comprobante.get("concepto") or "").strip()
     concepto_descripcion = str(comprobante.get("concepto_descripcion") or "").strip()
-    concepto_texto = f"{concepto_num} - {concepto_descripcion}" if concepto_num else concepto_descripcion
+    if concepto_num and concepto_descripcion.startswith(f"{concepto_num} - "):
+        concepto_texto = concepto_descripcion
+    elif concepto_num:
+        concepto_texto = f"{concepto_num} - {concepto_descripcion}"
+    else:
+        concepto_texto = concepto_descripcion
 
     punto_venta_num = comprobante.get("punto_venta_num")
     tipo_comprobante_num = comprobante.get("tipo_comprobante_num")
