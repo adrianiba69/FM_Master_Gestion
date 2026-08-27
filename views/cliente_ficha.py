@@ -144,6 +144,7 @@ class FichaClienteFrame(ctk.CTkFrame):
                         resumen[2],
                         self._formatear_moneda(resumen[5]) or "-",
                         resumen[7] or "-",
+                        resumen[9] or "Pendiente",
                         resumen[8] or "",
                         resumen[0],
                     )
@@ -335,12 +336,13 @@ class FichaClienteFrame(ctk.CTkFrame):
         self._crear_tarjeta_tabla(
             panel,
             titulo="ÚLTIMOS RESÚMENES",
-            columnas=("numero", "fecha", "importe", "estado", "pdf_path", "resumen_id"),
+            columnas=("numero", "fecha", "importe", "estado", "facturacion", "pdf_path", "resumen_id"),
             encabezados={
                 "numero": ("Resumen", 110),
                 "fecha": ("Fecha", 100),
                 "importe": ("Importe", 110),
                 "estado": ("Estado", 110),
+                "facturacion": ("Facturación", 110),
                 "pdf_path": ("", 0),
                 "resumen_id": ("", 0),
             },
@@ -836,7 +838,7 @@ class FichaClienteFrame(ctk.CTkFrame):
         self._cargar_tabla(
             self.tabla_resumenes,
             self.cliente_data.get("ultimos_resumenes", []),
-            fila_vacia=("Sin registros", "-", "-", "-", "", ""),
+            fila_vacia=("Sin registros", "-", "-", "-", "-", "", ""),
         )
         self._cargar_tabla(self.tabla_cobros, self.cliente_data.get("ultimos_cobros", []))
         self._cargar_tabla(self.tabla_crm, self.cliente_data.get("historial_crm", []))
@@ -892,10 +894,10 @@ class FichaClienteFrame(ctk.CTkFrame):
 
         valores = self.tabla_resumenes.item(seleccion[0], "values")
         try:
-            resumen_id = int(valores[5]) if len(valores) > 5 and str(valores[5]).strip() else None
+            resumen_id = int(valores[6]) if len(valores) > 6 and str(valores[6]).strip() else None
         except (TypeError, ValueError):
             resumen_id = None
-        pdf_path = valores[4] if len(valores) > 4 else ""
+        pdf_path = valores[5] if len(valores) > 5 else ""
         if not pdf_path and resumen_id is None:
             messagebox.showinfo(
                 "Resumen sin PDF",
@@ -935,7 +937,7 @@ class FichaClienteFrame(ctk.CTkFrame):
 
         valores = self.tabla_resumenes.item(seleccion[0], "values")
         try:
-            resumen_id = int(valores[5]) if len(valores) > 5 and str(valores[5]).strip() else None
+            resumen_id = int(valores[6]) if len(valores) > 6 and str(valores[6]).strip() else None
         except (TypeError, ValueError):
             resumen_id = None
 

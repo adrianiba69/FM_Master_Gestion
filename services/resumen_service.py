@@ -503,7 +503,8 @@ class ResumenService:
         consulta = """
             SELECT r.id, r.numero, r.fecha, r.fecha_vencimiento,
                    COALESCE(NULLIF(c.razon_social, ''), c.nombre),
-                   r.total, r.saldo, r.estado, r.pdf_path
+                   r.total, r.saldo, r.estado, r.pdf_path,
+                   COALESCE(r.estado_facturacion, 'Pendiente')
             FROM resumenes r
             JOIN clientes c ON c.id = r.cliente_id
         """
