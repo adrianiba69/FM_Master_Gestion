@@ -1488,17 +1488,6 @@ class FichaClienteFrame(ctk.CTkFrame):
                 self.cargar_cliente(self.obtener_datos_cliente(resumen.cliente_id))
             except Exception:
                 pass
-            messagebox.showinfo(
-                "Emitir factura",
-                (
-                    "Factura emitida correctamente.\n\n"
-                    "Factura C\n"
-                    f"{codigo_factura}\n\n"
-                    "CAE:\n"
-                    f"{self.factura_emitida_temporal.get('cae', '-') }"
-                ),
-                parent=self.winfo_toplevel(),
-            )
         except Exception as error:
             messagebox.showerror(
                 "Emitir factura",

@@ -90,7 +90,10 @@ class EmisionFacturaDesdeClienteFichaTest(unittest.TestCase):
             },
         )
         self.modal_mock.destroy.assert_called_once()
-        mock_msg.showinfo.assert_called_once()
+        self.assertEqual(mock_msg.showinfo.call_count, 1)
+        args_msg = mock_msg.showinfo.call_args[0]
+        self.assertIn("Factura A", args_msg[1])
+        self.assertIn("12345678901234", args_msg[1])
 
     @patch("views.cliente_ficha.messagebox")
     @patch("services.resumen_service.ResumenService.obtener")
@@ -107,7 +110,7 @@ class EmisionFacturaDesdeClienteFichaTest(unittest.TestCase):
             "ok": True,
             "etapa": "ok",
             "numero_factura": "00002-00000015",
-            "cae": "12345678901234",
+            "cae": "98765432109876",
             "vencimiento_cae": "2026-09-10",
             "ruta_pdf": "",
             "datos_modal": {"codigo_factura": "00002-00000015"},
@@ -127,6 +130,10 @@ class EmisionFacturaDesdeClienteFichaTest(unittest.TestCase):
             },
         )
         self.modal_mock.destroy.assert_called_once()
+        self.assertEqual(mock_msg.showinfo.call_count, 1)
+        args_msg = mock_msg.showinfo.call_args[0]
+        self.assertIn("Factura C", args_msg[1])
+        self.assertIn("98765432109876", args_msg[1])
 
     @patch("views.cliente_ficha.messagebox")
     @patch("services.resumen_service.ResumenService.obtener")
