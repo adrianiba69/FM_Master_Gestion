@@ -147,7 +147,7 @@ class FichaClienteFrame(ctk.CTkFrame):
                         resumen[8] or "",
                         resumen[0],
                     )
-                    for resumen in resumenes[:5]
+                    for resumen in resumenes[:10]
                 ]
 
             contactos = ContactoService.listar(cliente_id=cliente_id)
