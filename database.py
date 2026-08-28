@@ -165,6 +165,16 @@ def crear_tabla_intentos_emision_arca(cur):
         "ON intentos_emision_arca(cuit_emisor, punto_venta, tipo_comprobante, numero_planificado) "
         "WHERE estado IN ('PENDIENTE_RECONCILIAR', 'ENVIANDO', 'CONFLICTO_MANUAL')"
     )
+    migrar_intentos_emision_arca_contexto_fiscal(cur)
+
+
+def migrar_intentos_emision_arca_contexto_fiscal(cur):
+    for columna, definicion in (
+        ("contexto_fiscal_json", "TEXT"),
+        ("contexto_fiscal_version", "INTEGER"),
+        ("contexto_fiscal_hash", "TEXT"),
+    ):
+        agregar_columna_si_falta(cur, "intentos_emision_arca", columna, definicion)
 
 
 def crear_base():

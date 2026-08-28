@@ -11,6 +11,15 @@ from services.arca.reconciliacion_contracts import (
     SnapshotFiscalEsperado,
     normalizar_importe,
 )
+from services.arca.contexto_fiscal_service import (
+    CODIGO_CONTEXTO_CORRUPTO,
+    CODIGO_CONTEXTO_DIFERENTE,
+    CODIGO_CONTEXTO_GUARDADO,
+    CODIGO_CONTEXTO_IDEMPOTENTE,
+    CODIGO_CONTEXTO_INVALIDO,
+    ContextoFiscalService,
+    ResultadoPersistenciaContextoFiscal,
+)
 
 
 class IntentoEmisionArcaService:
@@ -22,6 +31,7 @@ class IntentoEmisionArcaService:
         "importe_neto, importe_iva, importe_exento, importe_no_gravado, importe_tributos, "
         "moneda, cotizacion, alicuotas_iva, estado, cae, vencimiento_cae, error_codigo, "
         "error_mensaje, detalle_tecnico, factura_arca_id, creado_en, actualizado_en, reconciliado_en"
+        ", contexto_fiscal_json, contexto_fiscal_version, contexto_fiscal_hash"
     )
     _ESTADOS_ACTIVOS = (
         EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value,
@@ -134,6 +144,85 @@ class IntentoEmisionArcaService:
             cursor = conexion.cursor()
             cursor.execute(f"SELECT {self._COLUMNAS} FROM intentos_emision_arca WHERE id=?", (int(intento_id),))
             return self._desde_fila(cursor.fetchone())
+        finally:
+            conexion.close()
+
+    def guardar_contexto_fiscal_si_ausente(
+        self,
+        intento_id,
+        contexto_fiscal_json,
+        contexto_fiscal_version,
+        contexto_fiscal_hash,
+    ):
+        integridad = ContextoFiscalService.validar_integridad(
+            contexto_fiscal_json,
+            contexto_fiscal_version,
+            contexto_fiscal_hash,
+        )
+        if not integridad.valido:
+            return ResultadoPersistenciaContextoFiscal(
+                False,
+                CODIGO_CONTEXTO_INVALIDO,
+                "; ".join(integridad.errores),
+            )
+
+        conexion = self._conexion_factory()
+        try:
+            conexion.execute("BEGIN IMMEDIATE")
+            fila = conexion.execute(
+                "SELECT contexto_fiscal_json, contexto_fiscal_version, contexto_fiscal_hash "
+                "FROM intentos_emision_arca WHERE id=?",
+                (int(intento_id),),
+            ).fetchone()
+            if fila is None:
+                return ResultadoPersistenciaContextoFiscal(
+                    False, CODIGO_CONTEXTO_INVALIDO, "intento de emisión inexistente"
+                )
+
+            actual_json, actual_version, actual_hash = fila
+            campos_vacios = (actual_json is None, actual_version is None, actual_hash is None)
+            if all(campos_vacios):
+                conexion.execute(
+                    "UPDATE intentos_emision_arca SET contexto_fiscal_json=?, "
+                    "contexto_fiscal_version=?, contexto_fiscal_hash=? WHERE id=?",
+                    (
+                        integridad.json_canonico,
+                        integridad.version,
+                        integridad.hash_calculado,
+                        int(intento_id),
+                    ),
+                )
+                conexion.commit()
+                return ResultadoPersistenciaContextoFiscal(
+                    True, CODIGO_CONTEXTO_GUARDADO, actualizado=True
+                )
+
+            if any(campos_vacios):
+                conexion.rollback()
+                return ResultadoPersistenciaContextoFiscal(
+                    False, CODIGO_CONTEXTO_CORRUPTO, "contexto fiscal almacenado incompleto"
+                )
+
+            actual = ContextoFiscalService.validar_integridad(actual_json, actual_version, actual_hash)
+            if not actual.valido:
+                conexion.rollback()
+                return ResultadoPersistenciaContextoFiscal(
+                    False, CODIGO_CONTEXTO_CORRUPTO, "; ".join(actual.errores)
+                )
+
+            if actual.hash_calculado == integridad.hash_calculado:
+                conexion.commit()
+                return ResultadoPersistenciaContextoFiscal(
+                    True, CODIGO_CONTEXTO_IDEMPOTENTE, idempotente=True
+                )
+
+            conexion.rollback()
+            return ResultadoPersistenciaContextoFiscal(
+                False, CODIGO_CONTEXTO_DIFERENTE, "contexto fiscal existente diferente"
+            )
+        except Exception:
+            conexion.rollback()
+            raise
         finally:
             conexion.close()
 

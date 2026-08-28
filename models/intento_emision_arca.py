@@ -37,3 +37,6 @@ class IntentoEmisionArca:
     creado_en: str
     actualizado_en: str
     reconciliado_en: str
+    contexto_fiscal_json: str = None
+    contexto_fiscal_version: int = None
+    contexto_fiscal_hash: str = None
