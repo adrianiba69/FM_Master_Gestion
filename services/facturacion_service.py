@@ -8,6 +8,7 @@ from pdf.nombre_archivos import nombre_factura_pdf
 from services.arca import ambiente_arca
 from services.arca.homologacion_service import HomologacionService
 from services.arca.cierre_local_arca_service import CierreLocalArcaService
+from services.arca.contexto_fiscal_service import CONTEXTO_FISCAL_VERSION
 from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.arca.reconciliacion_contracts import ResultadoReconciliacion, SnapshotFiscalEsperado
 from services.arca.snapshot_fiscal_pdf_adapter import construir_datos_pdf_desde_snapshot
@@ -65,6 +66,138 @@ class FacturacionService:
                 if partes[0].isdigit() and partes[1].isdigit() and partes[2].isdigit():
                     return f"{partes[2]}-{partes[1]}-{partes[0]}"
         return None
+
+    @classmethod
+    def _construir_contexto_fiscal_base(
+        cls,
+        ambiente_normalizado,
+        emisor_fiscal,
+        emisor_facturacion_id,
+        cuit_emisor_normalizado,
+        punto_venta_num,
+        cliente,
+        condicion_iva,
+        documento_normalizado,
+        tipo_documento,
+        documento_receptor,
+        tipo_comprobante,
+        tipo_factura_normalizado,
+        fecha_comprobante,
+        periodo_desde,
+        periodo_hasta,
+        vencimiento_pago_arca,
+        moneda,
+        cotizacion,
+        neto_factura,
+        importe_iva_factura,
+        alicuota_iva,
+        total_factura_fiscal,
+        importe_exento_factura,
+        importe_tot_conc,
+        importe_tributos,
+        alicuotas_iva,
+        items_factura,
+    ):
+        """Construye el contexto fiscal BASE (sin numero planificado ni CAE/sin secretos)
+        con todos los datos ya resueltos, antes de invocar a HomologacionService."""
+        cuit_emisor_fiscal_normalizado = cls._normalizar_cuit(
+            emisor_fiscal[3] if len(emisor_fiscal) > 3 else ""
+        )
+        if cuit_emisor_fiscal_normalizado != cuit_emisor_normalizado:
+            return {
+                "ok": False,
+                "errores": [
+                    "contradiccion_cuit_emisor: el CUIT del emisor fiscal seleccionado no coincide "
+                    "con el CUIT utilizado en la operacion ARCA."
+                ],
+            }
+
+        ahora_iso = datetime.now().isoformat(timespec="seconds")
+        cuit_o_doc = str(documento_normalizado or "").strip() or "0"
+
+        emisor_contexto = {
+            "emisor_id": int(emisor_facturacion_id),
+            "emisor_fiscal_id": int(emisor_fiscal[0]),
+            "razon_social": str(emisor_fiscal[1] if len(emisor_fiscal) > 1 else "" or ""),
+            "nombre_fantasia": str(emisor_fiscal[2]).strip() if len(emisor_fiscal) > 2 and str(emisor_fiscal[2] or "").strip() else None,
+            "cuit": cuit_emisor_normalizado,
+            "condicion_iva": str(emisor_fiscal[4] if len(emisor_fiscal) > 4 else "" or ""),
+            "domicilio": str(emisor_fiscal[10]).strip() if len(emisor_fiscal) > 10 and str(emisor_fiscal[10] or "").strip() else None,
+            "ingresos_brutos": str(emisor_fiscal[11]).strip() if len(emisor_fiscal) > 11 and str(emisor_fiscal[11] or "").strip() else None,
+            "fecha_inicio_actividades": cls._a_fecha_iso_snapshot(emisor_fiscal[12] if len(emisor_fiscal) > 12 else ""),
+            "punto_venta_num": int(punto_venta_num),
+        }
+
+        receptor_contexto = {
+            "cliente_id": int(cliente[0]),
+            "razon_social": str(cliente[2] if len(cliente) > 2 else "" or ""),
+            "documento_visible": cuit_o_doc,
+            "condicion_iva": str(condicion_iva or ""),
+            "domicilio": cls._combinar_domicilio_cliente(cliente) or None,
+            "tipo_documento_receptor": int(tipo_documento),
+            "documento_receptor": int(documento_receptor),
+        }
+
+        comprobante_contexto = {
+            "fecha": cls._a_fecha_iso_snapshot(fecha_comprobante),
+            "fecha_arca": str(fecha_comprobante or ""),
+            "concepto": 1,
+            "concepto_descripcion": "Productos",
+            "punto_venta_num": int(punto_venta_num),
+            "tipo_comprobante_num": int(tipo_comprobante),
+            "tipo_comprobante_texto": str(tipo_factura_normalizado or ""),
+            "numero_comprobante_planificado": None,
+            "numero_textual_planificado": None,
+            "moneda": str(moneda or "PES"),
+            "cotizacion": Decimal(str(cotizacion or 1)),
+            "periodo_servicio_desde": cls._a_fecha_iso_snapshot(periodo_desde),
+            "periodo_servicio_hasta": cls._a_fecha_iso_snapshot(periodo_hasta),
+            "vencimiento_pago": cls._a_fecha_iso_snapshot(vencimiento_pago_arca),
+        }
+
+        importes_contexto = {
+            "total": Decimal(str(total_factura_fiscal)),
+            "neto": Decimal(str(neto_factura)),
+            "iva": Decimal(str(importe_iva_factura)),
+            "exento": Decimal(str(importe_exento_factura)),
+            "no_gravado": Decimal(str(importe_tot_conc)),
+            "tributos": Decimal(str(importe_tributos)),
+        }
+
+        iva_contexto = [
+            {
+                "id": int(item.get("id")),
+                "base_imponible": Decimal(str(item.get("base_imponible"))),
+                "importe": Decimal(str(item.get("importe"))),
+                "porcentaje": Decimal(str(alicuota_iva)),
+            }
+            for item in (alicuotas_iva or [])
+        ]
+
+        items_contexto = [
+            {
+                "concepto": (str(item.get("concepto")).strip() or None) if item.get("concepto") is not None else None,
+                "descripcion": str(item.get("descripcion") or ""),
+                "cantidad": Decimal(str(item.get("cantidad"))),
+                "precio_unitario": Decimal(str(item.get("precio_unitario"))),
+                "subtotal": Decimal(str(item.get("importe"))),
+            }
+            for item in (items_factura or [])
+        ]
+
+        contexto = {
+            "tipo": "contexto_fiscal_arca",
+            "version": CONTEXTO_FISCAL_VERSION,
+            "creado_en": ahora_iso,
+            "ambiente": ambiente_normalizado,
+            "emisor": emisor_contexto,
+            "receptor": receptor_contexto,
+            "comprobante": comprobante_contexto,
+            "importes": importes_contexto,
+            "iva": iva_contexto,
+            "items": items_contexto,
+        }
+        return {"ok": True, "contexto": contexto, "errores": []}
 
     @classmethod
     def _construir_snapshot_fiscal_cierre_normal(
@@ -646,6 +779,47 @@ class FacturacionService:
             resultado["errores"] = list(pre_guardado.get("errores") or ["Validación local fallida."])
             return resultado
 
+        fecha_comprobante_arca = datetime.now().strftime("%Y%m%d")
+        periodo_desde, periodo_hasta = cls._obtener_periodo_facturado(resumen_actual)
+        vencimiento_pago_arca = cls._a_fecha_arca_yyyymmdd(getattr(resumen_actual, "fecha_vencimiento", ""))
+
+        contexto_base_resultado = cls._construir_contexto_fiscal_base(
+            ambiente_normalizado=ambiente_normalizado,
+            emisor_fiscal=emisor_fiscal,
+            emisor_facturacion_id=emisor_facturacion_id,
+            cuit_emisor_normalizado=cuit_emisor_normalizado,
+            punto_venta_num=punto_venta_normalizado,
+            cliente=cliente,
+            condicion_iva=condicion_iva,
+            documento_normalizado=documento_normalizado,
+            tipo_documento=tipo_documento,
+            documento_receptor=documento_receptor,
+            tipo_comprobante=tipo_comprobante,
+            tipo_factura_normalizado=tipo_factura_normalizado,
+            fecha_comprobante=fecha_comprobante_arca,
+            periodo_desde=periodo_desde,
+            periodo_hasta=periodo_hasta,
+            vencimiento_pago_arca=vencimiento_pago_arca,
+            moneda="PES",
+            cotizacion=1,
+            neto_factura=neto_factura,
+            importe_iva_factura=importe_iva_factura,
+            alicuota_iva=alicuota_iva,
+            total_factura_fiscal=total_factura_fiscal,
+            importe_exento_factura=importe_exento_factura,
+            importe_tot_conc=importe_tot_conc,
+            importe_tributos=importe_tributos,
+            alicuotas_iva=alicuotas_iva,
+            items_factura=items_factura,
+        )
+        if not contexto_base_resultado.get("ok"):
+            resultado["etapa"] = "contexto_fiscal_base"
+            resultado["errores"] = list(
+                contexto_base_resultado.get("errores") or ["No se pudo construir el contexto fiscal base."]
+            )
+            return resultado
+        contexto_fiscal_base = contexto_base_resultado["contexto"]
+
         try:
             resultado_arca = cls.emitir_en_arca(
                 ruta_certificado=ruta_certificado,
@@ -671,6 +845,8 @@ class FacturacionService:
                     "emisor_fiscal_id": emisor_fiscal[0],
                     "emisor_id": emisor_facturacion_id,
                 },
+                contexto_fiscal_base=contexto_fiscal_base,
+                fecha_comprobante=fecha_comprobante_arca,
                 ambiente=ambiente_normalizado,
             )
             if not resultado_arca.get("ok"):
@@ -698,9 +874,6 @@ class FacturacionService:
                 resultado["etapa"] = "cierre_local"
                 resultado["errores"] = ["La emisión aprobada no tiene intento ARCA asociado."]
                 return resultado
-
-            periodo_desde, periodo_hasta = cls._obtener_periodo_facturado(resumen_actual)
-            vencimiento_pago_arca = cls._a_fecha_arca_yyyymmdd(getattr(resumen_actual, "fecha_vencimiento", ""))
 
             snapshot_resultado = cls._construir_snapshot_fiscal_cierre_normal(
                 emisor_fiscal=emisor_fiscal,
@@ -1086,6 +1259,8 @@ class FacturacionService:
         alicuotas_iva,
         concepto=1,
         datos_intento=None,
+        contexto_fiscal_base=None,
+        fecha_comprobante=None,
         ambiente=ambiente_arca.AMBIENTE_HOMOLOGACION,
     ):
         resultado = {
@@ -1111,8 +1286,12 @@ class FacturacionService:
             return resultado
         resultado["ambiente"] = ambiente_normalizado
 
-        fecha_comprobante = datetime.now().strftime("%Y%m%d")
+        fecha_comprobante = str(fecha_comprobante or "").strip() or datetime.now().strftime("%Y%m%d")
         resultado["fecha_comprobante"] = fecha_comprobante
+
+        if contexto_fiscal_base is None:
+            resultado["errores"] = ["Contexto fiscal base obligatorio antes de emitir en ARCA."]
+            return resultado
 
         emision = HomologacionService.emitir_comprobante_prueba(
             ruta_certificado=ruta_certificado,
@@ -1134,6 +1313,8 @@ class FacturacionService:
             importe_tributos=importe_tributos,
             alicuotas_iva=alicuotas_iva,
             datos_intento=datos_intento,
+            contexto_fiscal_base=contexto_fiscal_base,
+            exigir_contexto_fiscal=True,
             ambiente=ambiente_normalizado,
         )
         resultado["emision"] = emision

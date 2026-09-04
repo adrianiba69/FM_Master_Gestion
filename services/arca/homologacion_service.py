@@ -1,14 +1,44 @@
+import copy
 from pathlib import Path
 
 from services.arca.wsaa_login_service import WSAALoginService
 from services.arca.wsaa_service import WSAAService
 from services.arca.wsfe_service import WSFEService
+from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.preenvio_arca_service import PreenvioArcaService
 from services.arca.reconciliacion_contracts import SnapshotFiscalEsperado
 from services.arca import ambiente_arca
 
 
 class HomologacionService:
+
+    @staticmethod
+    def _formatear_numero_textual_planificado(punto_venta, numero_comprobante):
+        try:
+            pv = int(punto_venta or 0)
+        except (TypeError, ValueError):
+            pv = 0
+        try:
+            nro = int(numero_comprobante or 0)
+        except (TypeError, ValueError):
+            nro = 0
+        return f"{pv:05d}-{nro:08d}"
+
+    @classmethod
+    def _completar_contexto_fiscal_con_numero_planificado(cls, contexto_fiscal_base, numero_comprobante, punto_venta):
+        """Completa EN MEMORIA el contexto fiscal base con el numero planificado ya
+        obtenido via FECompUltimoAutorizado. No consulta maestros fiscales de nuevo
+        ni persiste nada; la persistencia queda a cargo de PreenvioArcaService."""
+        if not isinstance(contexto_fiscal_base, dict):
+            raise TypeError("contexto_fiscal_base debe ser un dict.")
+        contexto = copy.deepcopy(contexto_fiscal_base)
+        comprobante = dict(contexto.get("comprobante") or {})
+        comprobante["numero_comprobante_planificado"] = int(numero_comprobante)
+        comprobante["numero_textual_planificado"] = cls._formatear_numero_textual_planificado(
+            punto_venta, numero_comprobante
+        )
+        contexto["comprobante"] = comprobante
+        return contexto
 
     @staticmethod
     def consultar_comprobante_emitido(
@@ -127,6 +157,8 @@ class HomologacionService:
         fecha_servicio_hasta=None,
         fecha_vencimiento_pago=None,
         datos_intento=None,
+        contexto_fiscal_base=None,
+        exigir_contexto_fiscal=False,
         preenvio_service=None,
         solicitar_cae=None,
         ambiente=ambiente_arca.AMBIENTE_HOMOLOGACION,
@@ -173,6 +205,10 @@ class HomologacionService:
         # Guardia explicita: en Homologacion, el endpoint WSFE resuelto debe seguir siendo el de Homologacion.
         if ambiente_normalizado == ambiente_arca.AMBIENTE_HOMOLOGACION and "wswhomo.afip.gov.ar" not in wsfe_url:
             resultado["errores"].append("Endpoint WSFE invalido para Homologacion.")
+            return resultado
+
+        if exigir_contexto_fiscal and contexto_fiscal_base is None:
+            resultado["errores"].append("Contexto fiscal base obligatorio para la ruta de emision fiscal real.")
             return resultado
 
         ruta_tra = WSAAService.guardar_tra(
@@ -231,6 +267,23 @@ class HomologacionService:
 
         numero_comprobante = ultimo_numero + 1
         resultado["numero_comprobante"] = numero_comprobante
+
+        contexto_fiscal_completo = None
+        if contexto_fiscal_base is not None:
+            try:
+                contexto_fiscal_completo = HomologacionService._completar_contexto_fiscal_con_numero_planificado(
+                    contexto_fiscal_base, numero_comprobante, punto_venta
+                )
+            except TypeError as error:
+                resultado["errores"].append(f"Contexto fiscal base inválido: {error}")
+                return resultado
+
+            validacion_contexto = ContextoFiscalService.validar(contexto_fiscal_completo)
+            if not validacion_contexto.valido:
+                resultado["errores"].append(
+                    "Contexto fiscal inválido antes de emitir: " + "; ".join(validacion_contexto.errores)
+                )
+                return resultado
 
         armado = WSFEService.construir_solicitud_cae(
             cuit=cuit_emisor,
@@ -299,10 +352,11 @@ class HomologacionService:
 
         enviar = solicitar_cae or WSFEService.fe_cae_solicitar
         preenvio = preenvio_service or PreenvioArcaService()
-        protegido = preenvio.enviar_una_vez(
-            snapshot,
-            lambda: enviar(token=token, sign=sign, cuit=cuit_emisor, solicitud=solicitud, url=wsfe_url),
-        )
+        enviar_fecae = lambda: enviar(token=token, sign=sign, cuit=cuit_emisor, solicitud=solicitud, url=wsfe_url)
+        if contexto_fiscal_completo is not None:
+            protegido = preenvio.enviar_una_vez_con_contexto(snapshot, contexto_fiscal_completo, enviar_fecae)
+        else:
+            protegido = preenvio.enviar_una_vez(snapshot, enviar_fecae)
         resultado["intento_id"] = protegido.intento_id
         if not protegido.ok:
             resultado["errores"].extend(protegido.errores or ("No se pudo enviar FECAESolicitar.",))

@@ -13,6 +13,7 @@ from services.arca.contexto_fiscal_service import (
     CODIGO_CONTEXTO_VALIDO,
     ContextoFiscalService,
 )
+from services.arca.reconciliacion_contracts import EstadoIntentoEmision, SnapshotFiscalEsperado
 from services.intento_emision_arca_service import IntentoEmisionArcaService
 
 
@@ -107,6 +108,32 @@ class IntentoContextoFiscalPersistenceTest(unittest.TestCase):
     def contexto(self):
         return ContextoFiscalServiceTest().contexto()
 
+    def snapshot(self):
+        return SnapshotFiscalEsperado(
+            resumen_id=1,
+            cliente_id=2,
+            emisor_fiscal_id=3,
+            emisor_id=4,
+            cuit_emisor="20206871629",
+            punto_venta=5,
+            tipo_comprobante=1,
+            numero_planificado=123,
+            fecha_comprobante="20260828",
+            concepto=1,
+            tipo_documento=80,
+            documento_receptor=30712345678,
+            condicion_iva_receptor_id=1,
+            importe_total=Decimal("1210.00"),
+            importe_neto=Decimal("1000.00"),
+            importe_iva=Decimal("210.00"),
+            importe_exento=Decimal("0.00"),
+            importe_no_gravado=Decimal("0.00"),
+            importe_tributos=Decimal("0.00"),
+            moneda="PES",
+            cotizacion=Decimal("1.00"),
+            alicuotas_iva=({"Id": 5, "BaseImp": "1000.00", "Importe": "210.00"},),
+        )
+
     def insertar_intento(self, contexto=None):
         contexto_valores = (None, None, None)
         if contexto:
@@ -149,6 +176,82 @@ class IntentoContextoFiscalPersistenceTest(unittest.TestCase):
         finally:
             conexion.close()
         self.assertIsNotNone(self.service.obtener(self.insertar_intento()))
+
+    def test_crear_intento_con_contexto_nace_con_json_version_hash(self):
+        validacion = ContextoFiscalService.validar(self.contexto())
+        intento_id = self.service.crear_intento(
+            self.snapshot(),
+            EstadoIntentoEmision.PENDIENTE_RECONCILIAR,
+            contexto_fiscal_json=validacion.json_canonico,
+            contexto_fiscal_version=validacion.version,
+            contexto_fiscal_hash=validacion.hash_calculado,
+        )
+
+        intento = self.service.obtener(intento_id)
+        self.assertEqual(intento.contexto_fiscal_json, validacion.json_canonico)
+        self.assertEqual(intento.contexto_fiscal_version, validacion.version)
+        self.assertEqual(intento.contexto_fiscal_hash, validacion.hash_calculado)
+
+    def test_crear_intento_sin_contexto_historico_deja_campos_null(self):
+        intento_id = self.service.crear_intento(self.snapshot(), EstadoIntentoEmision.PENDIENTE_RECONCILIAR)
+
+        intento = self.service.obtener(intento_id)
+        self.assertIsNone(intento.contexto_fiscal_json)
+        self.assertIsNone(intento.contexto_fiscal_version)
+        self.assertIsNone(intento.contexto_fiscal_hash)
+
+    def test_crear_intento_rechaza_contexto_parcial(self):
+        validacion = ContextoFiscalService.validar(self.contexto())
+
+        with self.assertRaises(ValueError):
+            self.service.crear_intento(
+                self.snapshot(),
+                EstadoIntentoEmision.PENDIENTE_RECONCILIAR,
+                contexto_fiscal_json=validacion.json_canonico,
+            )
+
+        conexion = sqlite3.connect(self.ruta_db)
+        try:
+            cantidad = conexion.execute("SELECT COUNT(*) FROM intentos_emision_arca").fetchone()[0]
+        finally:
+            conexion.close()
+        self.assertEqual(cantidad, 0)
+
+    def test_crear_intento_con_contexto_rollback_no_deja_fila_parcial(self):
+        class ConexionCommitFallido:
+            def __init__(self, conexion):
+                self._conexion = conexion
+
+            def cursor(self):
+                return self._conexion.cursor()
+
+            def commit(self):
+                raise RuntimeError("fallo commit")
+
+            def rollback(self):
+                self._conexion.rollback()
+
+            def close(self):
+                self._conexion.close()
+
+        validacion = ContextoFiscalService.validar(self.contexto())
+        servicio = IntentoEmisionArcaService(lambda: ConexionCommitFallido(sqlite3.connect(self.ruta_db)))
+
+        with self.assertRaises(RuntimeError):
+            servicio.crear_intento(
+                self.snapshot(),
+                EstadoIntentoEmision.PENDIENTE_RECONCILIAR,
+                contexto_fiscal_json=validacion.json_canonico,
+                contexto_fiscal_version=validacion.version,
+                contexto_fiscal_hash=validacion.hash_calculado,
+            )
+
+        conexion = sqlite3.connect(self.ruta_db)
+        try:
+            cantidad = conexion.execute("SELECT COUNT(*) FROM intentos_emision_arca").fetchone()[0]
+        finally:
+            conexion.close()
+        self.assertEqual(cantidad, 0)
 
     def test_guardado_idempotente_diferente_y_corrupcion(self):
         contexto = self.contexto()

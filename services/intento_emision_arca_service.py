@@ -110,8 +110,37 @@ class IntentoEmisionArcaService:
             cls._serializar_alicuotas(snapshot.alicuotas_iva), estado, ahora, ahora,
         )
 
-    def crear_intento(self, snapshot, estado=EstadoIntentoEmision.PENDIENTE_RECONCILIAR):
+    @staticmethod
+    def _parametros_contexto_fiscal(contexto_fiscal_json, contexto_fiscal_version, contexto_fiscal_hash):
+        valores = (contexto_fiscal_json, contexto_fiscal_version, contexto_fiscal_hash)
+        if all(valor is None for valor in valores):
+            return (None, None, None)
+        if any(valor is None for valor in valores):
+            raise ValueError("El contexto fiscal del intento debe informarse completo.")
+
+        integridad = ContextoFiscalService.validar_integridad(
+            contexto_fiscal_json,
+            contexto_fiscal_version,
+            contexto_fiscal_hash,
+        )
+        if not integridad.valido:
+            raise ValueError("Contexto fiscal inválido para crear intento: " + "; ".join(integridad.errores))
+        return (integridad.json_canonico, integridad.version, integridad.hash_calculado)
+
+    def crear_intento(
+        self,
+        snapshot,
+        estado=EstadoIntentoEmision.PENDIENTE_RECONCILIAR,
+        contexto_fiscal_json=None,
+        contexto_fiscal_version=None,
+        contexto_fiscal_hash=None,
+    ):
         estado_normalizado = self._validar_estado(estado)
+        contexto_fiscal_valores = self._parametros_contexto_fiscal(
+            contexto_fiscal_json,
+            contexto_fiscal_version,
+            contexto_fiscal_hash,
+        )
         ahora = self._ahora()
         conexion = self._conexion_factory()
         try:
@@ -124,10 +153,11 @@ class IntentoEmisionArcaService:
                     concepto, tipo_documento, documento_receptor, condicion_iva_receptor_id,
                     importe_total, importe_neto, importe_iva, importe_exento,
                     importe_no_gravado, importe_tributos, moneda, cotizacion, alicuotas_iva,
-                    estado, creado_en, actualizado_en
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    estado, creado_en, actualizado_en,
+                    contexto_fiscal_json, contexto_fiscal_version, contexto_fiscal_hash
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
-                self._parametros_snapshot(snapshot, estado_normalizado, ahora),
+                self._parametros_snapshot(snapshot, estado_normalizado, ahora) + contexto_fiscal_valores,
             )
             intento_id = cursor.lastrowid
             conexion.commit()
