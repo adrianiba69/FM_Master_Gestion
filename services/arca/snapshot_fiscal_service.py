@@ -13,6 +13,8 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.arca.contexto_fiscal_service import ContextoFiscalService
+
 
 SNAPSHOT_VERSION = 1
 CODIGO_VALIDO = "VALIDO"
@@ -87,6 +89,7 @@ _AUTORIZACION_KEYS = (
     "vencimiento_cae",
     "vencimiento_cae_arca",
 )
+_ORIGENES_AUTORIZACION = ("fecae_solicitar", "fe_comp_consultar")
 
 
 class SnapshotFiscalError(ValueError):
@@ -99,6 +102,174 @@ class ResultadoIntegridadSnapshot:
     codigo: str
     errores: Tuple[str, ...] = ()
     snapshot: Optional[Dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class AutorizacionArcaNormalizada:
+    resultado: str
+    cae: str
+    vencimiento_cae_arca: str
+    numero_comprobante: int
+    fecha_comprobante_arca: str
+    punto_venta: int
+    tipo_comprobante: int
+    cuit_emisor: str
+    doc_tipo: int
+    doc_nro: int
+    importe_total: Decimal
+    importe_neto: Decimal
+    importe_iva: Decimal
+    moneda: str
+    cotizacion: Decimal
+    condicion_iva_receptor_id: Optional[int]
+    origen: str
+
+
+@dataclass(frozen=True)
+class ResultadoConstruccionSnapshotFinal:
+    ok: bool
+    snapshot: Dict[str, Any]
+    snapshot_json: str
+    snapshot_version: int
+    snapshot_hash: str
+
+
+def normalizar_autorizacion_arca(autorizacion: Any) -> AutorizacionArcaNormalizada:
+    if isinstance(autorizacion, AutorizacionArcaNormalizada):
+        return autorizacion
+    _requerir_dict(autorizacion, "autorizacion_arca")
+    resultado = str(autorizacion.get("resultado") or "").strip().upper()
+    if resultado == "A":
+        resultado = "AUTORIZADO"
+    if resultado != "AUTORIZADO":
+        raise SnapshotFiscalError("autorizacion_arca.resultado debe ser AUTORIZADO")
+
+    condicion = autorizacion.get("condicion_iva_receptor_id")
+    condicion_normalizada = None
+    if condicion is not None and str(condicion).strip() != "":
+        condicion_normalizada = _normalizar_int(condicion, "autorizacion_arca.condicion_iva_receptor_id", minimo=0)
+
+    return AutorizacionArcaNormalizada(
+        resultado=resultado,
+        cae=_normalizar_cae(autorizacion.get("cae")),
+        vencimiento_cae_arca=_normalizar_fecha_arca(
+            _fecha_a_arca(
+                autorizacion.get("vencimiento_cae_arca") or autorizacion.get("vencimiento_cae"),
+                "autorizacion_arca.vencimiento_cae_arca",
+            ),
+            "autorizacion_arca.vencimiento_cae_arca",
+        ),
+        numero_comprobante=_normalizar_int(
+            autorizacion.get("numero_comprobante"), "autorizacion_arca.numero_comprobante", minimo=1
+        ),
+        fecha_comprobante_arca=_normalizar_fecha_arca(
+            _fecha_a_arca(
+                autorizacion.get("fecha_comprobante_arca") or autorizacion.get("fecha_comprobante"),
+                "autorizacion_arca.fecha_comprobante_arca",
+            ),
+            "autorizacion_arca.fecha_comprobante_arca",
+        ),
+        punto_venta=_normalizar_int(autorizacion.get("punto_venta"), "autorizacion_arca.punto_venta", minimo=1),
+        tipo_comprobante=_normalizar_int(
+            autorizacion.get("tipo_comprobante"), "autorizacion_arca.tipo_comprobante", minimo=1
+        ),
+        cuit_emisor=_normalizar_cuit(autorizacion.get("cuit_emisor"), "autorizacion_arca.cuit_emisor"),
+        doc_tipo=_normalizar_int(autorizacion.get("doc_tipo"), "autorizacion_arca.doc_tipo", minimo=0),
+        doc_nro=_normalizar_int(autorizacion.get("doc_nro"), "autorizacion_arca.doc_nro", minimo=0),
+        importe_total=_decimal_coherencia(autorizacion.get("importe_total"), "autorizacion_arca.importe_total", _DECIMAL_MONETARIO),
+        importe_neto=_decimal_coherencia(autorizacion.get("importe_neto"), "autorizacion_arca.importe_neto", _DECIMAL_MONETARIO),
+        importe_iva=_decimal_coherencia(autorizacion.get("importe_iva"), "autorizacion_arca.importe_iva", _DECIMAL_MONETARIO),
+        moneda=_normalizar_str(autorizacion.get("moneda"), "autorizacion_arca.moneda"),
+        cotizacion=_decimal_coherencia(autorizacion.get("cotizacion"), "autorizacion_arca.cotizacion", _DECIMAL_COTIZACION),
+        condicion_iva_receptor_id=condicion_normalizada,
+        origen=_normalizar_origen_autorizacion(autorizacion.get("origen")),
+    )
+
+
+def construir_snapshot_final_desde_contexto(
+    contexto_fiscal: Dict[str, Any],
+    autorizacion_arca: Any,
+    fuente: str,
+    creado_en: Optional[str] = None,
+) -> ResultadoConstruccionSnapshotFinal:
+    validacion_contexto = ContextoFiscalService.validar(contexto_fiscal)
+    if not validacion_contexto.valido:
+        raise SnapshotFiscalError("contexto_fiscal invalido: " + "; ".join(validacion_contexto.errores))
+    contexto = validacion_contexto.contexto
+    autorizacion = normalizar_autorizacion_arca(autorizacion_arca)
+    _validar_coherencia_contexto_autorizacion(contexto, autorizacion)
+
+    comprobante_contexto = contexto["comprobante"]
+    numero_planificado = _normalizar_int(
+        comprobante_contexto.get("numero_comprobante_planificado"),
+        "contexto_fiscal.comprobante.numero_comprobante_planificado",
+        minimo=1,
+    )
+    numero_textual = _normalizar_str(
+        comprobante_contexto.get("numero_textual_planificado"),
+        "contexto_fiscal.comprobante.numero_textual_planificado",
+    )
+    vencimiento_cae_arca = autorizacion.vencimiento_cae_arca
+    ahora = creado_en or datetime.now().isoformat(timespec="seconds")
+
+    snapshot = construir_snapshot_fiscal_v1(
+        fuente=fuente,
+        creado_en=ahora,
+        ambiente=contexto["ambiente"],
+        emisor=contexto["emisor"],
+        receptor=contexto["receptor"],
+        comprobante={
+            "fecha": comprobante_contexto.get("fecha"),
+            "fecha_arca": _fecha_a_arca(
+                comprobante_contexto.get("fecha_arca") or comprobante_contexto.get("fecha"),
+                "contexto_fiscal.comprobante.fecha_arca",
+            ),
+            "concepto": comprobante_contexto.get("concepto"),
+            "concepto_descripcion": comprobante_contexto.get("concepto_descripcion"),
+            "punto_venta_num": comprobante_contexto.get("punto_venta_num"),
+            "tipo_comprobante_num": comprobante_contexto.get("tipo_comprobante_num"),
+            "tipo_comprobante_texto": comprobante_contexto.get("tipo_comprobante_texto"),
+            "numero_comprobante_num": numero_planificado,
+            "numero_textual": numero_textual,
+            "periodo_servicio_desde": comprobante_contexto.get("periodo_servicio_desde"),
+            "periodo_servicio_hasta": comprobante_contexto.get("periodo_servicio_hasta"),
+            "vencimiento_pago": comprobante_contexto.get("vencimiento_pago"),
+            "moneda": comprobante_contexto.get("moneda"),
+            "cotizacion": comprobante_contexto.get("cotizacion"),
+        },
+        importes=contexto["importes"],
+        iva=contexto["iva"],
+        items=contexto["items"],
+        autorizacion={
+            "cae": autorizacion.cae,
+            "vencimiento_cae": _fecha_arca_a_iso(vencimiento_cae_arca, "autorizacion_arca.vencimiento_cae_arca"),
+            "vencimiento_cae_arca": vencimiento_cae_arca,
+            "tipo_cod_aut": "E",
+            "resultado": autorizacion.resultado,
+            "cerrado_en": ahora,
+        },
+    )
+    json_text = serializar_snapshot_fiscal(snapshot)
+    snapshot_hash = calcular_hash_snapshot(json_text)
+    return ResultadoConstruccionSnapshotFinal(True, snapshot, json_text, snapshot["version"], snapshot_hash)
+
+
+def construir_snapshot_final_desde_contexto_persistido(
+    contexto_fiscal_json: str,
+    contexto_fiscal_version: int,
+    contexto_fiscal_hash: str,
+    autorizacion_arca: Any,
+    fuente: str,
+    creado_en: Optional[str] = None,
+) -> ResultadoConstruccionSnapshotFinal:
+    integridad = ContextoFiscalService.validar_integridad(
+        contexto_fiscal_json,
+        contexto_fiscal_version,
+        contexto_fiscal_hash,
+    )
+    if not integridad.valido:
+        raise SnapshotFiscalError("contexto_fiscal persistido invalido: " + "; ".join(integridad.errores))
+    return construir_snapshot_final_desde_contexto(integridad.contexto, autorizacion_arca, fuente, creado_en)
 
 
 def construir_snapshot_fiscal_v1(
@@ -370,7 +541,9 @@ def _normalizar_int(valor: Any, campo: str, minimo: int) -> int:
     return numero
 
 
-def _normalizar_decimal(valor: Any, campo: str, quantum: Decimal) -> str:
+def _decimal_coherencia(valor: Any, campo: str, quantum: Decimal) -> Decimal:
+    """Parsea con la misma estrictura del snapshot y devuelve un Decimal
+    cuantizado, para comparaciones de coherencia contexto vs ARCA."""
     if isinstance(valor, float):
         raise SnapshotFiscalError(f"{campo} no acepta float")
     if valor is None or isinstance(valor, bool):
@@ -383,7 +556,11 @@ def _normalizar_decimal(valor: Any, campo: str, quantum: Decimal) -> str:
         raise SnapshotFiscalError(f"{campo} decimal invalido")
     if decimal < 0:
         raise SnapshotFiscalError(f"{campo} no puede ser negativo")
-    return format(decimal.quantize(quantum, rounding=ROUND_HALF_UP), "f")
+    return decimal.quantize(quantum, rounding=ROUND_HALF_UP)
+
+
+def _normalizar_decimal(valor: Any, campo: str, quantum: Decimal) -> str:
+    return format(_decimal_coherencia(valor, campo, quantum), "f")
 
 
 def _normalizar_fecha(valor: Any, campo: str) -> str:
@@ -412,6 +589,21 @@ def _normalizar_fecha_arca(valor: Any, campo: str) -> str:
     except ValueError as error:
         raise SnapshotFiscalError(f"{campo} fecha invalida") from error
     return texto
+
+
+def _fecha_a_arca(valor: Any, campo: str = "fecha") -> str:
+    """Convierte una fecha ISO (YYYY-MM-DD) o ARCA (YYYYMMDD) a YYYYMMDD."""
+    texto = str(valor or "").strip()
+    if re.fullmatch(r"\d{8}", texto):
+        return _normalizar_fecha_arca(texto, campo)
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", texto):
+        return _normalizar_fecha(texto, campo).replace("-", "")
+    raise SnapshotFiscalError(f"{campo} debe tener formato YYYY-MM-DD o YYYYMMDD")
+
+
+def _fecha_arca_a_iso(valor: Any, campo: str) -> str:
+    texto = _normalizar_fecha_arca(valor, campo)
+    return f"{texto[0:4]}-{texto[4:6]}-{texto[6:8]}"
 
 
 def _normalizar_datetime(valor: Any, campo: str) -> str:
@@ -443,6 +635,15 @@ def _normalizar_tipo_cod_aut(valor: Any) -> str:
     texto = str(valor or "").strip().upper()
     if texto != "E":
         raise SnapshotFiscalError("autorizacion.tipo_cod_aut debe ser E")
+    return texto
+
+
+def _normalizar_origen_autorizacion(valor: Any) -> str:
+    texto = str(valor or "").strip().lower()
+    if texto not in _ORIGENES_AUTORIZACION:
+        raise SnapshotFiscalError(
+            "autorizacion_arca.origen invalido (esperado: fecae_solicitar o fe_comp_consultar)"
+        )
     return texto
 
 
@@ -580,6 +781,115 @@ def _validar_coherencia(snapshot: Dict[str, Any]) -> None:
         raise SnapshotFiscalError("fecha y fecha_arca no coinciden")
     if autorizacion["vencimiento_cae"].replace("-", "") != autorizacion["vencimiento_cae_arca"]:
         raise SnapshotFiscalError("vencimiento_cae y vencimiento_cae_arca no coinciden")
+
+
+def _validar_coherencia_contexto_autorizacion(
+    contexto: Dict[str, Any], autorizacion: AutorizacionArcaNormalizada
+) -> None:
+    """Verifica que la autorizacion ARCA no contradiga el contexto fiscal v1.
+
+    Los valores documentales/fiscales congelados en el contexto mandan: los datos
+    ARCA solo validan coherencia (salvo CAE y vencimiento CAE, que si se incorporan
+    al snapshot). Ante cualquier contradiccion se aborta sin producir snapshot.
+
+    condicion_iva_receptor_id solo se compara cuando ambos lados la informan: el
+    valor documental congelado en contexto es el texto receptor.condicion_iva y
+    no se reemplaza desde maestros ni desde ARCA.
+    """
+    emisor = contexto.get("emisor") or {}
+    receptor = contexto.get("receptor") or {}
+    comprobante = contexto.get("comprobante") or {}
+    importes = contexto.get("importes") or {}
+
+    def _contradiccion(campo: str, esperado: Any, actual: Any) -> SnapshotFiscalError:
+        return SnapshotFiscalError(
+            f"coherencia_contexto_arca: {campo} contradictorio (contexto={esperado!r}, arca={actual!r})"
+        )
+
+    cuit_contexto = str(emisor.get("cuit") or "").strip()
+    if cuit_contexto != autorizacion.cuit_emisor:
+        raise _contradiccion("cuit_emisor", cuit_contexto, autorizacion.cuit_emisor)
+
+    punto_venta_contexto = _normalizar_int(
+        comprobante.get("punto_venta_num"), "contexto_fiscal.comprobante.punto_venta_num", minimo=1
+    )
+    if punto_venta_contexto != autorizacion.punto_venta:
+        raise _contradiccion("punto_venta", punto_venta_contexto, autorizacion.punto_venta)
+
+    tipo_contexto = _normalizar_int(
+        comprobante.get("tipo_comprobante_num"), "contexto_fiscal.comprobante.tipo_comprobante_num", minimo=1
+    )
+    if tipo_contexto != autorizacion.tipo_comprobante:
+        raise _contradiccion("tipo_comprobante", tipo_contexto, autorizacion.tipo_comprobante)
+
+    numero_contexto = _normalizar_int(
+        comprobante.get("numero_comprobante_planificado"),
+        "contexto_fiscal.comprobante.numero_comprobante_planificado",
+        minimo=1,
+    )
+    if numero_contexto != autorizacion.numero_comprobante:
+        raise _contradiccion("numero_comprobante", numero_contexto, autorizacion.numero_comprobante)
+
+    fecha_contexto = _fecha_a_arca(
+        comprobante.get("fecha_arca") or comprobante.get("fecha"),
+        "contexto_fiscal.comprobante.fecha",
+    )
+    if fecha_contexto != autorizacion.fecha_comprobante_arca:
+        raise _contradiccion("fecha_comprobante", fecha_contexto, autorizacion.fecha_comprobante_arca)
+
+    doc_tipo_contexto = _normalizar_int(
+        receptor.get("tipo_documento_receptor"), "contexto_fiscal.receptor.tipo_documento_receptor", minimo=0
+    )
+    if doc_tipo_contexto != autorizacion.doc_tipo:
+        raise _contradiccion("doc_tipo", doc_tipo_contexto, autorizacion.doc_tipo)
+
+    doc_nro_contexto = _normalizar_int(
+        receptor.get("documento_receptor"), "contexto_fiscal.receptor.documento_receptor", minimo=0
+    )
+    if doc_nro_contexto != autorizacion.doc_nro:
+        raise _contradiccion("doc_nro", doc_nro_contexto, autorizacion.doc_nro)
+
+    total_contexto = _decimal_coherencia(
+        importes.get("total"), "contexto_fiscal.importes.total", _DECIMAL_MONETARIO
+    )
+    if total_contexto != autorizacion.importe_total:
+        raise _contradiccion("importe_total", str(total_contexto), str(autorizacion.importe_total))
+
+    neto_contexto = _decimal_coherencia(
+        importes.get("neto"), "contexto_fiscal.importes.neto", _DECIMAL_MONETARIO
+    )
+    if neto_contexto != autorizacion.importe_neto:
+        raise _contradiccion("importe_neto", str(neto_contexto), str(autorizacion.importe_neto))
+
+    iva_contexto = _decimal_coherencia(
+        importes.get("iva"), "contexto_fiscal.importes.iva", _DECIMAL_MONETARIO
+    )
+    if iva_contexto != autorizacion.importe_iva:
+        raise _contradiccion("importe_iva", str(iva_contexto), str(autorizacion.importe_iva))
+
+    moneda_contexto = str(comprobante.get("moneda") or "").strip().upper()
+    if moneda_contexto != autorizacion.moneda.upper():
+        raise _contradiccion("moneda", moneda_contexto, autorizacion.moneda)
+
+    cotizacion_contexto = _decimal_coherencia(
+        comprobante.get("cotizacion"), "contexto_fiscal.comprobante.cotizacion", _DECIMAL_COTIZACION
+    )
+    if cotizacion_contexto != autorizacion.cotizacion:
+        raise _contradiccion("cotizacion", str(cotizacion_contexto), str(autorizacion.cotizacion))
+
+    condicion_contexto = receptor.get("condicion_iva_receptor_id")
+    if (
+        condicion_contexto is not None
+        and str(condicion_contexto).strip() != ""
+        and autorizacion.condicion_iva_receptor_id is not None
+    ):
+        condicion_esperada = _normalizar_int(
+            condicion_contexto, "contexto_fiscal.receptor.condicion_iva_receptor_id", minimo=0
+        )
+        if condicion_esperada != autorizacion.condicion_iva_receptor_id:
+            raise _contradiccion(
+                "condicion_iva_receptor_id", condicion_esperada, autorizacion.condicion_iva_receptor_id
+            )
 
 
 def _validar_sin_float(valor: Any, ruta: str, errores: List[str]) -> None:
