@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.reconciliacion_contracts import ResultadoReconciliacion
 from services.facturacion_service import FacturacionService
+from tests._cierre_contexto_helper import resultado_snapshot_cierre_para_test
 
 
 class CierreIntentoExitosoTest(unittest.TestCase):
@@ -83,6 +84,11 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch.object(FacturacionService, "registrar_emision_aprobada", return_value=registro),
             patch.object(FacturacionService, "generar_pdf_fiscal", side_effect=lambda **kwargs: orden.append("pdf") or {"ok": False, "errores": ["pdf"]}),
             patch("services.facturacion_service.CierreLocalArcaService") as cierre_cls,
+            patch.object(
+                FacturacionService,
+                "_construir_snapshot_desde_contexto_persistido",
+                return_value=resultado_snapshot_cierre_para_test(),
+            ),
         ):
             cierre_cls.return_value.cerrar_emision_confirmada.side_effect = cierre
             resultado = self._emitir_desde_resumen_minimo()
@@ -96,6 +102,11 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch.object(FacturacionService, "emitir_en_arca", return_value=self._resultado_arca()),
             patch("services.facturacion_service.CierreLocalArcaService") as cierre_cls,
             patch.object(FacturacionService, "generar_pdf_fiscal") as pdf,
+            patch.object(
+                FacturacionService,
+                "_construir_snapshot_desde_contexto_persistido",
+                return_value=resultado_snapshot_cierre_para_test(),
+            ),
         ):
             cierre_cls.return_value.cerrar_emision_confirmada.return_value = type("Cierre", (), {"ok": False, "mensaje": "cierre"})()
             resultado = self._emitir_desde_resumen_minimo()

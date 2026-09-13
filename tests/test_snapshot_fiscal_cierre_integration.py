@@ -27,6 +27,7 @@ from services.arca.snapshot_fiscal_service import (
     validar_integridad_snapshot,
 )
 from services.facturacion_service import FacturacionService
+from tests._cierre_contexto_helper import resultado_snapshot_cierre_para_test
 
 
 def _emisor_fiscal(cuit="20206871629", ambiente="Homologación"):
@@ -540,7 +541,7 @@ class CierreLocalConSnapshotTest(unittest.TestCase):
 class SnapshotFiscalFlujoCompletoTest(unittest.TestCase):
     """PDF sigue fuera de la transaccion y no afecta el snapshot ya persistido."""
 
-    def _emitir(self, pdf_ok=True, cliente=None, cierre_side_effect=None, ambiente="Homologación"):
+    def _emitir(self, pdf_ok=True, cliente=None, cierre_side_effect=None, ambiente="Homologación", snapshot_resultado=None):
         orden = []
         self.snapshot_cierre = None
         self.emitir_en_arca_mock = None
@@ -600,6 +601,15 @@ class SnapshotFiscalFlujoCompletoTest(unittest.TestCase):
             patch.object(FacturacionService, "emitir_en_arca", return_value=resultado_arca) as emitir_en_arca_mock,
             patch("services.facturacion_service.CierreLocalArcaService") as cierre_cls,
             patch.object(FacturacionService, "generar_pdf_fiscal", side_effect=lambda **kwargs: orden.append("pdf") or pdf_resultado),
+            patch.object(
+                FacturacionService,
+                "_construir_snapshot_desde_contexto_persistido",
+                side_effect=(
+                    (lambda **kwargs: snapshot_resultado)
+                    if snapshot_resultado is not None
+                    else (lambda **kwargs: resultado_snapshot_cierre_para_test(ambiente=ambiente_esperado))
+                ),
+            ),
         ):
             self.emitir_en_arca_mock = emitir_en_arca_mock
             cierre_cls.return_value.cerrar_emision_confirmada.side_effect = cierre_mock
@@ -709,10 +719,8 @@ class SnapshotFiscalFlujoCompletoTest(unittest.TestCase):
         self.assertEqual(resultado["factura_id"], 99)
 
     def test_snapshot_invalido_bloquea_cierre_sin_llamar_cierre_local(self):
-        cliente_sin_razon_social = (
-            20, "", "", "", "", "Calle 1", "Ciudad", "", "", "", "20222222221", "Responsable Inscripto",
-        )
-        resultado, orden, cierre_cls = self._emitir(cliente=cliente_sin_razon_social)
+        snapshot_invalido = {"ok": False, "errores": ["snapshot_fiscal_desde_contexto: coherencia_contexto_arca"]}
+        resultado, orden, cierre_cls = self._emitir(snapshot_resultado=snapshot_invalido)
         self.assertEqual(resultado["etapa"], "snapshot_fiscal")
         self.assertEqual(orden, [])
         cierre_cls.return_value.cerrar_emision_confirmada.assert_not_called()

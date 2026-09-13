@@ -16,6 +16,7 @@ from services.arca.snapshot_fiscal_pdf_adapter import (
 )
 from services.arca.snapshot_fiscal_service import construir_snapshot_fiscal_v1
 from services.facturacion_service import FacturacionService
+from tests._cierre_contexto_helper import resultado_snapshot_cierre_para_test
 
 
 def _emisor_fiscal(cuit="20206871629", ambiente="Homologación"):
@@ -378,6 +379,11 @@ class EmitirDesdeResumenIntegraSnapshotEnPdfTest(unittest.TestCase):
             patch.object(FacturacionService, "emitir_en_arca", return_value=resultado_arca),
             patch("services.facturacion_service.CierreLocalArcaService") as cierre_cls,
             patch.object(FacturacionService, "generar_pdf_fiscal", side_effect=pdf_side_effect),
+            patch.object(
+                FacturacionService,
+                "_construir_snapshot_desde_contexto_persistido",
+                return_value=resultado_snapshot_cierre_para_test(),
+            ),
         ):
             cierre_cls.return_value.cerrar_emision_confirmada.side_effect = cierre_mock
             resultado = FacturacionService.emitir_desde_resumen(

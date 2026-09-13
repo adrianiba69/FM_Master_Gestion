@@ -15,6 +15,7 @@ from services.arca.snapshot_fiscal_pdf_adapter import construir_datos_pdf_desde_
 from services.arca.snapshot_fiscal_service import (
     SnapshotFiscalError,
     calcular_hash_snapshot,
+    construir_snapshot_final_desde_contexto_persistido,
     construir_snapshot_fiscal_v1,
     serializar_snapshot_fiscal,
 )
@@ -359,6 +360,123 @@ class FacturacionService:
             "snapshot_json": json_text,
             "snapshot_version": snapshot["version"],
             "snapshot_hash": snapshot_hash,
+        }
+
+    @staticmethod
+    def _autorizacion_arca_desde_consulta(
+        consulta,
+        cuit_emisor_normalizado,
+        punto_venta_num,
+        tipo_comprobante,
+        numero_comprobante,
+        fecha_comprobante,
+        cae,
+        vencimiento_cae,
+        tipo_documento,
+        documento_receptor,
+        total_factura_fiscal,
+        neto_factura,
+        importe_iva_factura,
+        condicion_iva_receptor_id,
+    ):
+        """Construye la autorizacion desde FECompConsultar sin falsear coherencia."""
+        consulta = consulta if isinstance(consulta, dict) else {}
+
+        def _importe(valor):
+            if valor in (None, ""):
+                return None
+            return str(Decimal(str(valor)))
+
+        condicion = consulta.get("condicion_iva_receptor_id")
+        if condicion in (None, "", 0):
+            condicion = None
+
+        return {
+            "resultado": consulta.get("resultado"),
+            "cae": consulta.get("cae") or cae,
+            "vencimiento_cae_arca": consulta.get("vencimiento_cae") or vencimiento_cae,
+            "numero_comprobante": consulta.get("numero_comprobante"),
+            "fecha_comprobante_arca": consulta.get("fecha_comprobante"),
+            "punto_venta": consulta.get("punto_venta"),
+            "tipo_comprobante": consulta.get("tipo_comprobante"),
+            "cuit_emisor": consulta.get("cuit_emisor"),
+            "doc_tipo": consulta.get("doc_tipo"),
+            "doc_nro": consulta.get("doc_nro"),
+            "importe_total": _importe(consulta.get("importe_total")),
+            "importe_neto": _importe(consulta.get("importe_neto")),
+            "importe_iva": _importe(consulta.get("importe_iva")),
+            "moneda": consulta.get("moneda"),
+            "cotizacion": _importe(consulta.get("cotizacion")),
+            "condicion_iva_receptor_id": condicion,
+            "origen": "fe_comp_consultar",
+        }
+
+    @classmethod
+    def _construir_snapshot_desde_contexto_persistido(
+        cls,
+        intento_id,
+        consulta,
+        cuit_emisor_normalizado,
+        punto_venta_num,
+        tipo_comprobante,
+        numero_comprobante,
+        fecha_comprobante,
+        cae,
+        vencimiento_cae,
+        tipo_documento,
+        documento_receptor,
+        total_factura_fiscal,
+        neto_factura,
+        importe_iva_factura,
+        condicion_iva_receptor_id,
+    ):
+        """Bloque 2B.2: relee el contexto fiscal PERSISTIDO del intento y construye
+        el snapshot final v1 con el constructor puro de 2B.1. Si el contexto falta
+        o es invalido NO hay fallback a maestros: se detiene de forma segura."""
+        try:
+            intento = IntentoEmisionArcaService().obtener(intento_id)
+        except Exception as error:
+            return {"ok": False, "errores": [f"contexto_fiscal_no_releido: {error}"]}
+        if intento is None:
+            return {"ok": False, "errores": [f"contexto_fiscal_ausente: intento {intento_id} inexistente"]}
+        if not intento.contexto_fiscal_json:
+            return {
+                "ok": False,
+                "errores": [f"contexto_fiscal_ausente: intento {intento_id} sin contexto fiscal persistido"],
+            }
+
+        autorizacion = cls._autorizacion_arca_desde_consulta(
+            consulta,
+            cuit_emisor_normalizado,
+            punto_venta_num,
+            tipo_comprobante,
+            numero_comprobante,
+            fecha_comprobante,
+            cae,
+            vencimiento_cae,
+            tipo_documento,
+            documento_receptor,
+            total_factura_fiscal,
+            neto_factura,
+            importe_iva_factura,
+            condicion_iva_receptor_id,
+        )
+        try:
+            construido = construir_snapshot_final_desde_contexto_persistido(
+                intento.contexto_fiscal_json,
+                intento.contexto_fiscal_version,
+                intento.contexto_fiscal_hash,
+                autorizacion,
+                "cierre_normal",
+            )
+        except SnapshotFiscalError as error:
+            return {"ok": False, "errores": [f"snapshot_fiscal_desde_contexto: {error}"]}
+        return {
+            "ok": True,
+            "snapshot": construido.snapshot,
+            "snapshot_json": construido.snapshot_json,
+            "snapshot_version": construido.snapshot_version,
+            "snapshot_hash": construido.snapshot_hash,
         }
 
     @staticmethod
@@ -875,38 +993,22 @@ class FacturacionService:
                 resultado["errores"] = ["La emisión aprobada no tiene intento ARCA asociado."]
                 return resultado
 
-            snapshot_resultado = cls._construir_snapshot_fiscal_cierre_normal(
-                emisor_fiscal=emisor_fiscal,
-                emisor_facturacion_id=emisor_facturacion_id,
+            snapshot_resultado = cls._construir_snapshot_desde_contexto_persistido(
+                intento_id=intento_id,
+                consulta=consulta,
                 cuit_emisor_normalizado=cuit_emisor_normalizado,
                 punto_venta_num=punto_venta_num,
-                cliente=cliente,
-                condicion_iva=condicion_iva,
-                documento_normalizado=documento_normalizado,
-                tipo_documento=tipo_documento,
-                documento_receptor=documento_receptor,
                 tipo_comprobante=tipo_comprobante,
-                tipo_factura_normalizado=tipo_factura_normalizado,
                 numero_comprobante=numero_comprobante,
-                numero_factura=numero_factura,
                 fecha_comprobante=fecha_comprobante,
-                periodo_desde=periodo_desde,
-                periodo_hasta=periodo_hasta,
-                vencimiento_pago_arca=vencimiento_pago_arca,
-                moneda=str(consulta.get("moneda") or "PES"),
-                cotizacion=consulta.get("cotizacion") or 1,
-                neto_factura=neto_factura,
-                importe_iva_factura=importe_iva_factura,
-                alicuota_iva=alicuota_iva,
-                total_factura_fiscal=total_factura_fiscal,
-                importe_exento_factura=importe_exento_factura,
-                importe_tot_conc=importe_tot_conc,
-                importe_tributos=importe_tributos,
-                alicuotas_iva=alicuotas_iva,
-                items_factura=items_factura,
                 cae=cae,
                 vencimiento_cae=vencimiento_cae,
-                ambiente_normalizado=ambiente_normalizado,
+                tipo_documento=tipo_documento,
+                documento_receptor=documento_receptor,
+                total_factura_fiscal=total_factura_fiscal,
+                neto_factura=neto_factura,
+                importe_iva_factura=importe_iva_factura,
+                condicion_iva_receptor_id=condicion_iva_receptor_id,
             )
             if not snapshot_resultado.get("ok"):
                 resultado["etapa"] = "snapshot_fiscal"
