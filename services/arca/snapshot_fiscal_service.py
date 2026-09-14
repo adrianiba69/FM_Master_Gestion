@@ -186,6 +186,43 @@ def normalizar_autorizacion_arca(autorizacion: Any) -> AutorizacionArcaNormaliza
     )
 
 
+def autorizacion_arca_desde_fe_comp_consultar(
+    consulta: Any,
+    cae_fecae: Optional[str] = None,
+    vencimiento_cae_fecae: Optional[str] = None,
+) -> Dict[str, Any]:
+    consulta = consulta if isinstance(consulta, dict) else {}
+
+    def _decimal(valor: Any) -> Optional[str]:
+        if valor in (None, ""):
+            return None
+        return str(Decimal(str(valor)))
+
+    condicion = consulta.get("condicion_iva_receptor_id")
+    if condicion in (None, "", 0):
+        condicion = None
+
+    return {
+        "resultado": consulta.get("resultado"),
+        "cae": consulta.get("cae") or cae_fecae,
+        "vencimiento_cae_arca": consulta.get("vencimiento_cae") or vencimiento_cae_fecae,
+        "numero_comprobante": consulta.get("numero_comprobante"),
+        "fecha_comprobante_arca": consulta.get("fecha_comprobante"),
+        "punto_venta": consulta.get("punto_venta"),
+        "tipo_comprobante": consulta.get("tipo_comprobante"),
+        "cuit_emisor": consulta.get("cuit_emisor"),
+        "doc_tipo": consulta.get("doc_tipo"),
+        "doc_nro": consulta.get("doc_nro"),
+        "importe_total": _decimal(consulta.get("importe_total")),
+        "importe_neto": _decimal(consulta.get("importe_neto")),
+        "importe_iva": _decimal(consulta.get("importe_iva")),
+        "moneda": consulta.get("moneda"),
+        "cotizacion": _decimal(consulta.get("cotizacion")),
+        "condicion_iva_receptor_id": condicion,
+        "origen": "fe_comp_consultar",
+    }
+
+
 def construir_snapshot_final_desde_contexto(
     contexto_fiscal: Dict[str, Any],
     autorizacion_arca: Any,

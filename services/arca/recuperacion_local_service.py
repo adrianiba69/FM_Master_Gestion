@@ -10,6 +10,13 @@ from services.arca.reconciliacion_contracts import (
     normalizar_importe,
 )
 from services.arca.fiscal_normalization import normalizar_identidad_factura
+from services.arca.snapshot_fiscal_persistence_service import SnapshotFiscalPersistenceService
+from services.arca.snapshot_fiscal_service import (
+    SnapshotFiscalError,
+    autorizacion_arca_desde_fe_comp_consultar,
+    construir_snapshot_final_desde_contexto_persistido,
+)
+from services.intento_emision_arca_service import IntentoEmisionArcaService
 
 
 @dataclass(frozen=True)
@@ -23,8 +30,9 @@ class ResultadoRecuperacionLocal:
 class RecuperacionLocalArcaService:
     """Reconstruye localmente una autorización ARCA ya consultada y validada."""
 
-    def __init__(self, conexion_factory=conectar):
+    def __init__(self, conexion_factory=conectar, intentos_service=None):
         self._conexion_factory = conexion_factory
+        self._intentos_service = intentos_service or IntentoEmisionArcaService(conexion_factory)
 
     @staticmethod
     def _ahora():
@@ -147,12 +155,40 @@ class RecuperacionLocalArcaService:
         if not isinstance(snapshot, SnapshotFiscalEsperado):
             raise TypeError("snapshot debe ser SnapshotFiscalEsperado.")
 
+        intento_persistido = self._intentos_service.obtener(intento.id)
+        if intento_persistido is None or not intento_persistido.contexto_fiscal_json:
+            return ResultadoRecuperacionLocal(
+                ResultadoReconciliacion.CONSULTA_INCIERTA,
+                mensaje="El intento no tiene contexto fiscal persistido para recuperar el snapshot.",
+            )
+        try:
+            snapshot_construido = construir_snapshot_final_desde_contexto_persistido(
+                intento_persistido.contexto_fiscal_json,
+                intento_persistido.contexto_fiscal_version,
+                intento_persistido.contexto_fiscal_hash,
+                autorizacion_arca_desde_fe_comp_consultar(consulta),
+                "recuperacion",
+                creado_en=intento_persistido.creado_en,
+            )
+        except SnapshotFiscalError as error:
+            return ResultadoRecuperacionLocal(
+                ResultadoReconciliacion.CONSULTA_INCIERTA,
+                mensaje=f"No se pudo construir el snapshot fiscal de recuperacion: {error}",
+            )
+        intento = intento_persistido
+
         comparacion = comparar_snapshot_con_comprobante(snapshot, consulta)
         if comparacion.resultado != ResultadoReconciliacion.AUTORIZADO:
             return ResultadoRecuperacionLocal(
                 comparacion.resultado,
                 mensaje="; ".join(comparacion.diferencias_texto or comparacion.campos_faltantes),
             )
+
+        snapshot_final = snapshot_construido.snapshot
+        emisor_final = snapshot_final["emisor"]
+        receptor_final = snapshot_final["receptor"]
+        comprobante_final = snapshot_final["comprobante"]
+        importes_final = snapshot_final["importes"]
 
         conexion = self._conexion_factory()
         try:
@@ -164,7 +200,7 @@ class RecuperacionLocalArcaService:
                 conexion.rollback()
                 return ResultadoRecuperacionLocal(ResultadoReconciliacion.CONFLICTO, mensaje="Factura local incompatible o duplicada.")
 
-            numero_factura = self._numero_factura(snapshot.punto_venta, snapshot.numero_planificado)
+            numero_factura = comprobante_final["numero_textual"]
             cae = str(consulta.get("cae") or "").strip()
             vencimiento = str(consulta.get("vencimiento_cae") or "").strip()
             tipo_documento_receptor, documento_receptor = self._identidad_receptor_desde_consulta(consulta)
@@ -182,6 +218,20 @@ class RecuperacionLocalArcaService:
             insertada = False
             if compatibles:
                 factura_id = int(compatibles[0][0])
+                resultado_snapshot = SnapshotFiscalPersistenceService().guardar_snapshot_si_ausente(
+                    factura_id,
+                    snapshot_construido.snapshot_json,
+                    snapshot_construido.snapshot_version,
+                    snapshot_construido.snapshot_hash,
+                    conn=conexion,
+                )
+                if not resultado_snapshot.ok:
+                    conexion.rollback()
+                    return ResultadoRecuperacionLocal(
+                        ResultadoReconciliacion.CONFLICTO,
+                        factura_arca_id=factura_id,
+                        mensaje=f"{resultado_snapshot.codigo}: {resultado_snapshot.mensaje}",
+                    )
                 cursor.execute(
                     """
                     UPDATE factura_arca
@@ -190,15 +240,18 @@ class RecuperacionLocalArcaService:
                     WHERE id=?
                     """,
                     (
-                        snapshot.fecha_comprobante, str(snapshot.punto_venta), self._tipo_factura(snapshot.tipo_comprobante),
-                        float(snapshot.importe_total), "Facturada manualmente", numero_factura, cae, vencimiento,
+                        comprobante_final["fecha_arca"], str(comprobante_final["punto_venta_num"]),
+                        self._tipo_factura(comprobante_final["tipo_comprobante_num"]),
+                        float(importes_final["total"]), "Facturada manualmente", numero_factura, cae, vencimiento,
                         tipo_documento_receptor, documento_receptor,
                         factura_id,
                     ),
                 )
             else:
                 punto_num, tipo_num, numero_num = normalizar_identidad_factura(
-                    snapshot.punto_venta, self._tipo_factura(snapshot.tipo_comprobante), numero_factura
+                    comprobante_final["punto_venta_num"],
+                    self._tipo_factura(comprobante_final["tipo_comprobante_num"]),
+                    numero_factura,
                 )
                 cursor.execute(
                     """
@@ -206,16 +259,21 @@ class RecuperacionLocalArcaService:
                         cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante,
                         importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion,
                         punto_venta_num, tipo_comprobante_num, numero_comprobante_num,
-                        tipo_documento_receptor, documento_receptor
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        tipo_documento_receptor, documento_receptor,
+                        snapshot_fiscal_json, snapshot_version, snapshot_hash
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
-                        intento.cliente_id, intento.emisor_id, intento.resumen_id, snapshot.fecha_comprobante,
-                        str(snapshot.punto_venta), self._tipo_factura(snapshot.tipo_comprobante),
-                        float(snapshot.importe_total), "Facturada manualmente", numero_factura, cae, vencimiento,
+                        receptor_final["cliente_id"], emisor_final["emisor_id"], intento.resumen_id,
+                        comprobante_final["fecha_arca"], str(comprobante_final["punto_venta_num"]),
+                        self._tipo_factura(comprobante_final["tipo_comprobante_num"]),
+                        float(importes_final["total"]), "Facturada manualmente", numero_factura, cae, vencimiento,
                         "Factura recuperada desde comprobante autorizado ARCA.", self._ahora(),
                         punto_num, tipo_num, numero_num,
                         tipo_documento_receptor, documento_receptor,
+                        snapshot_construido.snapshot_json,
+                        snapshot_construido.snapshot_version,
+                        snapshot_construido.snapshot_hash,
                     ),
                 )
                 factura_id = cursor.lastrowid

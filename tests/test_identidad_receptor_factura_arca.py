@@ -4,13 +4,14 @@ import tempfile
 import unittest
 from decimal import Decimal
 
-from database import migrar_factura_arca_identidad_receptor
+from database import crear_tabla_intentos_emision_arca, migrar_factura_arca_identidad_receptor
 from models.factura_arca import FacturaArca
 from services.arca.cierre_local_arca_service import CierreLocalArcaService
+from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.recuperacion_local_service import RecuperacionLocalArcaService
 from services.arca.reconciliacion_contracts import SnapshotFiscalEsperado
 from services.factura_arca_service import FacturaArcaService
-from models.intento_emision_arca import IntentoEmisionArca
+from services.intento_emision_arca_service import IntentoEmisionArcaService
 
 
 class MigracionIdentidadReceptorTest(unittest.TestCase):
@@ -260,16 +261,16 @@ class RecuperacionIdentidadReceptorTest(unittest.TestCase):
             cursor.executescript(
                 """
                 CREATE TABLE resumenes(id INTEGER PRIMARY KEY, estado_facturacion TEXT, fecha_facturacion TEXT, cae TEXT, vencimiento_cae TEXT, numero_factura TEXT);
-                CREATE TABLE factura_arca(id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER NOT NULL, emisor_id INTEGER NOT NULL, resumen_id INTEGER NOT NULL, fecha TEXT NOT NULL, punto_venta TEXT, tipo_comprobante TEXT, importe_total REAL NOT NULL, estado TEXT NOT NULL, numero_factura TEXT, cae TEXT, vencimiento_cae TEXT, observaciones TEXT, fecha_creacion TEXT, punto_venta_num INTEGER, tipo_comprobante_num INTEGER, numero_comprobante_num INTEGER, tipo_documento_receptor INTEGER, documento_receptor INTEGER);
-                CREATE TABLE intentos_emision_arca(id INTEGER PRIMARY KEY, estado TEXT, cae TEXT, vencimiento_cae TEXT, factura_arca_id INTEGER, error_codigo TEXT, error_mensaje TEXT, actualizado_en TEXT, reconciliado_en TEXT);
+                CREATE TABLE factura_arca(id INTEGER PRIMARY KEY AUTOINCREMENT, cliente_id INTEGER NOT NULL, emisor_id INTEGER NOT NULL, resumen_id INTEGER NOT NULL, fecha TEXT NOT NULL, punto_venta TEXT, tipo_comprobante TEXT, importe_total REAL NOT NULL, estado TEXT NOT NULL, numero_factura TEXT, cae TEXT, vencimiento_cae TEXT, observaciones TEXT, fecha_creacion TEXT, punto_venta_num INTEGER, tipo_comprobante_num INTEGER, numero_comprobante_num INTEGER, tipo_documento_receptor INTEGER, documento_receptor INTEGER, snapshot_fiscal_json TEXT, snapshot_version INTEGER, snapshot_hash TEXT);
                 """
             )
+            crear_tabla_intentos_emision_arca(cursor)
             cursor.execute("INSERT INTO resumenes VALUES(10, 'Pendiente', '', '', '', '')")
-            cursor.execute("INSERT INTO intentos_emision_arca VALUES(1, 'PENDIENTE_RECONCILIAR', '', '', NULL, '', '', '', NULL)")
             conexion.commit()
         finally:
             conexion.close()
-        self.service = RecuperacionLocalArcaService(lambda: sqlite3.connect(self.ruta))
+        self.conexion_factory = lambda: sqlite3.connect(self.ruta)
+        self.intentos = IntentoEmisionArcaService(self.conexion_factory)
         self.snapshot = SnapshotFiscalEsperado(
             resumen_id=10, cliente_id=20, emisor_fiscal_id=30, emisor_id=40, cuit_emisor="20206871629",
             punto_venta=5, tipo_comprobante=11, numero_planificado=123, fecha_comprobante="20260817",
@@ -278,17 +279,52 @@ class RecuperacionIdentidadReceptorTest(unittest.TestCase):
             importe_exento=Decimal("0.00"), importe_no_gravado=Decimal("0.00"), importe_tributos=Decimal("0.00"),
             moneda="PES", cotizacion=Decimal("1.00"),
         )
+        validacion = ContextoFiscalService.validar({
+            "tipo": "contexto_fiscal_arca", "version": 1, "creado_en": "2026-08-17T10:00:00",
+            "ambiente": "HOMOLOGACION",
+            "emisor": {
+                "emisor_id": 40, "emisor_fiscal_id": 30, "razon_social": "Emisor",
+                "cuit": "20206871629", "condicion_iva": "Monotributo", "punto_venta_num": 5,
+            },
+            "receptor": {
+                "cliente_id": 20, "razon_social": "Cliente original", "documento_visible": "30712345678",
+                "condicion_iva": "Consumidor Final", "condicion_iva_receptor_id": 5,
+                "tipo_documento_receptor": 80, "documento_receptor": 30712345678,
+            },
+            "comprobante": {
+                "fecha": "2026-08-17", "fecha_arca": "20260817", "concepto": 1,
+                "concepto_descripcion": "1 - Productos",
+                "punto_venta_num": 5, "tipo_comprobante_num": 11,
+                "tipo_comprobante_texto": "Factura C", "numero_comprobante_planificado": 123,
+                "numero_textual_planificado": "00005-00000123", "moneda": "PES",
+                "cotizacion": Decimal("1"),
+            },
+            "importes": {
+                "total": Decimal("100"), "neto": Decimal("100"), "iva": Decimal("0"),
+                "exento": Decimal("0"), "no_gravado": Decimal("0"), "tributos": Decimal("0"),
+            },
+            "iva": [],
+            "items": [{"descripcion": "Servicio", "cantidad": Decimal("1"), "precio_unitario": Decimal("100"), "subtotal": Decimal("100")}],
+        })
+        self.assertTrue(validacion.valido, validacion.errores)
+        self.intento_id = self.intentos.crear_intento(
+            self.snapshot,
+            contexto_fiscal_json=validacion.json_canonico,
+            contexto_fiscal_version=validacion.version,
+            contexto_fiscal_hash=validacion.hash_calculado,
+        )
+        self.service = RecuperacionLocalArcaService(self.conexion_factory, self.intentos)
 
     def tearDown(self):
         if os.path.exists(self.ruta):
             os.remove(self.ruta)
 
     def _intento(self):
-        return IntentoEmisionArca(1, 10, 20, 30, 40, "20206871629", 5, 11, 123, "20260817", 1, 80, 30712345678, 5, Decimal("100.00"), Decimal("100.00"), Decimal("0.00"), Decimal("0.00"), Decimal("0.00"), Decimal("0.00"), "PES", Decimal("1.00"), (), "PENDIENTE_RECONCILIAR", "", "", "", "", "", None, "", "", None)
+        return self.intentos.obtener(self.intento_id)
 
     def _consulta_base(self):
         return {
-            "cuit_emisor": "20206871629", "punto_venta": 5, "tipo_comprobante": 11, "numero_comprobante": 123,
+            "resultado": "A", "cuit_emisor": "20206871629", "punto_venta": 5, "tipo_comprobante": 11, "numero_comprobante": 123,
             "fecha_comprobante": "20260817", "doc_tipo": 80, "doc_nro": 30712345678,
             "importe_total": "100.00", "importe_neto": "100.00", "importe_iva": "0.00", "moneda": "PES",
             "cotizacion": "1.00", "condicion_iva_receptor_id": 5, "cae": "86330766550000", "vencimiento_cae": "20260827",

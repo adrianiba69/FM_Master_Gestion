@@ -5,7 +5,7 @@ import unittest
 from decimal import Decimal
 
 from database import crear_tabla_intentos_emision_arca
-from models.intento_emision_arca import IntentoEmisionArca
+from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.reconciliacion_contracts import (
     EstadoIntentoEmision,
     ResultadoReconciliacion,
@@ -13,6 +13,7 @@ from services.arca.reconciliacion_contracts import (
 )
 from services.arca.reconciliacion_service import ReconciliacionArcaService
 from services.arca.recuperacion_local_service import RecuperacionLocalArcaService
+from services.arca.snapshot_fiscal_service import CODIGO_VALIDO, validar_integridad_snapshot
 from services.intento_emision_arca_service import IntentoEmisionArcaService
 
 
@@ -100,7 +101,10 @@ class Reconciliacion5B2IntegrationTest(unittest.TestCase):
                     tipo_comprobante_num INTEGER,
                     numero_comprobante_num INTEGER,
                     tipo_documento_receptor INTEGER,
-                    documento_receptor INTEGER
+                    documento_receptor INTEGER,
+                    snapshot_fiscal_json TEXT,
+                    snapshot_version INTEGER,
+                    snapshot_hash TEXT
                 );
                 """
             )
@@ -163,7 +167,48 @@ class Reconciliacion5B2IntegrationTest(unittest.TestCase):
         }
 
     def _crear_intento(self, estado=EstadoIntentoEmision.PENDIENTE_RECONCILIAR):
-        return self.intentos.crear_intento(self.snapshot, estado)
+        contexto = {
+            "tipo": "contexto_fiscal_arca", "version": 1, "creado_en": "2026-08-17T10:00:00",
+            "ambiente": "HOMOLOGACION",
+            "emisor": {
+                "emisor_id": 40, "emisor_fiscal_id": 30, "razon_social": "Emisor congelado",
+                "nombre_fantasia": "Emisor", "cuit": "20206871629", "condicion_iva": "Monotributo",
+                "domicilio": "Domicilio emisor", "ingresos_brutos": "123", "fecha_inicio_actividades": "2020-01-01",
+                "punto_venta_num": 5,
+            },
+            "receptor": {
+                "cliente_id": 20, "razon_social": "Cliente congelado", "documento_visible": "30712345678",
+                "condicion_iva": "Consumidor Final", "condicion_iva_receptor_id": 5,
+                "domicilio": "Domicilio receptor", "tipo_documento_receptor": 80,
+                "documento_receptor": 30712345678,
+            },
+            "comprobante": {
+                "fecha": "2026-08-17", "fecha_arca": "20260817", "concepto": 1,
+                "concepto_descripcion": "1 - Productos", "punto_venta_num": 5,
+                "tipo_comprobante_num": 11, "tipo_comprobante_texto": "Factura C",
+                "numero_comprobante_planificado": 123, "numero_textual_planificado": "00005-00000123",
+                "periodo_servicio_desde": None, "periodo_servicio_hasta": None, "vencimiento_pago": None,
+                "moneda": "PES", "cotizacion": Decimal("1"),
+            },
+            "importes": {
+                "total": Decimal("100"), "neto": Decimal("100"), "iva": Decimal("0"),
+                "exento": Decimal("0"), "no_gravado": Decimal("0"), "tributos": Decimal("0"),
+            },
+            "iva": [],
+            "items": [{
+                "concepto": "Servicio", "descripcion": "Servicio congelado", "cantidad": Decimal("1"),
+                "precio_unitario": Decimal("100"), "subtotal": Decimal("100"),
+            }],
+        }
+        validacion = ContextoFiscalService.validar(contexto)
+        self.assertTrue(validacion.valido, validacion.errores)
+        return self.intentos.crear_intento(
+            self.snapshot,
+            estado,
+            contexto_fiscal_json=validacion.json_canonico,
+            contexto_fiscal_version=validacion.version,
+            contexto_fiscal_hash=validacion.hash_calculado,
+        )
 
     def _servicio(self, arca, recuperacion=None):
         return ReconciliacionArcaService(
@@ -193,6 +238,22 @@ class Reconciliacion5B2IntegrationTest(unittest.TestCase):
         self.assertEqual(intento.estado, EstadoIntentoEmision.RECONCILIADO.value)
         self.assertIsNotNone(intento.factura_arca_id)
         self.assertEqual(resultado.factura_arca_id, intento.factura_arca_id)
+        conexion = sqlite3.connect(self.ruta_db)
+        try:
+            factura = conexion.execute(
+                "SELECT snapshot_fiscal_json, snapshot_version, snapshot_hash FROM factura_arca WHERE id=?",
+                (intento.factura_arca_id,),
+            ).fetchone()
+            resumen = conexion.execute(
+                "SELECT estado_facturacion FROM resumenes WHERE id=10"
+            ).fetchone()
+        finally:
+            conexion.close()
+        integridad = validar_integridad_snapshot(*factura)
+        self.assertEqual(integridad.codigo, CODIGO_VALIDO)
+        self.assertEqual(integridad.snapshot["fuente"], "recuperacion")
+        self.assertEqual(integridad.snapshot["receptor"]["razon_social"], "Cliente congelado")
+        self.assertEqual(resumen[0], "Facturado")
 
     def test_recuperacion_lanza_excepcion_deja_pendiente(self):
         intento_id = self._crear_intento()

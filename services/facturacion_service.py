@@ -14,6 +14,7 @@ from services.arca.reconciliacion_contracts import ResultadoReconciliacion, Snap
 from services.arca.snapshot_fiscal_pdf_adapter import construir_datos_pdf_desde_snapshot
 from services.arca.snapshot_fiscal_service import (
     SnapshotFiscalError,
+    autorizacion_arca_desde_fe_comp_consultar,
     calcular_hash_snapshot,
     construir_snapshot_final_desde_contexto_persistido,
     construir_snapshot_fiscal_v1,
@@ -380,36 +381,7 @@ class FacturacionService:
         condicion_iva_receptor_id,
     ):
         """Construye la autorizacion desde FECompConsultar sin falsear coherencia."""
-        consulta = consulta if isinstance(consulta, dict) else {}
-
-        def _importe(valor):
-            if valor in (None, ""):
-                return None
-            return str(Decimal(str(valor)))
-
-        condicion = consulta.get("condicion_iva_receptor_id")
-        if condicion in (None, "", 0):
-            condicion = None
-
-        return {
-            "resultado": consulta.get("resultado"),
-            "cae": consulta.get("cae") or cae,
-            "vencimiento_cae_arca": consulta.get("vencimiento_cae") or vencimiento_cae,
-            "numero_comprobante": consulta.get("numero_comprobante"),
-            "fecha_comprobante_arca": consulta.get("fecha_comprobante"),
-            "punto_venta": consulta.get("punto_venta"),
-            "tipo_comprobante": consulta.get("tipo_comprobante"),
-            "cuit_emisor": consulta.get("cuit_emisor"),
-            "doc_tipo": consulta.get("doc_tipo"),
-            "doc_nro": consulta.get("doc_nro"),
-            "importe_total": _importe(consulta.get("importe_total")),
-            "importe_neto": _importe(consulta.get("importe_neto")),
-            "importe_iva": _importe(consulta.get("importe_iva")),
-            "moneda": consulta.get("moneda"),
-            "cotizacion": _importe(consulta.get("cotizacion")),
-            "condicion_iva_receptor_id": condicion,
-            "origen": "fe_comp_consultar",
-        }
+        return autorizacion_arca_desde_fe_comp_consultar(consulta, cae, vencimiento_cae)
 
     @classmethod
     def _construir_snapshot_desde_contexto_persistido(
