@@ -7,9 +7,11 @@ from services.arca.reconciliacion_contracts import (
     ResultadoComparacionFiscal,
     ResultadoReconciliacion,
     SnapshotFiscalEsperado,
-    comparar_snapshot_con_comprobante,
+    comparar_contexto_con_autorizacion,
 )
+from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.recuperacion_local_service import RecuperacionLocalArcaService
+from services.arca.snapshot_fiscal_service import autorizacion_arca_desde_fe_comp_consultar
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.intento_emision_arca_service import IntentoEmisionArcaService
 from services.arca.reconciliacion_contracts import EstadoIntentoEmision
@@ -91,11 +93,17 @@ class ReconciliacionArcaService:
             detalle["campos_faltantes"] = list(comparacion.campos_faltantes)
         return json.dumps(detalle, ensure_ascii=True, sort_keys=True, default=str, separators=(",", ":"))
 
-    def _guardar_consulta_incierta(self, intento_id, mensaje, consulta=None):
+    def _guardar_consulta_incierta(
+        self,
+        intento_id,
+        mensaje,
+        consulta=None,
+        error_codigo="CONSULTA_ARCA_INCIERTA",
+    ):
         self._intentos_service.guardar_resultado_reconciliacion(
             intento_id,
             ResultadoReconciliacion.CONSULTA_INCIERTA,
-            error_codigo="CONSULTA_ARCA_INCIERTA",
+            error_codigo=error_codigo,
             error_mensaje=mensaje,
             detalle_tecnico=self._detalle_consulta(consulta),
         )
@@ -137,12 +145,17 @@ class ReconciliacionArcaService:
 
         if estado in {
             EstadoIntentoEmision.CONFLICTO_MANUAL.value,
+            EstadoIntentoEmision.NO_AUTORIZADO.value,
             EstadoIntentoEmision.RECHAZADO.value,
         }:
             resultado = (
                 ResultadoReconciliacion.CONFLICTO
                 if estado == EstadoIntentoEmision.CONFLICTO_MANUAL.value
-                else ResultadoReconciliacion.CONSULTA_INCIERTA
+                else (
+                    ResultadoReconciliacion.NO_AUTORIZADO
+                    if estado == EstadoIntentoEmision.NO_AUTORIZADO.value
+                    else ResultadoReconciliacion.CONSULTA_INCIERTA
+                )
             )
             return ResultadoEjecucionReconciliacion(
                 ok=False,
@@ -163,7 +176,49 @@ class ReconciliacionArcaService:
         if terminal is not None:
             return terminal
 
-        emisor_fiscal = self._emisor_fiscal_provider.obtener(intento.emisor_fiscal_id)
+        contexto_campos = (
+            intento.contexto_fiscal_json,
+            intento.contexto_fiscal_version,
+            intento.contexto_fiscal_hash,
+        )
+        if all(valor is None for valor in contexto_campos):
+            return self._guardar_consulta_incierta(
+                intento.id,
+                "Intento histórico sin contexto fiscal persistido; requiere intervención manual.",
+                error_codigo="CONTEXTO_FISCAL_HISTORICO_AUSENTE",
+            )
+        if any(valor is None for valor in contexto_campos):
+            return self._guardar_consulta_incierta(
+                intento.id,
+                "Contexto fiscal persistido incompleto; requiere intervención manual.",
+                error_codigo="CONTEXTO_FISCAL_CORRUPTO",
+            )
+        integridad_contexto = ContextoFiscalService.validar_integridad(*contexto_campos)
+        if not integridad_contexto.valido:
+            return self._guardar_consulta_incierta(
+                intento.id,
+                "Contexto fiscal persistido inválido: " + "; ".join(integridad_contexto.errores),
+                error_codigo=f"CONTEXTO_FISCAL_{integridad_contexto.codigo}",
+            )
+        contexto = integridad_contexto.contexto
+        try:
+            emisor_contexto = contexto["emisor"]
+            comprobante_contexto = contexto["comprobante"]
+            emisor_fiscal_id = int(emisor_contexto["emisor_fiscal_id"])
+            cuit_consulta = str(emisor_contexto["cuit"] or "").strip()
+            punto_venta_consulta = int(comprobante_contexto["punto_venta_num"])
+            tipo_comprobante_consulta = int(comprobante_contexto["tipo_comprobante_num"])
+            numero_comprobante_consulta = int(comprobante_contexto["numero_comprobante_planificado"])
+            if not cuit_consulta or punto_venta_consulta <= 0 or tipo_comprobante_consulta <= 0 or numero_comprobante_consulta <= 0:
+                raise ValueError("clave fiscal incompleta")
+        except (KeyError, TypeError, ValueError) as error:
+            return self._guardar_consulta_incierta(
+                intento.id,
+                f"Contexto fiscal incompatible con reconciliación: {error}",
+                error_codigo="CONTEXTO_FISCAL_INCOMPATIBLE",
+            )
+
+        emisor_fiscal = self._emisor_fiscal_provider.obtener(emisor_fiscal_id)
         if not emisor_fiscal:
             return self._guardar_consulta_incierta(
                 intento.id,
@@ -183,10 +238,10 @@ class ReconciliacionArcaService:
             consulta = self._consultar_comprobante(
                 ruta_certificado=ruta_certificado,
                 ruta_clave=ruta_clave,
-                cuit_emisor=intento.cuit_emisor,
-                punto_venta=intento.punto_venta,
-                tipo_comprobante=intento.tipo_comprobante,
-                numero_comprobante=intento.numero_planificado,
+                cuit_emisor=cuit_consulta,
+                punto_venta=punto_venta_consulta,
+                tipo_comprobante=tipo_comprobante_consulta,
+                numero_comprobante=numero_comprobante_consulta,
                 carpeta_trabajo=carpeta_trabajo,
             )
         except Exception as error:
@@ -195,7 +250,16 @@ class ReconciliacionArcaService:
                 f"Error al consultar ARCA: {error}",
             )
 
-        if not isinstance(consulta, dict) or not consulta.get("ok"):
+        if not isinstance(consulta, dict):
+            return self._guardar_consulta_incierta(
+                intento.id,
+                "FECompConsultar no devolvió una respuesta interpretable.",
+            )
+
+        autorizacion = autorizacion_arca_desde_fe_comp_consultar(consulta)
+        comparacion = comparar_contexto_con_autorizacion(contexto, autorizacion)
+
+        if not consulta.get("ok") and comparacion.resultado != ResultadoReconciliacion.NO_AUTORIZADO:
             errores = consulta.get("errores") if isinstance(consulta, dict) else None
             mensaje = "; ".join(str(error) for error in list(errores or []))
             return self._guardar_consulta_incierta(
@@ -204,9 +268,8 @@ class ReconciliacionArcaService:
                 consulta,
             )
 
-        comparacion = comparar_snapshot_con_comprobante(self._snapshot_desde_intento(intento), consulta)
         es_conflicto = comparacion.resultado == ResultadoReconciliacion.CONFLICTO
-        mensaje = "; ".join(comparacion.diferencias_texto)
+        mensaje = comparacion.mensaje or "; ".join(comparacion.diferencias_texto)
         if comparacion.campos_faltantes:
             mensaje = "; ".join(f"Falta {campo}" for campo in comparacion.campos_faltantes)
 
@@ -297,7 +360,15 @@ class ReconciliacionArcaService:
             comparacion.resultado,
             cae=str(consulta.get("cae") or ""),
             vencimiento_cae=str(consulta.get("vencimiento_cae") or ""),
-            error_codigo="CONFLICTO_FISCAL" if es_conflicto else "CONSULTA_INCIERTA",
+            error_codigo=(
+                "CONFLICTO_FISCAL"
+                if es_conflicto
+                else (
+                    "COMPROBANTE_NO_AUTORIZADO"
+                    if comparacion.resultado == ResultadoReconciliacion.NO_AUTORIZADO
+                    else comparacion.codigo or "CONSULTA_INCIERTA"
+                )
+            ),
             error_mensaje=mensaje or None,
             detalle_tecnico=self._detalle_consulta(consulta, comparacion),
         )
@@ -311,7 +382,11 @@ class ReconciliacionArcaService:
             estado_intento=(
                 EstadoIntentoEmision.CONFLICTO_MANUAL.value
                 if es_conflicto
-                else EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value
+                else (
+                    EstadoIntentoEmision.NO_AUTORIZADO.value
+                    if comparacion.resultado == ResultadoReconciliacion.NO_AUTORIZADO
+                    else EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value
+                )
             ),
             diferencias=tuple(comparacion.diferencias_texto),
             campos_faltantes=tuple(comparacion.campos_faltantes),

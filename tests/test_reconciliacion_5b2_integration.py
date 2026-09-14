@@ -255,6 +255,22 @@ class Reconciliacion5B2IntegrationTest(unittest.TestCase):
         self.assertEqual(integridad.snapshot["receptor"]["razon_social"], "Cliente congelado")
         self.assertEqual(resumen[0], "Facturado")
 
+    def test_contexto_persistido_prevalece_sobre_columnas_parciales_mutadas(self):
+        intento_id = self._crear_intento()
+        conexion = sqlite3.connect(self.ruta_db)
+        conexion.execute(
+            "UPDATE intentos_emision_arca SET importe_total='999.00' WHERE id=?",
+            (intento_id,),
+        )
+        conexion.commit()
+        conexion.close()
+
+        resultado = self._servicio(ArcaFake(self._consulta_autorizada())).reconciliar_intento(intento_id)
+
+        self.assertTrue(resultado.ok)
+        self.assertEqual(resultado.resultado, ResultadoReconciliacion.AUTORIZADO)
+        self.assertEqual(self._estado_intento(intento_id).estado, EstadoIntentoEmision.RECONCILIADO.value)
+
     def test_recuperacion_lanza_excepcion_deja_pendiente(self):
         intento_id = self._crear_intento()
         arca = ArcaFake(self._consulta_autorizada())

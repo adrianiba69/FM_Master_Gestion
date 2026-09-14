@@ -196,7 +196,10 @@ def autorizacion_arca_desde_fe_comp_consultar(
     def _decimal(valor: Any) -> Optional[str]:
         if valor in (None, ""):
             return None
-        return str(Decimal(str(valor)))
+        try:
+            return str(Decimal(str(valor)))
+        except (InvalidOperation, TypeError, ValueError):
+            return str(valor)
 
     condicion = consulta.get("condicion_iva_receptor_id")
     if condicion in (None, "", 0):

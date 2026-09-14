@@ -3,10 +3,11 @@ from datetime import datetime
 
 from database import conectar
 from models.intento_emision_arca import IntentoEmisionArca
+from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.reconciliacion_contracts import (
     ResultadoReconciliacion,
     SnapshotFiscalEsperado,
-    comparar_snapshot_con_comprobante,
+    comparar_contexto_con_autorizacion,
     normalizar_importe,
 )
 from services.arca.fiscal_normalization import normalizar_identidad_factura
@@ -86,21 +87,25 @@ class RecuperacionLocalArcaService:
         )
 
     @classmethod
-    def _fila_compatible(cls, fila, intento, snapshot, consulta):
+    def _fila_compatible(cls, fila, intento, snapshot_final, consulta):
         if not fila:
             return False
-        numero = cls._numero_factura(snapshot.punto_venta, snapshot.numero_planificado)
+        emisor = snapshot_final["emisor"]
+        receptor = snapshot_final["receptor"]
+        comprobante = snapshot_final["comprobante"]
+        importes = snapshot_final["importes"]
+        numero = comprobante["numero_textual"]
         if (
-            int(fila[1]) != int(intento.cliente_id)
-            or int(fila[2]) != int(intento.emisor_id)
+            int(fila[1]) != int(receptor["cliente_id"])
+            or int(fila[2]) != int(emisor["emisor_id"])
             or int(fila[3]) != int(intento.resumen_id)
         ):
             return False
 
         esperados = (
-            (fila[5], str(snapshot.punto_venta)),
-            (fila[6], cls._tipo_factura(snapshot.tipo_comprobante)),
-            (fila[7], normalizar_importe(snapshot.importe_total)),
+            (fila[5], str(comprobante["punto_venta_num"])),
+            (fila[6], cls._tipo_factura(comprobante["tipo_comprobante_num"])),
+            (fila[7], normalizar_importe(importes["total"])),
             (fila[9], numero),
             (fila[10], str(consulta.get("cae") or "").strip()),
             (fila[11], str(consulta.get("vencimiento_cae") or "").strip()),
@@ -121,7 +126,7 @@ class RecuperacionLocalArcaService:
         return str(fila[3] or "").strip() == numero_factura and str(fila[1] or "").strip() == cae
 
     @staticmethod
-    def _buscar_facturas(cursor, intento, snapshot, consulta):
+    def _buscar_facturas(cursor, intento, snapshot_final, consulta):
         seleccion = "id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae"
         candidatas = []
 
@@ -134,10 +139,17 @@ class RecuperacionLocalArcaService:
         cursor.execute(f"SELECT {seleccion} FROM factura_arca WHERE resumen_id=? ORDER BY id", (intento.resumen_id,))
         candidatas.extend(cursor.fetchall())
 
-        numero = RecuperacionLocalArcaService._numero_factura(snapshot.punto_venta, snapshot.numero_planificado)
+        emisor = snapshot_final["emisor"]
+        comprobante = snapshot_final["comprobante"]
+        numero = comprobante["numero_textual"]
         cursor.execute(
             f"SELECT {seleccion} FROM factura_arca WHERE emisor_id=? AND TRIM(COALESCE(punto_venta, ''))=? AND TRIM(COALESCE(tipo_comprobante, ''))=? AND TRIM(COALESCE(numero_factura, ''))=? ORDER BY id",
-            (intento.emisor_id, str(snapshot.punto_venta), RecuperacionLocalArcaService._tipo_factura(snapshot.tipo_comprobante), numero),
+            (
+                emisor["emisor_id"],
+                str(comprobante["punto_venta_num"]),
+                RecuperacionLocalArcaService._tipo_factura(comprobante["tipo_comprobante_num"]),
+                numero,
+            ),
         )
         candidatas.extend(cursor.fetchall())
 
@@ -145,7 +157,11 @@ class RecuperacionLocalArcaService:
         candidatas.extend(cursor.fetchall())
 
         unicas = {fila[0]: fila for fila in candidatas}
-        compatibles = [fila for fila in unicas.values() if RecuperacionLocalArcaService._fila_compatible(fila, intento, snapshot, consulta)]
+        compatibles = [
+            fila
+            for fila in unicas.values()
+            if RecuperacionLocalArcaService._fila_compatible(fila, intento, snapshot_final, consulta)
+        ]
         incompatibles = [fila for fila in unicas.values() if fila not in compatibles]
         return compatibles, incompatibles
 
@@ -160,6 +176,16 @@ class RecuperacionLocalArcaService:
             return ResultadoRecuperacionLocal(
                 ResultadoReconciliacion.CONSULTA_INCIERTA,
                 mensaje="El intento no tiene contexto fiscal persistido para recuperar el snapshot.",
+            )
+        integridad_contexto = ContextoFiscalService.validar_integridad(
+            intento_persistido.contexto_fiscal_json,
+            intento_persistido.contexto_fiscal_version,
+            intento_persistido.contexto_fiscal_hash,
+        )
+        if not integridad_contexto.valido:
+            return ResultadoRecuperacionLocal(
+                ResultadoReconciliacion.CONSULTA_INCIERTA,
+                mensaje="Contexto fiscal persistido inválido: " + "; ".join(integridad_contexto.errores),
             )
         try:
             snapshot_construido = construir_snapshot_final_desde_contexto_persistido(
@@ -177,7 +203,10 @@ class RecuperacionLocalArcaService:
             )
         intento = intento_persistido
 
-        comparacion = comparar_snapshot_con_comprobante(snapshot, consulta)
+        comparacion = comparar_contexto_con_autorizacion(
+            integridad_contexto.contexto,
+            autorizacion_arca_desde_fe_comp_consultar(consulta),
+        )
         if comparacion.resultado != ResultadoReconciliacion.AUTORIZADO:
             return ResultadoRecuperacionLocal(
                 comparacion.resultado,
@@ -195,7 +224,7 @@ class RecuperacionLocalArcaService:
             cursor = conexion.cursor()
             cursor.execute("BEGIN IMMEDIATE")
 
-            compatibles, incompatibles = self._buscar_facturas(cursor, intento, snapshot, consulta)
+            compatibles, incompatibles = self._buscar_facturas(cursor, intento, snapshot_final, consulta)
             if incompatibles or len(compatibles) > 1:
                 conexion.rollback()
                 return ResultadoRecuperacionLocal(ResultadoReconciliacion.CONFLICTO, mensaje="Factura local incompatible o duplicada.")

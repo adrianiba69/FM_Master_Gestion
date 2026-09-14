@@ -5,6 +5,7 @@ import unittest
 from decimal import Decimal
 
 from database import crear_tabla_intentos_emision_arca
+from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.reconciliacion_contracts import (
     EstadoIntentoEmision,
     ResultadoReconciliacion,
@@ -99,6 +100,48 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
             "condicion_iva_receptor_id": 5, "cae": "71345678901234", "vencimiento_cae": "20260826",
         }
 
+    def _crear_intento(self, estado=EstadoIntentoEmision.PENDIENTE_RECONCILIAR, con_contexto=True):
+        if not con_contexto:
+            return self.intentos.crear_intento(self.snapshot, estado)
+        contexto = {
+            "tipo": "contexto_fiscal_arca", "version": 1, "creado_en": "2026-08-16T10:00:00",
+            "ambiente": "HOMOLOGACION",
+            "emisor": {
+                "emisor_id": 40, "emisor_fiscal_id": 30, "razon_social": "Emisor original",
+                "cuit": "20206871629", "condicion_iva": "Monotributo", "punto_venta_num": 5,
+            },
+            "receptor": {
+                "cliente_id": 20, "razon_social": "Cliente original", "documento_visible": "30712345678",
+                "condicion_iva": "Consumidor Final", "condicion_iva_receptor_id": 5,
+                "tipo_documento_receptor": 80, "documento_receptor": 30712345678,
+            },
+            "comprobante": {
+                "fecha": "2026-08-16", "fecha_arca": "20260816", "concepto": 1,
+                "concepto_descripcion": "1 - Productos", "punto_venta_num": 5,
+                "tipo_comprobante_num": 11, "tipo_comprobante_texto": "Factura C",
+                "numero_comprobante_planificado": 123, "numero_textual_planificado": "00005-00000123",
+                "moneda": "PES", "cotizacion": Decimal("1"),
+            },
+            "importes": {
+                "total": Decimal("12100"), "neto": Decimal("12100"), "iva": Decimal("0"),
+                "exento": Decimal("0"), "no_gravado": Decimal("0"), "tributos": Decimal("0"),
+            },
+            "iva": [],
+            "items": [{
+                "descripcion": "Servicio", "cantidad": Decimal("1"),
+                "precio_unitario": Decimal("12100"), "subtotal": Decimal("12100"),
+            }],
+        }
+        validacion = ContextoFiscalService.validar(contexto)
+        self.assertTrue(validacion.valido, validacion.errores)
+        return self.intentos.crear_intento(
+            self.snapshot,
+            estado,
+            contexto_fiscal_json=validacion.json_canonico,
+            contexto_fiscal_version=validacion.version,
+            contexto_fiscal_hash=validacion.hash_calculado,
+        )
+
     def _crear_servicio(self, respuesta=None, error=None, emisor=None, recuperacion=None):
         consulta = ConsultaArcaFake(respuesta=respuesta, error=error)
         proveedor = EmisorFiscalFake(self.emisor if emisor is None else emisor)
@@ -107,7 +150,7 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         return servicio, consulta, proveedor, recuperacion
 
     def test_reconcilia_coincidencia_y_consulta_con_clave_del_snapshot(self):
-        intento_id = self.intentos.crear_intento(self.snapshot, EstadoIntentoEmision.PENDIENTE_RECONCILIAR)
+        intento_id = self._crear_intento()
         servicio, consulta, _, recuperacion = self._crear_servicio(self._consulta_autorizada())
         resultado = servicio.reconciliar_intento(intento_id)
         intento = self.intentos.obtener(intento_id)
@@ -120,7 +163,7 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         self.assertEqual(len(recuperacion.llamadas), 1)
 
     def test_conflicto_actualiza_intento_sin_crear_factura(self):
-        intento_id = self.intentos.crear_intento(self.snapshot)
+        intento_id = self._crear_intento()
         respuesta = self._consulta_autorizada()
         respuesta["importe_total"] = "12000.00"
         servicio, _, _, recuperacion = self._crear_servicio(respuesta)
@@ -134,7 +177,7 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         self.assertEqual(recuperacion.llamadas, [])
 
     def test_respuesta_incompleta_permanece_pendiente(self):
-        intento_id = self.intentos.crear_intento(self.snapshot)
+        intento_id = self._crear_intento()
         respuesta = self._consulta_autorizada()
         del respuesta["importe_iva"]
         servicio, _, _, _ = self._crear_servicio(respuesta)
@@ -145,7 +188,7 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         self.assertIn("Falta importe_iva", intento.error_mensaje)
 
     def test_falla_de_consulta_permanece_pendiente(self):
-        intento_id = self.intentos.crear_intento(self.snapshot)
+        intento_id = self._crear_intento()
         servicio, _, _, _ = self._crear_servicio({"ok": False, "errores": ["Tiempo de espera agotado"]})
         resultado = servicio.reconciliar_intento(intento_id)
         intento = self.intentos.obtener(intento_id)
@@ -154,7 +197,7 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         self.assertEqual(intento.error_mensaje, "Tiempo de espera agotado")
 
     def test_emisor_faltante_no_consulta_y_permanece_pendiente(self):
-        intento_id = self.intentos.crear_intento(self.snapshot)
+        intento_id = self._crear_intento()
         consulta = ConsultaArcaFake(respuesta=self._consulta_autorizada())
         servicio = ReconciliacionArcaService(self.intentos, EmisorFiscalFake(None), consulta, RecuperacionLocalFake())
         resultado = servicio.reconciliar_intento(intento_id)
@@ -164,7 +207,7 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         self.assertEqual(consulta.llamadas, [])
 
     def test_recuperacion_local_fallida_deja_pendiente(self):
-        intento_id = self.intentos.crear_intento(self.snapshot)
+        intento_id = self._crear_intento()
         servicio, _, _, _ = self._crear_servicio(
             self._consulta_autorizada(),
             recuperacion=RecuperacionLocalFake(error=OSError("rollback")),
@@ -175,7 +218,7 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         self.assertEqual(intento.estado, EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value)
 
     def test_intento_reconciliado_no_consulta(self):
-        intento_id = self.intentos.crear_intento(self.snapshot, EstadoIntentoEmision.RECONCILIADO)
+        intento_id = self._crear_intento(EstadoIntentoEmision.RECONCILIADO, con_contexto=False)
         conexion = sqlite3.connect(self.ruta_db)
         conexion.execute("UPDATE intentos_emision_arca SET factura_arca_id=88 WHERE id=?", (intento_id,))
         conexion.commit()
@@ -187,14 +230,14 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         self.assertEqual(recuperacion.llamadas, [])
 
     def test_conflicto_manual_no_consulta(self):
-        intento_id = self.intentos.crear_intento(self.snapshot, EstadoIntentoEmision.CONFLICTO_MANUAL)
+        intento_id = self._crear_intento(EstadoIntentoEmision.CONFLICTO_MANUAL, con_contexto=False)
         servicio, consulta, _, _ = self._crear_servicio(self._consulta_autorizada())
         resultado = servicio.reconciliar_intento(intento_id)
         self.assertEqual(resultado.resultado, ResultadoReconciliacion.CONFLICTO)
         self.assertEqual(consulta.llamadas, [])
 
     def test_rechazado_no_consulta(self):
-        intento_id = self.intentos.crear_intento(self.snapshot, EstadoIntentoEmision.RECHAZADO)
+        intento_id = self._crear_intento(EstadoIntentoEmision.RECHAZADO, con_contexto=False)
         servicio, consulta, _, _ = self._crear_servicio(self._consulta_autorizada())
         resultado = servicio.reconciliar_intento(intento_id)
         self.assertEqual(resultado.resultado, ResultadoReconciliacion.CONSULTA_INCIERTA)
