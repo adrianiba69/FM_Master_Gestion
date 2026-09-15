@@ -114,6 +114,32 @@ class CierreIntentoExitosoTest(unittest.TestCase):
         cierre_cls.return_value.cerrar_emision_confirmada.assert_called_once()
         pdf.assert_not_called()
 
+    def test_detalle_arca_se_sanitiza_antes_de_exponerse(self):
+        tecnico = {
+            "estado": "ERROR",
+            "token": "TOKEN_SECRETO",
+            "nivel": {
+                "sign": "SIGN_SECRETO",
+                "lista": [
+                    {"password": "PASSWORD_SECRETO"},
+                    {"dato_fiscal": "OK"},
+                ],
+            },
+        }
+        with patch.object(
+            FacturacionService,
+            "emitir_en_arca",
+            return_value={"ok": False, "etapa": "emision", "emision": tecnico, "errores": []},
+        ):
+            resultado = self._emitir_desde_resumen_minimo()
+
+        detalle = resultado["detalle_arca"]
+        self.assertNotIn("TOKEN_SECRETO", repr(detalle))
+        self.assertNotIn("SIGN_SECRETO", repr(detalle))
+        self.assertNotIn("PASSWORD_SECRETO", repr(detalle))
+        self.assertEqual(detalle["nivel"]["lista"][0], {})
+        self.assertEqual(detalle["nivel"]["lista"][1]["dato_fiscal"], "OK")
+
     def test_fallo_guardar_factura_no_marca_resumen(self):
         with (
             patch("services.facturacion_service.FacturaArcaService.guardar", side_effect=OSError("db")),

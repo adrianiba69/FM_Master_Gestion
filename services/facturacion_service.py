@@ -20,6 +20,7 @@ from services.arca.snapshot_fiscal_service import (
     construir_snapshot_fiscal_v1,
     serializar_snapshot_fiscal,
 )
+from services.arca.sanitizacion_arca import sanitizar_estructura_arca
 from services.cliente_service import ClienteService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
@@ -942,8 +943,8 @@ class FacturacionService:
             if not resultado_arca.get("ok"):
                 detalle_arca = resultado_arca.get("emision") if resultado_arca.get("etapa") != "consulta" else resultado_arca.get("consulta")
                 resultado["etapa"] = "arca"
-                resultado["detalle_arca"] = detalle_arca or {}
-                resultado["errores"] = list(resultado_arca.get("errores") or [])
+                resultado["detalle_arca"] = sanitizar_estructura_arca(detalle_arca or {})
+                resultado["errores"] = list(sanitizar_estructura_arca(resultado_arca.get("errores") or []))
                 return resultado
 
             consulta = resultado_arca.get("consulta") or {}
@@ -1408,8 +1409,6 @@ class FacturacionService:
             tipo_comprobante=tipo_comprobante,
             numero_comprobante=numero_emitido,
             carpeta_trabajo=carpeta_trabajo,
-            token=emision.get("token"),
-            sign=emision.get("sign"),
             ambiente=ambiente_normalizado,
         )
         resultado["consulta"] = consulta

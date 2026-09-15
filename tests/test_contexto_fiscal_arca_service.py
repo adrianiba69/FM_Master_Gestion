@@ -78,6 +78,9 @@ class ContextoFiscalServiceTest(unittest.TestCase):
         contexto["token"] = "no debe persistirse"
         self.assertFalse(ContextoFiscalService.validar(contexto).valido)
         contexto = self.contexto()
+        contexto["sign"] = "no debe persistirse"
+        self.assertFalse(ContextoFiscalService.validar(contexto).valido)
+        contexto = self.contexto()
         contexto["comprobante"]["fecha"] = "28/08/2026"
         self.assertFalse(ContextoFiscalService.validar(contexto).valido)
 

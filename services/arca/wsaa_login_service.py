@@ -314,7 +314,6 @@ class WSAALoginService:
         
         # DEBUG: Guardar TA en caché para reutilización
         print("DEBUG WSAA - TA obtenido exitosamente, guardando en caché")
-        print(f"  Token: {resultado['token'][:30]}..." if len(resultado['token']) > 30 else f"  Token: {resultado['token']}")
         print(f"  Expira (original): {resultado['expiration']}")
         
         # Normalizar fecha de expiración para caché

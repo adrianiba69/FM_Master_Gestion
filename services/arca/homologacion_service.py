@@ -7,6 +7,7 @@ from services.arca.wsfe_service import WSFEService
 from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.preenvio_arca_service import PreenvioArcaService
 from services.arca.reconciliacion_contracts import SnapshotFiscalEsperado
+from services.arca.sanitizacion_arca import sanitizar_estructura_arca
 from services.arca import ambiente_arca
 
 
@@ -105,11 +106,13 @@ class HomologacionService:
             )
 
             if not login.get("ok"):
-                resultado["errores"].extend(login.get("errores") or ["No se pudo autenticar en WSAA."])
+                resultado["errores"].extend(
+                    sanitizar_estructura_arca(login.get("errores") or ["No se pudo autenticar en WSAA."])
+                )
                 if login.get("faultcode"):
-                    resultado["faultcode"] = str(login.get("faultcode") or "")
+                    resultado["faultcode"] = sanitizar_estructura_arca(str(login.get("faultcode") or ""))
                 if login.get("faultstring"):
-                    resultado["faultstring"] = str(login.get("faultstring") or "")
+                    resultado["faultstring"] = sanitizar_estructura_arca(str(login.get("faultstring") or ""))
                 return resultado
 
             token_texto = str(login.get("token") or "").strip()
@@ -129,7 +132,7 @@ class HomologacionService:
             url=wsfe_url,
         )
 
-        return consulta
+        return sanitizar_estructura_arca(consulta)
 
     @staticmethod
     def emitir_comprobante_prueba(
@@ -174,8 +177,6 @@ class HomologacionService:
             "cae_recibido": False,
             "cae": "",
             "vencimiento_cae": "",
-            "token": "",
-            "sign": "",
             "numero_comprobante": 0,
             "punto_venta": int(punto_venta or 0) if str(punto_venta or "").strip().isdigit() else 0,
             "tipo_comprobante": tipo_comprobante_int,
@@ -224,17 +225,21 @@ class HomologacionService:
             ambiente=ambiente_normalizado,
         )
         if not login.get("ok"):
-            resultado["errores"].extend(login.get("errores") or ["No se pudo autenticar en WSAA."])
+            resultado["errores"].extend(
+                sanitizar_estructura_arca(login.get("errores") or ["No se pudo autenticar en WSAA."])
+            )
             if login.get("faultcode"):
-                resultado["errores"].append(f"WSAA faultcode: {login.get('faultcode')}")
+                resultado["errores"].append(
+                    sanitizar_estructura_arca(f"WSAA faultcode: {login.get('faultcode')}")
+                )
             if login.get("faultstring"):
-                resultado["errores"].append(f"WSAA faultstring: {login.get('faultstring')}")
+                resultado["errores"].append(
+                    sanitizar_estructura_arca(f"WSAA faultstring: {login.get('faultstring')}")
+                )
             return resultado
 
         token = str(login.get("token") or "").strip()
         sign = str(login.get("sign") or "").strip()
-        resultado["token"] = token
-        resultado["sign"] = sign
         resultado["expiration_ticket"] = str(login.get("expiration") or "")
 
         if not token or not sign:
@@ -251,7 +256,10 @@ class HomologacionService:
         )
         if not consulta_ultimo.get("ok"):
             resultado["errores"].extend(
-                consulta_ultimo.get("errores") or ["No se pudo consultar el ultimo comprobante."]
+                sanitizar_estructura_arca(
+                    consulta_ultimo.get("errores") or ["No se pudo consultar el ultimo comprobante."],
+                    secretos_extra=(token, sign),
+                )
             )
             return resultado
 
@@ -359,7 +367,12 @@ class HomologacionService:
             protegido = preenvio.enviar_una_vez(snapshot, enviar_fecae)
         resultado["intento_id"] = protegido.intento_id
         if not protegido.ok:
-            resultado["errores"].extend(protegido.errores or ("No se pudo enviar FECAESolicitar.",))
+            resultado["errores"].extend(
+                sanitizar_estructura_arca(
+                    protegido.errores or ("No se pudo enviar FECAESolicitar.",),
+                    secretos_extra=(token, sign),
+                )
+            )
             return resultado
 
         emision = protegido.respuesta or {}
@@ -376,7 +389,10 @@ class HomologacionService:
 
         if not emision.get("ok"):
             resultado["errores"].extend(
-                emision.get("errores") or ["ARCA rechazo la solicitud FECAESolicitar."]
+                sanitizar_estructura_arca(
+                    emision.get("errores") or ["ARCA rechazo la solicitud FECAESolicitar."],
+                    secretos_extra=(token, sign),
+                )
             )
             return resultado
 
