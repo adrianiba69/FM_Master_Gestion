@@ -12,6 +12,7 @@ from services.arca.reconciliacion_contracts import (
 from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.recuperacion_local_service import RecuperacionLocalArcaService
 from services.arca.snapshot_fiscal_service import autorizacion_arca_desde_fe_comp_consultar
+from services.arca import ambiente_arca
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.intento_emision_arca_service import IntentoEmisionArcaService
 from services.arca.reconciliacion_contracts import EstadoIntentoEmision
@@ -202,6 +203,7 @@ class ReconciliacionArcaService:
             )
         contexto = integridad_contexto.contexto
         try:
+            ambiente_contexto = ambiente_arca.normalizar_ambiente_arca(contexto.get("ambiente"))
             emisor_contexto = contexto["emisor"]
             comprobante_contexto = contexto["comprobante"]
             emisor_fiscal_id = int(emisor_contexto["emisor_fiscal_id"])
@@ -211,7 +213,7 @@ class ReconciliacionArcaService:
             numero_comprobante_consulta = int(comprobante_contexto["numero_comprobante_planificado"])
             if not cuit_consulta or punto_venta_consulta <= 0 or tipo_comprobante_consulta <= 0 or numero_comprobante_consulta <= 0:
                 raise ValueError("clave fiscal incompleta")
-        except (KeyError, TypeError, ValueError) as error:
+        except (ambiente_arca.AmbienteArcaInvalidoError, KeyError, TypeError, ValueError) as error:
             return self._guardar_consulta_incierta(
                 intento.id,
                 f"Contexto fiscal incompatible con reconciliación: {error}",
@@ -243,6 +245,7 @@ class ReconciliacionArcaService:
                 tipo_comprobante=tipo_comprobante_consulta,
                 numero_comprobante=numero_comprobante_consulta,
                 carpeta_trabajo=carpeta_trabajo,
+                ambiente=ambiente_contexto,
             )
         except Exception as error:
             return self._guardar_consulta_incierta(

@@ -7,6 +7,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from database import crear_tabla_intentos_emision_arca
+from services.arca import ambiente_arca
 from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.reconciliacion_contracts import (
     EstadoIntentoEmision,
@@ -191,6 +192,27 @@ class ReconciliacionContexto2B4Test(unittest.TestCase):
         )
         return servicio, consulta, recuperacion
 
+    def _servicio_con_emisor_vivo(self, emisor_vivo, *respuestas):
+        class EmisorVivoFake:
+            def __init__(self, fila):
+                self.fila = fila
+                self.llamadas = []
+
+            def obtener(self, emisor_id):
+                self.llamadas.append(emisor_id)
+                return self.fila
+
+        consulta = ConsultaSecuencialFake(*respuestas)
+        recuperacion = RecuperacionMarcadoraFake(self.intentos)
+        proveedor = EmisorVivoFake(emisor_vivo)
+        servicio = ReconciliacionArcaService(
+            self.intentos,
+            proveedor,
+            consulta,
+            recuperacion,
+        )
+        return servicio, consulta, recuperacion, proveedor
+
     def _assert_pendiente_sin_recuperacion(self, intento_id, recuperacion):
         intento = self.intentos.obtener(intento_id)
         self.assertEqual(intento.estado, EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value)
@@ -215,6 +237,7 @@ class ReconciliacionContexto2B4Test(unittest.TestCase):
         self.assertEqual(len(recuperacion.llamadas), 1)
         self.assertEqual(consulta.llamadas[0]["cuit_emisor"], "20206871629")
         self.assertEqual(consulta.llamadas[0]["punto_venta"], 5)
+        self.assertEqual(consulta.llamadas[0]["ambiente"], ambiente_arca.AMBIENTE_HOMOLOGACION)
 
     def test_contexto_valido_arca_coherente_factura_a(self):
         contexto = self._contexto_a()
@@ -248,6 +271,52 @@ class ReconciliacionContexto2B4Test(unittest.TestCase):
         self.assertEqual(len(recuperacion.llamadas), 1)
         self.assertEqual(consulta.llamadas[0]["cuit_emisor"], contexto["emisor"]["cuit"])
         self.assertEqual(consulta.llamadas[0]["numero_comprobante"], 123)
+
+    def test_ambiente_del_contexto_prevalece_sobre_emisor_mutable(self):
+        casos = (
+            (ambiente_arca.AMBIENTE_HOMOLOGACION, "Producción"),
+            (ambiente_arca.AMBIENTE_PRODUCCION, "Homologación"),
+        )
+        for ambiente_contexto, ambiente_emisor_vivo in casos:
+            with self.subTest(ambiente_contexto=ambiente_contexto, ambiente_emisor_vivo=ambiente_emisor_vivo):
+                self._limpiar_intentos()
+                contexto = self._contexto_c()
+                contexto["ambiente"] = ambiente_contexto
+                intento_id = self._crear_intento(contexto)
+                emisor_vivo = (
+                    30, "Nombre actual mutado", "", "20999999999", "", "", 99, 1, "",
+                    ambiente_emisor_vivo, "", "", "", "cert.crt", "clave.key", "C:/trabajo", 1,
+                )
+                servicio, consulta, recuperacion, proveedor = self._servicio_con_emisor_vivo(
+                    emisor_vivo,
+                    self._consulta(contexto),
+                )
+
+                resultado = servicio.reconciliar_intento(intento_id)
+
+                self.assertTrue(resultado.ok)
+                self.assertEqual(len(recuperacion.llamadas), 1)
+                self.assertEqual(proveedor.llamadas, [30])
+                self.assertEqual(consulta.llamadas[0]["ambiente"], ambiente_contexto)
+
+    def test_ambiente_invalido_no_consulta_ni_asume_homologacion(self):
+        casos = (None, "", "DESCONOCIDO")
+        for ambiente in casos:
+            with self.subTest(ambiente=ambiente):
+                self._limpiar_intentos()
+                contexto = self._contexto_c()
+                if ambiente is None:
+                    contexto.pop("ambiente")
+                else:
+                    contexto["ambiente"] = ambiente
+                intento_id = self._crear_intento(contexto)
+                servicio, consulta, recuperacion = self._servicio(self._consulta(self._contexto_c()))
+
+                resultado = servicio.reconciliar_intento(intento_id)
+
+                self.assertEqual(resultado.resultado, ResultadoReconciliacion.CONSULTA_INCIERTA)
+                self.assertEqual(consulta.llamadas, [])
+                self._assert_pendiente_sin_recuperacion(intento_id, recuperacion)
 
     def test_contradicciones_arca_son_conflicto(self):
         cambios = {

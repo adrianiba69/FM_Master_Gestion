@@ -203,6 +203,33 @@ class PropagacionAmbienteEmisionTest(unittest.TestCase):
         # El bloqueo no debe crear ningun intento (preenvio ni siquiera se invoca).
         self.assertEqual(preenvio.llamadas, 0)
 
+    def test_consultar_comprobante_emitido_usa_ambiente_recibido(self):
+        with (
+            patch("services.arca.homologacion_service.WSAAService.guardar_tra", return_value="tra.xml"),
+            patch(
+                "services.arca.homologacion_service.WSAALoginService.login_homologacion",
+                return_value={"ok": True, "token": "t", "sign": "s"},
+            ) as mock_login,
+            patch(
+                "services.arca.homologacion_service.WSFEService.fe_comp_consultar",
+                return_value={"ok": True},
+            ) as mock_consulta,
+        ):
+            resultado = HomologacionService.consultar_comprobante_emitido(
+                ruta_certificado="cert.crt",
+                ruta_clave="clave.key",
+                cuit_emisor="20206871629",
+                punto_venta=5,
+                tipo_comprobante=11,
+                numero_comprobante=123,
+                carpeta_trabajo="C:/trabajo",
+                ambiente=ambiente_arca.AMBIENTE_PRODUCCION,
+            )
+
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(mock_login.call_args.kwargs["ambiente"], ambiente_arca.AMBIENTE_PRODUCCION)
+        self.assertEqual(mock_consulta.call_args.kwargs["url"], WSFEService.WSFE_PRODUCCION_URL)
+
 
 class PdfLeyendaAmbienteTest(unittest.TestCase):
 
