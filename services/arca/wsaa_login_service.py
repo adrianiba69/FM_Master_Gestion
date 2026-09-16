@@ -1,7 +1,9 @@
 from base64 import b64encode
 import hashlib
+import os
 from pathlib import Path
 import json
+import tempfile
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -55,14 +57,54 @@ class WSAALoginService:
 
     @staticmethod
     def _guardar_cache_disco(ruta_tra, cache_key, token, sign, expiration, prefix=None):
-        """Guarda el TA en disco para persistir entre ejecuciones."""
+        """Guarda el TA en disco para persistir entre ejecuciones.
+
+        Usa escritura atomica best-effort: el archivo final anterior solo se
+        reemplaza despues de escribir, sincronizar y proteger el temporal. En
+        Windows, os.chmod no equivale a una ACL fuerte de usuario; se usa solo
+        como endurecimiento conservador y no debe bloquear el login.
+        """
+        temporal = None
         try:
             ruta = WSAALoginService._ruta_cache_disco(ruta_tra, cache_key, prefix)
-            if ruta:
-                datos = {"token": token, "sign": sign, "expiration": expiration}
-                ruta.write_text(json.dumps(datos, indent=2), encoding="utf-8")
+            if not ruta:
+                return
+            ruta.parent.mkdir(parents=True, exist_ok=True)
+            datos = {"token": token, "sign": sign, "expiration": expiration}
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=str(ruta.parent),
+                prefix=f".{ruta.stem}.",
+                suffix=".tmp",
+                delete=False,
+            ) as archivo:
+                temporal = Path(archivo.name)
+                json.dump(datos, archivo, indent=2)
+                archivo.write("\n")
+                archivo.flush()
+                os.fsync(archivo.fileno())
+            if not WSAALoginService._proteger_cache_disco_best_effort(temporal):
+                return
+            os.replace(str(temporal), str(ruta))
+            temporal = None
+            WSAALoginService._proteger_cache_disco_best_effort(ruta)
         except Exception as e:
             print(f"DEBUG WSAA - No se pudo guardar TA en disco: {e}")
+        finally:
+            if temporal is not None:
+                try:
+                    temporal.unlink()
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _proteger_cache_disco_best_effort(ruta):
+        try:
+            os.chmod(ruta, 0o600)
+            return True
+        except Exception:
+            return False
 
     @staticmethod
     def _validar_ta(token, sign, expiration):

@@ -1,4 +1,9 @@
+import json
+import os
+import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch, Mock
 
 from services.arca import ambiente_arca
@@ -58,6 +63,113 @@ class EndpointsPorAmbienteTest(unittest.TestCase):
         self.assertNotEqual(str(ruta_homo), str(ruta_prod))
         self.assertIn("homologacion", str(ruta_homo))
         self.assertIn("produccion", str(ruta_prod))
+
+    def test_cache_key_separa_certificado_clave_y_url(self):
+        base = WSAALoginService._cache_key("cert-a.crt", "clave-a.key", WSAALoginService.WSAA_HOMOLOGACION_URL)
+        self.assertNotEqual(
+            base,
+            WSAALoginService._cache_key("cert-b.crt", "clave-a.key", WSAALoginService.WSAA_HOMOLOGACION_URL),
+        )
+        self.assertNotEqual(
+            base,
+            WSAALoginService._cache_key("cert-a.crt", "clave-b.key", WSAALoginService.WSAA_HOMOLOGACION_URL),
+        )
+        self.assertNotEqual(
+            base,
+            WSAALoginService._cache_key("cert-a.crt", "clave-a.key", WSAALoginService.WSAA_PRODUCCION_URL),
+        )
+
+
+class CacheTaDiscoTest(unittest.TestCase):
+
+    @staticmethod
+    def _expiration_futura():
+        return (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+    def test_cache_escritura_lectura_y_sin_temporales_residuales(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            ruta_tra = str(Path(carpeta) / "tra.xml")
+            WSAALoginService._guardar_cache_disco(ruta_tra, "abc123", "TOKEN_TEST_NO_REAL", "SIGN_TEST_NO_REAL", self._expiration_futura())
+            ruta_cache = WSAALoginService._ruta_cache_disco(ruta_tra, "abc123")
+
+            self.assertTrue(ruta_cache.is_file())
+            datos_json = json.loads(ruta_cache.read_text(encoding="utf-8"))
+            self.assertEqual(
+                datos_json,
+                {"token": "TOKEN_TEST_NO_REAL", "sign": "SIGN_TEST_NO_REAL", "expiration": datos_json["expiration"]},
+            )
+            self.assertEqual(WSAALoginService._leer_cache_disco(ruta_tra, "abc123")["token"], "TOKEN_TEST_NO_REAL")
+            self.assertEqual(list(Path(carpeta).glob("*.tmp")), [])
+
+    def test_cache_replace_sobrescribe_con_json_completo(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            ruta_tra = str(Path(carpeta) / "tra.xml")
+            WSAALoginService._guardar_cache_disco(ruta_tra, "abc123", "TOKEN_A", "SIGN_A", self._expiration_futura())
+            WSAALoginService._guardar_cache_disco(ruta_tra, "abc123", "TOKEN_B", "SIGN_B", self._expiration_futura())
+            datos = WSAALoginService._leer_cache_disco(ruta_tra, "abc123")
+
+            self.assertEqual(datos["token"], "TOKEN_B")
+            self.assertEqual(datos["sign"], "SIGN_B")
+            self.assertNotIn("TOKEN_A", Path(WSAALoginService._ruta_cache_disco(ruta_tra, "abc123")).read_text(encoding="utf-8"))
+
+    def test_cache_atomicidad_no_reemplaza_final_si_replace_falla(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            ruta_tra = str(Path(carpeta) / "tra.xml")
+            WSAALoginService._guardar_cache_disco(ruta_tra, "abc123", "TOKEN_A", "SIGN_A", self._expiration_futura())
+            ruta_cache = WSAALoginService._ruta_cache_disco(ruta_tra, "abc123")
+            original = ruta_cache.read_text(encoding="utf-8")
+
+            with patch("services.arca.wsaa_login_service.os.replace", side_effect=OSError("replace")):
+                WSAALoginService._guardar_cache_disco(ruta_tra, "abc123", "TOKEN_B", "SIGN_B", self._expiration_futura())
+
+            self.assertEqual(ruta_cache.read_text(encoding="utf-8"), original)
+            self.assertEqual(WSAALoginService._leer_cache_disco(ruta_tra, "abc123")["token"], "TOKEN_A")
+            self.assertEqual(list(Path(carpeta).glob("*.tmp")), [])
+
+    def test_cache_proteccion_se_invoca_antes_de_replace(self):
+        eventos = []
+        replace_real = os.replace
+        with tempfile.TemporaryDirectory() as carpeta:
+            ruta_tra = str(Path(carpeta) / "tra.xml")
+
+            def proteger(_ruta):
+                eventos.append("proteger")
+                return True
+
+            def reemplazar(_origen, _destino):
+                eventos.append("replace")
+                replace_real(_origen, _destino)
+
+            with (
+                patch.object(WSAALoginService, "_proteger_cache_disco_best_effort", side_effect=proteger),
+                patch("services.arca.wsaa_login_service.os.replace", side_effect=reemplazar),
+            ):
+                WSAALoginService._guardar_cache_disco(ruta_tra, "abc123", "TOKEN_A", "SIGN_A", self._expiration_futura())
+
+        self.assertGreaterEqual(eventos.count("proteger"), 1)
+        self.assertIn("replace", eventos)
+        self.assertLess(eventos.index("proteger"), eventos.index("replace"))
+
+    def test_cache_falla_proteccion_no_reemplaza_y_limpia_temporal(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            ruta_tra = str(Path(carpeta) / "tra.xml")
+            WSAALoginService._guardar_cache_disco(ruta_tra, "abc123", "TOKEN_A", "SIGN_A", self._expiration_futura())
+            ruta_cache = WSAALoginService._ruta_cache_disco(ruta_tra, "abc123")
+            original = ruta_cache.read_text(encoding="utf-8")
+
+            with patch.object(WSAALoginService, "_proteger_cache_disco_best_effort", return_value=False):
+                WSAALoginService._guardar_cache_disco(ruta_tra, "abc123", "TOKEN_B", "SIGN_B", self._expiration_futura())
+
+            self.assertEqual(ruta_cache.read_text(encoding="utf-8"), original)
+            self.assertEqual(list(Path(carpeta).glob("*.tmp")), [])
+
+    def test_cache_json_corrupto_se_ignora(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            ruta_tra = str(Path(carpeta) / "tra.xml")
+            ruta_cache = WSAALoginService._ruta_cache_disco(ruta_tra, "abc123")
+            ruta_cache.write_text("{mal", encoding="utf-8")
+
+            self.assertIsNone(WSAALoginService._leer_cache_disco(ruta_tra, "abc123"))
 
 
 class PropagacionAmbienteEmisionTest(unittest.TestCase):
