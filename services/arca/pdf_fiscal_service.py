@@ -67,11 +67,13 @@ class PDFFiscalService:
             destino_final.parent.mkdir(parents=True, exist_ok=True)
 
             tipo_comprobante = str(PDFFiscalService._pick(datos_comprobante, "tipo", default="Factura C") or "Factura C")
+            ambiente_es_produccion = PDFFiscalService._es_ambiente_produccion(datos_comprobante)
+            subject = tipo_comprobante if ambiente_es_produccion else f"{tipo_comprobante} - Homologacion"
 
             pdf = canvas.Canvas(str(destino_final), pagesize=A4, pageCompression=1)
             pdf.setTitle(tipo_comprobante)
             pdf.setAuthor(str(PDFFiscalService._pick(datos_emisor, "razon_social", "nombre_fantasia", default="Emisor")))
-            pdf.setSubject(f"{tipo_comprobante} - Homologacion")
+            pdf.setSubject(subject)
 
             PDFFiscalService._dibujar_estructura(pdf, datos_emisor, datos_receptor, datos_comprobante)
 
@@ -112,10 +114,7 @@ class PDFFiscalService:
         vto_cae = str(PDFFiscalService._pick(datos_comprobante, "vencimiento_cae", "cae_vencimiento", default=""))
         ambiente = str(PDFFiscalService._pick(datos_comprobante, "ambiente", default="HOMOLOGACION"))
         # Ante ambiente vacio/desconocido, nunca se asume Produccion (se conserva la marca de agua).
-        try:
-            ambiente_es_produccion = ambiente_arca.normalizar_ambiente_arca(ambiente) == ambiente_arca.AMBIENTE_PRODUCCION
-        except ambiente_arca.AmbienteArcaInvalidoError:
-            ambiente_es_produccion = False
+        ambiente_es_produccion = PDFFiscalService._es_ambiente_produccion(datos_comprobante)
 
         # Extraer datos del emisor
         emisor_nombre_fantasia = str(PDFFiscalService._pick(datos_emisor, "nombre_fantasia", default=""))
@@ -432,10 +431,11 @@ class PDFFiscalService:
                 pass
 
         # ══════════════════ PIE DEL DOCUMENTO ══════════════════
-        # Leyenda inferior
-        pdf.setFont("Helvetica", 8)
-        pdf.setFillColor(HexColor("#666666"))
-        pdf.drawString(30, 26, "Documento generado localmente para pruebas de homologacion. Sin validez fiscal.")
+        # Leyenda inferior solo en Homologacion (en Produccion se omite el footer de homologacion)
+        if not ambiente_es_produccion:
+            pdf.setFont("Helvetica", 8)
+            pdf.setFillColor(HexColor("#666666"))
+            pdf.drawString(30, 26, "Documento generado localmente para pruebas de homologacion. Sin validez fiscal.")
 
     @staticmethod
     def _dibujar_logo(pdf, x, y_banda_inferior, altura_banda, logo_path=None, datos_emisor=None):
@@ -520,6 +520,18 @@ class PDFFiscalService:
         base = destino.stem
         sello = datetime.now().strftime("%Y%m%d_%H%M%S")
         return destino.with_name(f"{base}_{sello}.pdf")
+
+    @staticmethod
+    def _es_ambiente_produccion(datos_comprobante):
+        """Determina si los datos del comprobante corresponden a Produccion.
+        Ante cualquier valor invalido, faltante o no string, retorna False (fail-safe Homologacion)."""
+        if not isinstance(datos_comprobante, dict):
+            return False
+        ambiente = str(PDFFiscalService._pick(datos_comprobante, "ambiente", default="HOMOLOGACION"))
+        try:
+            return ambiente_arca.normalizar_ambiente_arca(ambiente) == ambiente_arca.AMBIENTE_PRODUCCION
+        except (ambiente_arca.AmbienteArcaInvalidoError, TypeError, ValueError):
+            return False
 
     @staticmethod
     def _dibujar_qr_fiscal(

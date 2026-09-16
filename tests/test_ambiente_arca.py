@@ -348,6 +348,9 @@ class PdfLeyendaAmbienteTest(unittest.TestCase):
     class _CanvasFalso:
         def __init__(self):
             self.textos = []
+            self.subject = None
+            self.title = None
+            self.author = None
 
         def saveState(self):
             pass
@@ -364,11 +367,44 @@ class PdfLeyendaAmbienteTest(unittest.TestCase):
         def setFillColor(self, *_a, **_k):
             pass
 
+        def setStrokeColor(self, *_a, **_k):
+            pass
+
+        def setLineWidth(self, *_a, **_k):
+            pass
+
         def setFont(self, *_a, **_k):
             pass
 
+        def rect(self, *_a, **_k):
+            pass
+
+        def line(self, *_a, **_k):
+            pass
+
+        def drawImage(self, *_a, **_k):
+            pass
+
+        def drawString(self, _x, _y, texto):
+            self.textos.append(texto)
+
         def drawCentredString(self, _x, _y, texto):
             self.textos.append(texto)
+
+        def drawRightString(self, _x, _y, texto):
+            self.textos.append(texto)
+
+        def setTitle(self, title):
+            self.title = title
+
+        def setAuthor(self, author):
+            self.author = author
+
+        def setSubject(self, subject):
+            self.subject = subject
+
+        def save(self):
+            pass
 
     def test_homologacion_mantiene_leyenda(self):
         canvas_falso = self._CanvasFalso()
@@ -380,6 +416,72 @@ class PdfLeyendaAmbienteTest(unittest.TestCase):
         PDFFiscalService._dibujar_marca_homologacion(canvas_falso, 600, 800, mostrar=False)
         self.assertEqual(canvas_falso.textos, [])
 
+    def test_es_ambiente_produccion_helper(self):
+        self.assertTrue(PDFFiscalService._es_ambiente_produccion({"ambiente": "PRODUCCION"}))
+        self.assertTrue(PDFFiscalService._es_ambiente_produccion({"ambiente": "produccion"}))
+        self.assertFalse(PDFFiscalService._es_ambiente_produccion({"ambiente": "HOMOLOGACION"}))
+        self.assertFalse(PDFFiscalService._es_ambiente_produccion({"ambiente": "homologacion"}))
+        self.assertFalse(PDFFiscalService._es_ambiente_produccion({"ambiente": ""}))
+        self.assertFalse(PDFFiscalService._es_ambiente_produccion({"ambiente": None}))
+        self.assertFalse(PDFFiscalService._es_ambiente_produccion({"ambiente": "TESTING"}))
+        self.assertFalse(PDFFiscalService._es_ambiente_produccion({}))
+        self.assertFalse(PDFFiscalService._es_ambiente_produccion(None))
+
+    def test_generacion_subject_y_footer_en_homologacion(self):
+        canvas_falso = self._CanvasFalso()
+        with patch("services.arca.pdf_fiscal_service.canvas.Canvas", return_value=canvas_falso):
+            resultado = PDFFiscalService.generar_factura_c(
+                ruta_destino="temp.pdf",
+                datos_emisor={"razon_social": "Test Emisor", "cuit": "20111111112"},
+                datos_receptor={"razon_social": "Test Receptor", "cuit": "20222222223"},
+                datos_comprobante={"tipo": "Factura A", "ambiente": "HOMOLOGACION", "numero": 1, "punto_venta": 2},
+            )
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(canvas_falso.subject, "Factura A - Homologacion")
+        self.assertIn("HOMOLOGACION - SIN VALIDEZ FISCAL", canvas_falso.textos)
+        self.assertTrue(any("Documento generado localmente para pruebas de homologacion" in t for t in canvas_falso.textos))
+
+    def test_generacion_subject_y_footer_en_produccion(self):
+        canvas_falso = self._CanvasFalso()
+        with patch("services.arca.pdf_fiscal_service.canvas.Canvas", return_value=canvas_falso):
+            resultado = PDFFiscalService.generar_factura_c(
+                ruta_destino="temp.pdf",
+                datos_emisor={"razon_social": "Test Emisor", "cuit": "20111111112"},
+                datos_receptor={"razon_social": "Test Receptor", "cuit": "20222222223"},
+                datos_comprobante={"tipo": "Factura A", "ambiente": "PRODUCCION", "numero": 1, "punto_venta": 2},
+            )
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(canvas_falso.subject, "Factura A")
+        self.assertNotIn("HOMOLOGACION - SIN VALIDEZ FISCAL", canvas_falso.textos)
+        self.assertFalse(any("Documento generado localmente para pruebas de homologacion" in t for t in canvas_falso.textos))
+
+    def test_generacion_subject_y_footer_fail_safe_invalido_default_homologacion(self):
+        canvas_falso = self._CanvasFalso()
+        with patch("services.arca.pdf_fiscal_service.canvas.Canvas", return_value=canvas_falso):
+            resultado = PDFFiscalService.generar_factura_c(
+                ruta_destino="temp.pdf",
+                datos_emisor={"razon_social": "Test Emisor", "cuit": "20111111112"},
+                datos_receptor={"razon_social": "Test Receptor", "cuit": "20222222223"},
+                datos_comprobante={"tipo": "Factura B", "ambiente": "VALOR_INVALIDO", "numero": 5, "punto_venta": 1},
+            )
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(canvas_falso.subject, "Factura B - Homologacion")
+        self.assertIn("HOMOLOGACION - SIN VALIDEZ FISCAL", canvas_falso.textos)
+        self.assertTrue(any("Documento generado localmente para pruebas de homologacion" in t for t in canvas_falso.textos))
+
+    def test_generacion_sin_ambiente_aplica_fail_safe_homologacion(self):
+        canvas_falso = self._CanvasFalso()
+        with patch("services.arca.pdf_fiscal_service.canvas.Canvas", return_value=canvas_falso):
+            resultado = PDFFiscalService.generar_factura_c(
+                ruta_destino="temp.pdf",
+                datos_emisor={"razon_social": "Test Emisor", "cuit": "20111111112"},
+                datos_receptor={"razon_social": "Test Receptor", "cuit": "20222222223"},
+                datos_comprobante={"tipo": "Factura C", "numero": 7, "punto_venta": 1},
+            )
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(canvas_falso.subject, "Factura C - Homologacion")
+        self.assertIn("HOMOLOGACION - SIN VALIDEZ FISCAL", canvas_falso.textos)
+        self.assertTrue(any("Documento generado localmente para pruebas de homologacion" in t for t in canvas_falso.textos))
 
 if __name__ == "__main__":
     unittest.main()
