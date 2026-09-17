@@ -35,6 +35,14 @@ class SnapshotFiscalCorruptoError(Exception):
         super().__init__(detalle)
 
 
+class ResolucionEmisorFiscalError(Exception):
+    """La factura no permite resolver un emisor fiscal de forma inequívoca."""
+
+    def __init__(self, codigo="", mensaje=""):
+        self.codigo = str(codigo or "RESOLUCION_EMISOR_FISCAL_INVALIDA")
+        super().__init__(str(mensaje or "No se pudo resolver el emisor fiscal de la factura."))
+
+
 class FacturasElectronicasFrame(ctk.CTkFrame):
 
     COLOR_ESTADO_COBRO_SIN = "#B43A3A"
@@ -789,7 +797,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             self._limpiar_panel_detalle()
             return
 
-        emisor = self._resolver_nombre_emisor_para_panel(factura.get("emisor_id"))
+        emisor = self._resolver_nombre_emisor_para_panel(factura)
         resumen_id = factura.get("resumen_id")
         resumen_texto = f"ID {resumen_id}" if resumen_id else "-"
 
@@ -912,13 +920,24 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self.boton_abrir_cliente_panel.configure(state=estado)
         self.boton_abrir_resumen_panel.configure(state=estado)
 
-    def _resolver_nombre_emisor_para_panel(self, emisor_id):
+    def _resolver_nombre_emisor_para_panel(self, factura):
+        emisor_id = factura.get("emisor_id") if isinstance(factura, dict) else None
         if not emisor_id:
             return ""
-        if emisor_id in self._cache_emisores:
-            return self._cache_emisores[emisor_id]
+        try:
+            cuit_snapshot = self._cuit_emisor_desde_snapshot(factura)
+        except SnapshotFiscalCorruptoError:
+            cuit_snapshot = None
+        clave_cache = (emisor_id, cuit_snapshot)
+        if clave_cache in self._cache_emisores:
+            return self._cache_emisores[clave_cache]
 
-        emisor_fiscal = self._resolver_emisor_fiscal_desde_factura(emisor_id)
+        try:
+            emisor_fiscal = self._resolver_emisor_fiscal_desde_factura(factura)
+        except (ResolucionEmisorFiscalError, SnapshotFiscalCorruptoError):
+            nombre = "Inconsistencia fiscal"
+            self._cache_emisores[clave_cache] = nombre
+            return nombre
         if emisor_fiscal:
             nombre = EmisorFiscalService.etiqueta_visible(emisor_fiscal)
         else:
@@ -928,7 +947,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             else:
                 nombre = ""
 
-        self._cache_emisores[emisor_id] = nombre
+        self._cache_emisores[clave_cache] = nombre
         return nombre
 
     @staticmethod
@@ -1073,7 +1092,23 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             )
             return None
 
-        emisor_fiscal = self._resolver_emisor_fiscal_desde_factura(factura.get("emisor_id"))
+        try:
+            emisor_fiscal = self._resolver_emisor_fiscal_desde_factura(factura)
+        except SnapshotFiscalCorruptoError:
+            messagebox.showerror(
+                "Facturas electrónicas",
+                "No se puede localizar el PDF porque el snapshot fiscal almacenado "
+                "no supera la validación de integridad.",
+                parent=self,
+            )
+            return None
+        except ResolucionEmisorFiscalError as error:
+            messagebox.showwarning(
+                "Facturas electrónicas",
+                f"No se puede localizar el PDF por una inconsistencia del emisor fiscal.\n\n{error}",
+                parent=self,
+            )
+            return None
         if not emisor_fiscal:
             messagebox.showwarning(
                 "Facturas electrónicas",
@@ -1854,28 +1889,31 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         self._clientes_bridge = ClientesFrame(self.winfo_toplevel())
         return self._clientes_bridge
 
-    def _resolver_emisor_fiscal_desde_factura(self, emisor_id):
-        if not emisor_id:
+    @staticmethod
+    def _cuit_emisor_desde_snapshot(factura):
+        if not isinstance(factura, dict):
             return None
-
-        emisor_fiscal = EmisorFiscalService.obtener(emisor_id)
-        if emisor_fiscal:
-            return emisor_fiscal
-
-        emisor_interno = EmisorService.obtener(emisor_id)
-        if not emisor_interno:
+        decision = resolver_modo_regeneracion(
+            factura.get("snapshot_fiscal_json"),
+            factura.get("snapshot_version"),
+            factura.get("snapshot_hash"),
+        )
+        if decision.modo == MODO_CORRUPTO:
+            raise SnapshotFiscalCorruptoError(decision.errores)
+        if decision.modo != MODO_SNAPSHOT:
             return None
+        return str((decision.snapshot.get("emisor") or {}).get("cuit") or "").strip() or None
 
-        cuit_interno = self._normalizar_cuit(emisor_interno[4] if len(emisor_interno) > 4 else "")
-        if not cuit_interno:
+    def _resolver_emisor_fiscal_desde_factura(self, factura):
+        if not isinstance(factura, dict):
             return None
-
-        for emisor in EmisorFiscalService.listar():
-            cuit_fiscal = self._normalizar_cuit(emisor[3] if len(emisor) > 3 else "")
-            if cuit_fiscal and cuit_fiscal == cuit_interno:
-                return emisor
-
-        return None
+        resultado = EmisorFiscalService.resolver_desde_emisor_facturacion(
+            factura.get("emisor_id"),
+            cuit_snapshot=self._cuit_emisor_desde_snapshot(factura),
+        )
+        if not resultado.get("ok"):
+            raise ResolucionEmisorFiscalError(resultado.get("codigo"), resultado.get("mensaje"))
+        return resultado.get("emisor_fiscal")
 
     @staticmethod
     def _normalizar_cuit(valor):

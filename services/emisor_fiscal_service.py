@@ -1,9 +1,95 @@
 import os
 
 from database import conectar
+from services.emisor_service import EmisorService
 
 
 class EmisorFiscalService:
+
+    @staticmethod
+    def _normalizar_cuit(valor):
+        digitos = "".join(caracter for caracter in str(valor or "") if caracter.isdigit())
+        return digitos if len(digitos) == 11 else ""
+
+    @staticmethod
+    def resolver_desde_emisor_facturacion(emisor_id, cuit_snapshot=None):
+        resultado = {
+            "ok": False,
+            "emisor_fiscal": None,
+            "codigo": "",
+            "mensaje": "",
+        }
+
+        emisor_interno = EmisorService.obtener(emisor_id)
+        if not emisor_interno:
+            resultado["codigo"] = "EMISOR_INTERNO_NO_ENCONTRADO"
+            resultado["mensaje"] = "No se encontro el emisor interno asociado a la factura."
+            return resultado
+
+        cuit_interno = EmisorFiscalService._normalizar_cuit(
+            emisor_interno[4] if len(emisor_interno) > 4 else ""
+        )
+        cuit_interno_raw = str(emisor_interno[4] if len(emisor_interno) > 4 else "" or "").strip()
+        if cuit_interno_raw and not cuit_interno:
+            resultado["codigo"] = "CUIT_INTERNO_INVALIDO"
+            resultado["mensaje"] = "El CUIT configurado en el emisor interno es invalido."
+            return resultado
+        cuit_historico = EmisorFiscalService._normalizar_cuit(cuit_snapshot)
+        if cuit_interno and cuit_historico and cuit_interno != cuit_historico:
+            resultado["codigo"] = "CUIT_INTERNO_CONTRADICE_SNAPSHOT"
+            resultado["mensaje"] = "El CUIT actual del emisor interno contradice el snapshot fiscal."
+            return resultado
+
+        emisor_fiscal_id = emisor_interno[19] if len(emisor_interno) > 19 else None
+        if emisor_fiscal_id:
+            emisor_fiscal = EmisorFiscalService.obtener(emisor_fiscal_id)
+            if not emisor_fiscal:
+                resultado["codigo"] = "VINCULO_FISCAL_NO_ENCONTRADO"
+                resultado["mensaje"] = "El emisor fiscal vinculado no existe."
+                return resultado
+
+            cuit_fiscal = EmisorFiscalService._normalizar_cuit(
+                emisor_fiscal[3] if len(emisor_fiscal) > 3 else ""
+            )
+            cuit_fiscal_raw = str(emisor_fiscal[3] if len(emisor_fiscal) > 3 else "" or "").strip()
+            if cuit_fiscal_raw and not cuit_fiscal:
+                resultado["codigo"] = "CUIT_FISCAL_INVALIDO"
+                resultado["mensaje"] = "El CUIT configurado en el emisor fiscal vinculado es invalido."
+                return resultado
+            if cuit_interno and cuit_fiscal and cuit_interno != cuit_fiscal:
+                resultado["codigo"] = "CUIT_VINCULO_INCONSISTENTE"
+                resultado["mensaje"] = "El CUIT del emisor fiscal vinculado no coincide con el emisor interno."
+                return resultado
+            if cuit_historico and cuit_fiscal and cuit_historico != cuit_fiscal:
+                resultado["codigo"] = "CUIT_SNAPSHOT_INCONSISTENTE"
+                resultado["mensaje"] = "El CUIT del emisor fiscal vinculado contradice el snapshot fiscal."
+                return resultado
+
+            resultado.update(ok=True, emisor_fiscal=emisor_fiscal, codigo="VINCULO_EXPLICITO")
+            return resultado
+
+        cuit_referencia = cuit_historico or cuit_interno
+        if not cuit_referencia:
+            resultado["codigo"] = "CUIT_NO_DISPONIBLE"
+            resultado["mensaje"] = "No hay un CUIT valido para resolver el emisor fiscal."
+            return resultado
+
+        coincidencias = [
+            emisor
+            for emisor in EmisorFiscalService.listar()
+            if EmisorFiscalService._normalizar_cuit(emisor[3] if len(emisor) > 3 else "") == cuit_referencia
+        ]
+        if not coincidencias:
+            resultado["codigo"] = "EMISOR_FISCAL_NO_ENCONTRADO"
+            resultado["mensaje"] = "No existe un emisor fiscal con el CUIT del emisor interno."
+            return resultado
+        if len(coincidencias) > 1:
+            resultado["codigo"] = "EMISOR_FISCAL_AMBIGUO"
+            resultado["mensaje"] = "Hay mas de un emisor fiscal con el mismo CUIT."
+            return resultado
+
+        resultado.update(ok=True, emisor_fiscal=coincidencias[0], codigo="FALLBACK_CUIT_UNICO")
+        return resultado
 
     @staticmethod
     def etiqueta_visible(emisor):
