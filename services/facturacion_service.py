@@ -7,6 +7,7 @@ from models.factura_arca import FacturaArca
 from pdf.nombre_archivos import nombre_factura_pdf
 from services.arca import ambiente_arca
 from services.arca.homologacion_service import HomologacionService
+from services.arca.carpeta_facturas_resolver import resolver_carpeta_facturas_por_ambiente
 from services.arca.cierre_local_arca_service import CierreLocalArcaService
 from services.arca.contexto_fiscal_service import CONTEXTO_FISCAL_VERSION
 from services.arca.pdf_fiscal_service import PDFFiscalService
@@ -1524,11 +1525,6 @@ class FacturacionService:
         }
 
         try:
-            ruta_sugerida_pdf = str(
-                Path(str(carpeta_facturas or "").strip())
-                / nombre_factura_pdf(int(cliente_id), str(tipo_factura or ""), str(codigo_factura or ""))
-            )
-
             if snapshot:
                 # FASE 5E: el PDF inicial usa el mismo snapshot recien construido/persistido,
                 # sin reconsultar cliente/emisor/resumen (misma fuente que la regeneracion 5D).
@@ -1537,6 +1533,9 @@ class FacturacionService:
                 datos_emisor = datos_pdf["datos_emisor"]
                 datos_receptor = datos_pdf["datos_receptor"]
                 datos_comprobante = datos_pdf["datos_comprobante"]
+                # POST-E2E 3B.2: la carpeta fisica se deriva del ambiente FISCAL congelado
+                # en el snapshot, nunca del combo mutable de configuracion del emisor.
+                carpeta_pdf = resolver_carpeta_facturas_por_ambiente(carpeta_facturas, snapshot.get("ambiente"))
             else:
                 # MODO LEGACY: sin snapshot disponible, se reconstruye desde el contexto de emision.
                 datos_emisor = {
@@ -1579,6 +1578,11 @@ class FacturacionService:
                     "ambiente": str(emisor_fiscal[9] if len(emisor_fiscal) > 9 else "Homologación"),
                     "punto_venta": punto_venta_num,
                 }
+                carpeta_pdf = Path(str(carpeta_facturas or "").strip())
+
+            ruta_sugerida_pdf = str(
+                carpeta_pdf / nombre_factura_pdf(int(cliente_id), str(tipo_factura or ""), str(codigo_factura or ""))
+            )
 
             pdf = PDFFiscalService.generar_factura_c(
                 ruta_destino=ruta_sugerida_pdf,

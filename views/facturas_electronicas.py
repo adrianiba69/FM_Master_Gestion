@@ -9,6 +9,7 @@ from config import COLOR_PRINCIPAL
 from database import conectar
 from pdf.nombre_archivos import nombre_cliente_archivo, nombre_factura_pdf
 from services.arca.pdf_fiscal_service import PDFFiscalService
+from services.arca.carpeta_facturas_resolver import resolver_carpeta_facturas_por_ambiente
 from services.arca.snapshot_fiscal_pdf_adapter import (
     MODO_CORRUPTO,
     MODO_SNAPSHOT,
@@ -1141,11 +1142,21 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             return None
 
         nombre_pdf = nombre_factura_pdf(cliente_id, tipo_factura, codigo_factura)
-        ruta_pdf_estandar = Path(carpeta_facturas) / nombre_pdf
+        try:
+            carpeta_canonica = self._resolver_carpeta_facturas_canonica(factura, carpeta_facturas)
+        except SnapshotFiscalCorruptoError:
+            messagebox.showerror(
+                "Facturas electrónicas",
+                "No se puede localizar el PDF porque el snapshot fiscal almacenado "
+                "no supera la validación de integridad.",
+                parent=self,
+            )
+            return None
+        ruta_pdf_estandar = carpeta_canonica / nombre_pdf
         ruta_pdf = ruta_pdf_estandar
         if not ruta_pdf.is_file():
             coincidencias = self._buscar_pdf_historico_compatible(
-                carpeta_facturas=carpeta_facturas,
+                carpeta_facturas=str(carpeta_canonica),
                 cliente_id=cliente_id,
                 tipo_factura=tipo_factura,
                 codigo_factura=codigo_factura,
@@ -1890,7 +1901,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         return self._clientes_bridge
 
     @staticmethod
-    def _cuit_emisor_desde_snapshot(factura):
+    def _decision_snapshot_factura(factura):
+        """Decision snapshot/legacy/corrupto centralizada (ver adaptador puro).
+        Bloquea corrupcion aqui (SnapshotFiscalCorruptoError); nunca cae a legacy
+        ni a la carpeta mutable del emisor en ese caso."""
         if not isinstance(factura, dict):
             return None
         decision = resolver_modo_regeneracion(
@@ -1900,9 +1914,31 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         )
         if decision.modo == MODO_CORRUPTO:
             raise SnapshotFiscalCorruptoError(decision.errores)
-        if decision.modo != MODO_SNAPSHOT:
+        return decision
+
+    @staticmethod
+    def _cuit_emisor_desde_snapshot(factura):
+        decision = FacturasElectronicasFrame._decision_snapshot_factura(factura)
+        if decision is None or decision.modo != MODO_SNAPSHOT:
             return None
         return str((decision.snapshot.get("emisor") or {}).get("cuit") or "").strip() or None
+
+    @staticmethod
+    def _ambiente_snapshot_factura(factura):
+        decision = FacturasElectronicasFrame._decision_snapshot_factura(factura)
+        if decision is None or decision.modo != MODO_SNAPSHOT:
+            return None
+        return str(decision.snapshot.get("ambiente") or "").strip() or None
+
+    @staticmethod
+    def _resolver_carpeta_facturas_canonica(factura, carpeta_facturas):
+        """Carpeta fisica canonica: bucket por ambiente FISCAL congelado en el
+        snapshot cuando existe; carpeta legacy configurada (compatible, sin
+        bucket) cuando la factura es historica sin snapshot."""
+        ambiente_snapshot = FacturasElectronicasFrame._ambiente_snapshot_factura(factura)
+        if ambiente_snapshot is None:
+            return Path(str(carpeta_facturas or "").strip())
+        return resolver_carpeta_facturas_por_ambiente(carpeta_facturas, ambiente_snapshot)
 
     def _resolver_emisor_fiscal_desde_factura(self, factura):
         if not isinstance(factura, dict):
