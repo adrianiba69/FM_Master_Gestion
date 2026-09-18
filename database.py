@@ -59,6 +59,13 @@ def migrar_factura_arca_snapshot_fiscal(cur):
         agregar_columna_si_falta(cur, "factura_arca", columna, definicion)
 
 
+def migrar_factura_arca_ruta_pdf(cur):
+    """Agrega columnas nullable para la ubicacion operativa del PDF fiscal.
+    Sin backfill: los historicos quedan con ambos valores NULL."""
+    for columna in ("ruta_pdf_relativa", "ruta_pdf_absoluta"):
+        agregar_columna_si_falta(cur, "factura_arca", columna, "TEXT")
+
+
 def _prevalidar_duplicados_cae(cur):
     cur.execute(
         "SELECT TRIM(cae), COUNT(*), GROUP_CONCAT(id) FROM factura_arca "
@@ -784,6 +791,7 @@ def crear_base():
     migrar_factura_arca_columnas_normalizadas(cur)
     migrar_factura_arca_identidad_receptor(cur)
     migrar_factura_arca_snapshot_fiscal(cur)
+    migrar_factura_arca_ruta_pdf(cur)
     migrar_indices_unicos_factura_arca(cur)
 
     # ==========================

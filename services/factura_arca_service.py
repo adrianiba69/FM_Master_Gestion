@@ -11,7 +11,8 @@ class FacturaArcaService:
         "id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, "
         "importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, "
         "punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, "
-        "documento_receptor, snapshot_fiscal_json, snapshot_version, snapshot_hash"
+        "documento_receptor, snapshot_fiscal_json, snapshot_version, snapshot_hash, "
+        "ruta_pdf_relativa, ruta_pdf_absoluta"
     )
 
     @staticmethod
@@ -22,13 +23,26 @@ class FacturaArcaService:
     @staticmethod
     def _select_columnas(cur):
         columnas = FacturaArcaService._columnas_existentes(cur)
-        if {"snapshot_fiscal_json", "snapshot_version", "snapshot_hash"}.issubset(columnas):
+        tiene_snapshot = {"snapshot_fiscal_json", "snapshot_version", "snapshot_hash"}.issubset(columnas)
+        tiene_ruta_pdf = {"ruta_pdf_relativa", "ruta_pdf_absoluta"}.issubset(columnas)
+        if tiene_snapshot and tiene_ruta_pdf:
             return FacturaArcaService.COLUMNAS_BASE
+
+        partes_snapshot = (
+            "snapshot_fiscal_json, snapshot_version, snapshot_hash"
+            if tiene_snapshot
+            else "NULL AS snapshot_fiscal_json, NULL AS snapshot_version, NULL AS snapshot_hash"
+        )
+        partes_ruta_pdf = (
+            "ruta_pdf_relativa, ruta_pdf_absoluta"
+            if tiene_ruta_pdf
+            else "NULL AS ruta_pdf_relativa, NULL AS ruta_pdf_absoluta"
+        )
         return (
             "id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, "
             "importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, "
             "punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, "
-            "documento_receptor, NULL AS snapshot_fiscal_json, NULL AS snapshot_version, NULL AS snapshot_hash"
+            f"documento_receptor, {partes_snapshot}, {partes_ruta_pdf}"
         )
 
     @staticmethod
@@ -164,6 +178,9 @@ class FacturaArcaService:
         if {"snapshot_fiscal_json", "snapshot_version", "snapshot_hash"}.issubset(columnas_existentes):
             columnas.extend(["snapshot_fiscal_json", "snapshot_version", "snapshot_hash"])
             valores.extend([factura.snapshot_fiscal_json, factura.snapshot_version, factura.snapshot_hash])
+        if {"ruta_pdf_relativa", "ruta_pdf_absoluta"}.issubset(columnas_existentes):
+            columnas.extend(["ruta_pdf_relativa", "ruta_pdf_absoluta"])
+            valores.extend([factura.ruta_pdf_relativa, factura.ruta_pdf_absoluta])
         try:
             placeholders = ",".join("?" for _ in columnas)
             cur.execute(
@@ -197,6 +214,19 @@ class FacturaArcaService:
                 factura.observaciones,
                 factura.id,
             ),
+        )
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def actualizar_ruta_pdf(factura_id, ruta_pdf_relativa, ruta_pdf_absoluta):
+        """Actualiza exclusivamente la ubicacion operativa del PDF fiscal.
+        No toca CAE, snapshot, estado ni identidad fiscal de la factura."""
+        conn = conectar()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE factura_arca SET ruta_pdf_relativa=?, ruta_pdf_absoluta=? WHERE id=?",
+            (ruta_pdf_relativa, ruta_pdf_absoluta, int(factura_id)),
         )
         conn.commit()
         conn.close()

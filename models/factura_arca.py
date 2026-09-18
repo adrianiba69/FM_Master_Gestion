@@ -25,3 +25,5 @@ class FacturaArca:
     snapshot_fiscal_json: str = None
     snapshot_version: int = None
     snapshot_hash: str = None
+    ruta_pdf_relativa: str = None
+    ruta_pdf_absoluta: str = None

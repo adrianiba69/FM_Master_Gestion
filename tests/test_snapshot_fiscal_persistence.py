@@ -242,7 +242,9 @@ class SnapshotFiscalPersistenceTest(unittest.TestCase):
         json_text, version, digest = self._snapshot()
         factura_id = self._guardar_factura_service(FacturaArca(cliente_id=10, emisor_id=20, resumen_id=30, fecha="2026-08-23", punto_venta="5", tipo_comprobante="Factura A", importe_total=1210, estado="Facturada manualmente", numero_factura="00005-00000123", snapshot_fiscal_json=json_text, snapshot_version=version, snapshot_hash=digest))
         fila = self._con_servicio_temporal(lambda: FacturaArcaService.obtener(factura_id))
-        self.assertEqual(fila[-3:], (json_text, version, digest))
+        # snapshot_fiscal_json/version/hash son las columnas 19-21 (0-index); ya no son
+        # las ultimas de la fila desde que POST-E2E 3B.3A agrega ruta_pdf_relativa/absoluta al final.
+        self.assertEqual(fila[19:22], (json_text, version, digest))
 
     def _guardar_factura_service(self, factura):
         return self._con_servicio_temporal(lambda: FacturaArcaService.guardar(factura))
