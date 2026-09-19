@@ -8,6 +8,7 @@ from pdf.nombre_archivos import nombre_factura_pdf
 from services.arca import ambiente_arca
 from services.arca.homologacion_service import HomologacionService
 from services.arca.carpeta_facturas_resolver import resolver_carpeta_facturas_por_ambiente
+from services.arca.ruta_pdf_fiscal_service import construir_rutas_pdf_persistibles
 from services.arca.cierre_local_arca_service import CierreLocalArcaService
 from services.arca.contexto_fiscal_service import CONTEXTO_FISCAL_VERSION
 from services.arca.pdf_fiscal_service import PDFFiscalService
@@ -1084,6 +1085,21 @@ class FacturacionService:
                 return resultado
 
             ruta_pdf = str(pdf.get("ruta_pdf") or "").strip()
+            try:
+                ruta_pdf_relativa, ruta_pdf_absoluta = construir_rutas_pdf_persistibles(
+                    carpeta_facturas,
+                    snapshot_resultado["snapshot"].get("ambiente"),
+                    ruta_pdf,
+                )
+                FacturaArcaService.actualizar_ruta_pdf(
+                    factura_id,
+                    ruta_pdf_relativa,
+                    ruta_pdf_absoluta,
+                )
+            except Exception as error:
+                resultado.setdefault("advertencias", []).append(
+                    f"El PDF se generó, pero no se pudo persistir su ubicación: {error}"
+                )
 
             resultado["ok"] = True
             resultado["etapa"] = "ok"

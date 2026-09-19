@@ -11,6 +11,15 @@ from pdf.resumen_pdf import ResumenPDF
 from runtime_paths import PDF_DIR
 from services.arca.homologacion_service import HomologacionService
 from services.arca.pdf_fiscal_service import PDFFiscalService
+from services.arca.ruta_pdf_fiscal_service import (
+    RutaPdfFiscalInvalidaError,
+    resolver_ruta_pdf_documental,
+)
+from services.arca.snapshot_fiscal_pdf_adapter import (
+    MODO_CORRUPTO,
+    MODO_SNAPSHOT,
+    resolver_modo_regeneracion,
+)
 from services.cliente_service import ClienteService
 from services.emisor_fiscal_service import EmisorFiscalService
 from services.email_service import EmailService
@@ -19,7 +28,11 @@ from services.facturacion_service import FacturacionService
 from services.factura_arca_service import FacturaArcaService
 from services.resumen_service import ResumenService
 from services.whatsapp_service import WhatsAppService
-from views.facturas_electronicas import FacturasElectronicasFrame
+from views.facturas_electronicas import (
+    FacturasElectronicasFrame,
+    ResolucionEmisorFiscalError,
+    SnapshotFiscalCorruptoError,
+)
 
 
 class ResumenesFrame(ctk.CTkFrame):
@@ -940,12 +953,21 @@ class ResumenesFrame(ctk.CTkFrame):
         if resumen and getattr(resumen, "emisor_fiscal_id", None):
             emisor_fiscal = EmisorFiscalService.obtener(int(resumen.emisor_fiscal_id))
         if not emisor_fiscal and emisor_facturacion_id:
-            emisor_interno = EmisorService.obtener(int(emisor_facturacion_id))
-            emisor_fiscal_id = emisor_interno[19] if emisor_interno and len(emisor_interno) > 19 else None
-            if emisor_fiscal_id:
-                emisor_fiscal = EmisorFiscalService.obtener(int(emisor_fiscal_id))
-        if not emisor_fiscal and len(cliente_fila) > 22:
-            emisor_fiscal = self._buscar_emisor_fiscal_por_etiqueta(cliente_fila[22])
+            try:
+                cuit_snapshot = self._cuit_emisor_desde_snapshot_factura(factura)
+            except SnapshotFiscalCorruptoError:
+                messagebox.showerror(
+                    "Modo prueba modal",
+                    "No se puede abrir la factura porque su snapshot fiscal "
+                    "almacenado no supera la validación de integridad.",
+                    parent=self,
+                )
+                return False
+            resultado_emisor = EmisorFiscalService.resolver_desde_emisor_facturacion(
+                int(emisor_facturacion_id), cuit_snapshot=cuit_snapshot,
+            )
+            if resultado_emisor.get("ok"):
+                emisor_fiscal = resultado_emisor.get("emisor_fiscal")
 
         if not emisor_fiscal:
             messagebox.showwarning(
@@ -997,6 +1019,7 @@ class ResumenesFrame(ctk.CTkFrame):
             tipo_factura=tipo_factura,
             codigo_factura=codigo_factura,
             emisor_fiscal=emisor_fiscal,
+            factura=factura,
         )
         ruta_pdf_resumen = self._obtener_ruta_pdf_resumen_existente(resumen_id) if resumen_id else ""
 
@@ -1170,41 +1193,96 @@ class ResumenesFrame(ctk.CTkFrame):
             return ""
         return str(ruta_pdf)
 
-    def _resolver_ruta_pdf_factura_existente(self, cliente_id, tipo_factura, codigo_factura, emisor_fiscal):
+    @staticmethod
+    def _cuit_emisor_desde_snapshot_factura(factura):
+        """CUIT del emisor congelado en el snapshot fiscal v1, si existe.
+        Bloquea (no ignora) un snapshot corrupto en vez de caer a legacy."""
+        if factura is None:
+            return None
+        decision = resolver_modo_regeneracion(
+            factura[19] if len(factura) > 19 else None,
+            factura[20] if len(factura) > 20 else None,
+            factura[21] if len(factura) > 21 else None,
+        )
+        if decision.modo == MODO_CORRUPTO:
+            raise SnapshotFiscalCorruptoError(decision.errores)
+        if decision.modo != MODO_SNAPSHOT:
+            return None
+        return str((decision.snapshot.get("emisor") or {}).get("cuit") or "").strip() or None
+
+    def _resolver_ruta_pdf_factura_existente(
+        self,
+        cliente_id,
+        tipo_factura,
+        codigo_factura,
+        emisor_fiscal,
+        factura=None,
+    ):
         if not emisor_fiscal or not cliente_id:
             return ""
 
-        carpeta_facturas = str(emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or "").strip()
+        carpeta_facturas = str(
+            emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or ""
+        ).strip()
         if not carpeta_facturas:
             return ""
 
         try:
-            nombre_pdf = nombre_factura_pdf(int(cliente_id), str(tipo_factura or "").strip(), str(codigo_factura or "").strip())
+            nombre_pdf = nombre_factura_pdf(
+                int(cliente_id),
+                str(tipo_factura or "").strip(),
+                str(codigo_factura or "").strip(),
+            )
         except (TypeError, ValueError):
             return ""
 
-        ruta_estandar = Path(carpeta_facturas) / nombre_pdf
-        if ruta_estandar.is_file():
-            return str(ruta_estandar)
+        if factura is not None:
+            factura_documental = {
+                "snapshot_fiscal_json": factura[19] if len(factura) > 19 else None,
+                "snapshot_version": factura[20] if len(factura) > 20 else None,
+                "snapshot_hash": factura[21] if len(factura) > 21 else None,
+                "ruta_pdf_relativa": factura[22] if len(factura) > 22 else None,
+                "ruta_pdf_absoluta": factura[23] if len(factura) > 23 else None,
+            }
+
+            try:
+                ruta_documental = resolver_ruta_pdf_documental(
+                    factura_documental,
+                    carpeta_facturas,
+                    nombre_pdf,
+                )
+            except RutaPdfFiscalInvalidaError:
+                return ""
+
+            if ruta_documental.ruta.is_file():
+                return str(ruta_documental.ruta)
+
+            if ruta_documental.persistida:
+                return ""
+
+            carpeta_busqueda = ruta_documental.ruta.parent
+        else:
+            carpeta_busqueda = Path(carpeta_facturas)
+            ruta_estandar = carpeta_busqueda / nombre_pdf
+            if ruta_estandar.is_file():
+                return str(ruta_estandar)
 
         if not str(codigo_factura or "").strip():
             return ""
 
-        carpeta = Path(carpeta_facturas)
-        if not carpeta.is_dir():
+        if not carpeta_busqueda.is_dir():
             return ""
 
         coincidencias = [
             ruta
-            for ruta in carpeta.glob("*.pdf")
+            for ruta in carpeta_busqueda.glob("*.pdf")
             if str(codigo_factura).strip() in ruta.name
         ]
-        if not coincidencias:
+
+        if len(coincidencias) != 1:
             return ""
 
-        coincidencias.sort(key=lambda ruta: ruta.stat().st_mtime, reverse=True)
         return str(coincidencias[0])
-
     def _armar_items_factura_desde_resumen(self, resumen):
         items = []
         for concepto in list(getattr(resumen, "conceptos", []) or []):

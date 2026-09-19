@@ -10,6 +10,11 @@ from database import conectar
 from pdf.nombre_archivos import nombre_cliente_archivo, nombre_factura_pdf
 from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.arca.carpeta_facturas_resolver import resolver_carpeta_facturas_por_ambiente
+from services.arca.ruta_pdf_fiscal_service import (
+    RutaPdfFiscalInvalidaError,
+    construir_rutas_pdf_persistibles_para_factura,
+    resolver_ruta_pdf_documental,
+)
 from services.arca.snapshot_fiscal_pdf_adapter import (
     MODO_CORRUPTO,
     MODO_SNAPSHOT,
@@ -473,6 +478,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         snapshot_fiscal_json = fila[19] if len(fila) > 19 else None
         snapshot_version = fila[20] if len(fila) > 20 else None
         snapshot_hash = fila[21] if len(fila) > 21 else None
+        ruta_pdf_relativa = fila[22] if len(fila) > 22 else None
+        ruta_pdf_absoluta = fila[23] if len(fila) > 23 else None
         return {
             "factura_id": factura_id,
             "cliente_id": cliente_id,
@@ -482,6 +489,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "snapshot_fiscal_json": snapshot_fiscal_json,
             "snapshot_version": snapshot_version,
             "snapshot_hash": snapshot_hash,
+            "ruta_pdf_relativa": ruta_pdf_relativa,
+            "ruta_pdf_absoluta": ruta_pdf_absoluta,
             "cobrado_total": cobrado,
             "saldo_cobro": saldo,
             "estado_cobro": estado_cobro,
@@ -993,9 +1002,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
 
         ruta_pdf_inicial = ruta_pdf
         regenerado = False
+        advertencia_persistencia = None
         if tipo_factura == "Factura A":
             try:
-                ruta_pdf, regenerado = self._regenerar_pdf_fiscal_factura(
+                ruta_pdf, regenerado, advertencia_persistencia = self._regenerar_pdf_fiscal_factura(
                     factura=factura,
                     valores_fila=valores_fila,
                     emisor_fiscal=emisor_fiscal,
@@ -1042,6 +1052,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                 parent=self,
             )
             return None
+
+        if advertencia_persistencia:
+            messagebox.showwarning("Facturas electrónicas", advertencia_persistencia, parent=self)
 
         coincide_con_estandar = False
         try:
@@ -1141,22 +1154,24 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             )
             return None
 
-        nombre_pdf = nombre_factura_pdf(cliente_id, tipo_factura, codigo_factura)
         try:
-            carpeta_canonica = self._resolver_carpeta_facturas_canonica(factura, carpeta_facturas)
-        except SnapshotFiscalCorruptoError:
+            ruta_documental = resolver_ruta_pdf_documental(
+                factura,
+                carpeta_facturas,
+                nombre_factura_pdf(cliente_id, tipo_factura, codigo_factura),
+            )
+        except (RutaPdfFiscalInvalidaError, SnapshotFiscalCorruptoError) as error:
             messagebox.showerror(
                 "Facturas electrónicas",
-                "No se puede localizar el PDF porque el snapshot fiscal almacenado "
-                "no supera la validación de integridad.",
+                f"No se puede localizar el PDF fiscal de forma segura.\n\n{error}",
                 parent=self,
             )
             return None
-        ruta_pdf_estandar = carpeta_canonica / nombre_pdf
+        ruta_pdf_estandar = ruta_documental.ruta
         ruta_pdf = ruta_pdf_estandar
-        if not ruta_pdf.is_file():
+        if not ruta_pdf.is_file() and not ruta_documental.persistida:
             coincidencias = self._buscar_pdf_historico_compatible(
-                carpeta_facturas=str(carpeta_canonica),
+                carpeta_facturas=str(ruta_pdf_estandar.parent),
                 cliente_id=cliente_id,
                 tipo_factura=tipo_factura,
                 codigo_factura=codigo_factura,
@@ -1254,17 +1269,36 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             datos_comprobante=datos_pdf["datos_comprobante"],
         )
         if not resultado.get("ok"):
-            return ruta_resuelta, False
+            return ruta_resuelta, False, None
 
         ruta_generada = Path(str(resultado.get("ruta_pdf") or ruta_destino))
+        advertencia_persistencia = None
+        try:
+            ruta_pdf_relativa, ruta_pdf_absoluta = construir_rutas_pdf_persistibles_para_factura(
+                factura,
+                carpeta_facturas,
+                ruta_generada,
+            )
+            FacturaArcaService.actualizar_ruta_pdf(
+                factura.get("factura_id"),
+                ruta_pdf_relativa,
+                ruta_pdf_absoluta,
+            )
+            factura["ruta_pdf_relativa"] = ruta_pdf_relativa
+            factura["ruta_pdf_absoluta"] = ruta_pdf_absoluta
+        except Exception as error:
+            advertencia_persistencia = (
+                "El PDF se regeneró correctamente, pero no se pudo actualizar su "
+                f"ubicación persistida: {error}"
+            )
         if forzar_reemplazo_estandar:
             try:
                 if ruta_generada.resolve() != ruta_estandar.resolve():
-                    return ruta_generada, False
+                    return ruta_generada, False, advertencia_persistencia
             except OSError:
-                return ruta_generada, False
+                return ruta_generada, False, advertencia_persistencia
 
-        return ruta_generada, True
+        return ruta_generada, True, advertencia_persistencia
 
     def _regenerar_pdf_desde_menu(self):
         contexto = self._resolver_contexto_factura_pdf_seleccionada()
@@ -1295,7 +1329,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             return
 
         try:
-            ruta_pdf, regenerado = self._regenerar_pdf_fiscal_factura(
+            ruta_pdf, regenerado, advertencia_persistencia = self._regenerar_pdf_fiscal_factura(
                 factura=contexto["factura"],
                 valores_fila=contexto["valores_fila"],
                 emisor_fiscal=contexto["emisor_fiscal"],
@@ -1353,6 +1387,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             f"PDF regenerado correctamente.\n\nArchivo: {ruta_pdf}",
             parent=self,
         )
+        if advertencia_persistencia:
+            messagebox.showwarning("Facturas electrónicas", advertencia_persistencia, parent=self)
 
     def _validar_datos_minimos_regeneracion_pdf(self, factura, valores_fila):
         faltantes = []
