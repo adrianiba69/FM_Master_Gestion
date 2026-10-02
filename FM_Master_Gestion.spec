@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 PROJECT_DIR = Path(SPECPATH).resolve()
 
@@ -14,6 +14,7 @@ hiddenimports = []
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+hiddenimports += collect_submodules("reportlab.graphics.barcode")
 
 a = Analysis(
     [str(PROJECT_DIR / "main.py")],
