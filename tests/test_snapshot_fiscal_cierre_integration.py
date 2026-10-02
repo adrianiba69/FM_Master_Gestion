@@ -59,11 +59,11 @@ def _items():
     }]
 
 
-def _snapshot_valido(numero=123, cae="12345678901234"):
+def _snapshot_valido(numero=123, cae="12345678901234", ambiente="HOMOLOGACION"):
     snapshot = construir_snapshot_fiscal_v1(
         fuente="cierre_normal",
         creado_en="2026-08-23T12:00:00",
-        ambiente="HOMOLOGACION",
+        ambiente=ambiente,
         emisor={
             "emisor_id": 40, "emisor_fiscal_id": 30, "razon_social": "FM Master SRL",
             "nombre_fantasia": "FM Master", "cuit": "20206871629", "condicion_iva": "Responsable Inscripto",
@@ -357,6 +357,30 @@ class CierreLocalConSnapshotTest(unittest.TestCase):
         self.assertTrue(resultado.ok)
         fila = self.filas("factura_arca")[0]
         self.assertEqual(fila[-3:], (json_text, version, digest))
+
+    def test_cierre_nuevo_persiste_ambiente_del_snapshot(self):
+        conexion = sqlite3.connect(self.ruta)
+        conexion.execute("ALTER TABLE factura_arca ADD COLUMN ambiente_arca TEXT")
+        conexion.commit()
+        conexion.close()
+        json_text, version, digest = _snapshot_valido(ambiente="PRODUCCION")
+        resultado = self.service.cerrar_emision_confirmada(
+            **self.datos(), snapshot_fiscal_json=json_text, snapshot_version=version, snapshot_hash=digest,
+        )
+        self.assertTrue(resultado.ok)
+        conexion = sqlite3.connect(self.ruta)
+        self.assertEqual(conexion.execute("SELECT ambiente_arca FROM factura_arca").fetchone()[0], "PRODUCCION")
+        conexion.close()
+
+    def test_cierre_nuevo_sin_snapshot_falla_en_esquema_migrado(self):
+        conexion = sqlite3.connect(self.ruta)
+        conexion.execute("ALTER TABLE factura_arca ADD COLUMN ambiente_arca TEXT")
+        conexion.commit()
+        conexion.close()
+        resultado = self.service.cerrar_emision_confirmada(**self.datos())
+        self.assertFalse(resultado.ok)
+        self.assertEqual(len(self.filas("factura_arca")), 0)
+        self.assertEqual(self.filas("resumenes")[0][1], "Pendiente")
 
     def test_version_es_1(self):
         _json_text, version, _digest = _snapshot_valido()

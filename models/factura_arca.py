@@ -27,3 +27,4 @@ class FacturaArca:
     snapshot_hash: str = None
     ruta_pdf_relativa: str = None
     ruta_pdf_absoluta: str = None
+    ambiente_arca: str = None

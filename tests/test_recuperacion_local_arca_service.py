@@ -218,6 +218,30 @@ class RecuperacionLocalArcaServiceTest(unittest.TestCase):
         self.assertEqual(final["iva"][0]["porcentaje"], "21.00")
         self.assertEqual(final["autorizacion"]["cae"], "86330766550000")
 
+    def test_recuperacion_nueva_persiste_ambiente_del_contexto(self):
+        for ambiente in ("HOMOLOGACION", "PRODUCCION"):
+            with self.subTest(ambiente=ambiente):
+                conexion = sqlite3.connect(self.ruta)
+                conexion.execute("ALTER TABLE factura_arca ADD COLUMN ambiente_arca TEXT")
+                contexto = self._contexto()
+                contexto["ambiente"] = ambiente
+                validacion = ContextoFiscalService.validar(contexto)
+                conexion.execute(
+                    "UPDATE intentos_emision_arca SET contexto_fiscal_json=?, contexto_fiscal_version=?, "
+                    "contexto_fiscal_hash=? WHERE id=?",
+                    (validacion.json_canonico, validacion.version, validacion.hash_calculado, self.intento_id),
+                )
+                conexion.commit()
+                conexion.close()
+                resultado = self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
+                self.assertEqual(resultado.resultado, ResultadoReconciliacion.AUTORIZADO)
+                conexion = sqlite3.connect(self.ruta)
+                self.assertEqual(conexion.execute("SELECT ambiente_arca FROM factura_arca").fetchone()[0], ambiente)
+                conexion.close()
+                if ambiente == "HOMOLOGACION":
+                    self.tearDown()
+                    self.setUp()
+
     def test_repetir_recuperacion_es_idempotente(self):
         primero = self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
         hash_primero = self._filas("factura_arca")[0][-1]

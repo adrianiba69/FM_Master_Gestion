@@ -214,6 +214,7 @@ class RecuperacionLocalArcaService:
             )
 
         snapshot_final = snapshot_construido.snapshot
+        ambiente_final = snapshot_final["ambiente"]
         emisor_final = snapshot_final["emisor"]
         receptor_final = snapshot_final["receptor"]
         comprobante_final = snapshot_final["comprobante"]
@@ -223,6 +224,8 @@ class RecuperacionLocalArcaService:
         try:
             cursor = conexion.cursor()
             cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute("PRAGMA table_info(factura_arca)")
+            tiene_ambiente = any(fila[1] == "ambiente_arca" for fila in cursor.fetchall())
 
             compatibles, incompatibles = self._buscar_facturas(cursor, intento, snapshot_final, consulta)
             if incompatibles or len(compatibles) > 1:
@@ -282,15 +285,17 @@ class RecuperacionLocalArcaService:
                     self._tipo_factura(comprobante_final["tipo_comprobante_num"]),
                     numero_factura,
                 )
+                columnas_ambiente = ", ambiente_arca" if tiene_ambiente else ""
+                placeholders_ambiente = ",?" if tiene_ambiente else ""
                 cursor.execute(
-                    """
+                    f"""
                     INSERT INTO factura_arca(
                         cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante,
                         importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion,
                         punto_venta_num, tipo_comprobante_num, numero_comprobante_num,
                         tipo_documento_receptor, documento_receptor,
-                        snapshot_fiscal_json, snapshot_version, snapshot_hash
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        snapshot_fiscal_json, snapshot_version, snapshot_hash{columnas_ambiente}
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?{placeholders_ambiente})
                     """,
                     (
                         receptor_final["cliente_id"], emisor_final["emisor_id"], intento.resumen_id,
@@ -303,7 +308,7 @@ class RecuperacionLocalArcaService:
                         snapshot_construido.snapshot_json,
                         snapshot_construido.snapshot_version,
                         snapshot_construido.snapshot_hash,
-                    ),
+                    ) + ((ambiente_final,) if tiene_ambiente else ()),
                 )
                 factura_id = cursor.lastrowid
                 insertada = True

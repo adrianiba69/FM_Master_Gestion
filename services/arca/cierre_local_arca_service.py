@@ -105,6 +105,7 @@ class CierreLocalArcaService:
         snapshot_version=None,
         snapshot_hash=None,
     ):
+        ambiente_snapshot = None
         if snapshot_fiscal_json is not None:
             integridad = validar_integridad_snapshot(snapshot_fiscal_json, snapshot_version, snapshot_hash)
             if integridad.codigo != CODIGO_VALIDO:
@@ -113,6 +114,7 @@ class CierreLocalArcaService:
                     ResultadoReconciliacion.CONFLICTO,
                     mensaje=f"snapshot_fiscal_invalido ({integridad.codigo}): {'; '.join(integridad.errores)}",
                 )
+            ambiente_snapshot = integridad.snapshot["ambiente"]
 
         datos = {
             "intento_id": intento_id,
@@ -138,6 +140,13 @@ class CierreLocalArcaService:
         try:
             cursor = conexion.cursor()
             cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute("PRAGMA table_info(factura_arca)")
+            tiene_ambiente = any(fila[1] == "ambiente_arca" for fila in cursor.fetchall())
+            if tiene_ambiente and ambiente_snapshot is None:
+                conexion.rollback()
+                return ResultadoCierreLocalArca(
+                    False, ResultadoReconciliacion.CONFLICTO, mensaje="Falta snapshot fiscal con ambiente ARCA."
+                )
             compatibles, incompatibles = self._seleccion_factura(cursor, datos)
             if incompatibles or len(compatibles) > 1:
                 conexion.rollback()
@@ -187,6 +196,9 @@ class CierreLocalArcaService:
                     valores_insert.extend(
                         [datos["snapshot_fiscal_json"], datos["snapshot_version"], datos["snapshot_hash"]]
                     )
+                if tiene_ambiente:
+                    columnas_insert.append("ambiente_arca")
+                    valores_insert.append(ambiente_snapshot)
                 placeholders = ",".join("?" for _ in columnas_insert)
                 cursor.execute(
                     f"INSERT INTO factura_arca({','.join(columnas_insert)}) VALUES({placeholders})",

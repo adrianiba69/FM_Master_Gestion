@@ -4,6 +4,7 @@ from datetime import date, datetime
 
 from runtime_paths import DATABASE_PATH
 from services.arca.fiscal_normalization import normalizar_identidad_factura
+from services.arca.snapshot_fiscal_service import CODIGO_VALIDO, validar_integridad_snapshot
 
 DB_NAME = str(DATABASE_PATH)
 
@@ -57,6 +58,67 @@ def migrar_factura_arca_snapshot_fiscal(cur):
         ("snapshot_hash", "TEXT"),
     ):
         agregar_columna_si_falta(cur, "factura_arca", columna, definicion)
+
+
+def migrar_factura_arca_ambiente(cur):
+    agregar_columna_si_falta(cur, "factura_arca", "ambiente_arca", "TEXT")
+
+
+def completar_ambiente_factura_arca_desde_snapshot(cur):
+    """Backfill controlado: nunca se ejecuta durante la apertura de la base."""
+    cur.execute("PRAGMA table_info(factura_arca)")
+    columnas = {fila[1] for fila in cur.fetchall()}
+    requeridas = {
+        "ambiente_arca", "snapshot_fiscal_json", "snapshot_version", "snapshot_hash",
+        "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num",
+    }
+    if not requeridas.issubset(columnas):
+        raise ValueError("Faltan columnas de factura_arca para completar ambiente.")
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='emisores_facturacion'")
+    if not cur.fetchone():
+        raise ValueError("Falta emisores_facturacion para verificar CUIT histórico.")
+
+    cur.execute(
+        "SELECT f.id, f.cliente_id, f.emisor_id, f.punto_venta, f.tipo_comprobante, "
+        "f.numero_factura, f.cae, f.punto_venta_num, f.tipo_comprobante_num, "
+        "f.numero_comprobante_num, f.snapshot_fiscal_json, f.snapshot_version, f.snapshot_hash, "
+        "e.cuit FROM factura_arca f LEFT JOIN emisores_facturacion e ON e.id=f.emisor_id "
+        "WHERE f.ambiente_arca IS NULL AND f.snapshot_fiscal_json IS NOT NULL"
+    )
+    actualizadas = 0
+    for (factura_id, cliente_id, emisor_id, punto_venta, tipo, numero, cae, pv_num,
+         tipo_num, numero_num, json_texto, version, hash_texto, cuit_emisor) in cur.fetchall():
+        validacion = validar_integridad_snapshot(json_texto, version, hash_texto)
+        if validacion.codigo != CODIGO_VALIDO:
+            continue
+        snapshot = validacion.snapshot
+        emisor = snapshot["emisor"]
+        comprobante = snapshot["comprobante"]
+        clave_textual = normalizar_identidad_factura(punto_venta, tipo, numero)
+        clave_snapshot = (
+            comprobante["punto_venta_num"], comprobante["tipo_comprobante_num"],
+            comprobante["numero_comprobante_num"],
+        )
+        if (
+            None in clave_textual or clave_textual != clave_snapshot
+            or any(actual is not None and actual != esperado for actual, esperado in zip(
+                (pv_num, tipo_num, numero_num), clave_snapshot
+            ))
+            or int(emisor_id) != emisor["emisor_id"]
+            or int(cliente_id) != snapshot["receptor"]["cliente_id"]
+            or not cuit_emisor
+            or "".join(caracter for caracter in cuit_emisor if caracter.isdigit()) != emisor["cuit"]
+            or str(numero or "").strip() != comprobante["numero_textual"]
+            or not str(cae or "").strip()
+            or str(cae).strip() != snapshot["autorizacion"]["cae"]
+        ):
+            continue
+        cur.execute(
+            "UPDATE factura_arca SET ambiente_arca=? WHERE id=? AND ambiente_arca IS NULL",
+            (snapshot["ambiente"], factura_id),
+        )
+        actualizadas += cur.rowcount
+    return actualizadas
 
 
 def migrar_factura_arca_ruta_pdf(cur):
@@ -791,6 +853,7 @@ def crear_base():
     migrar_factura_arca_columnas_normalizadas(cur)
     migrar_factura_arca_identidad_receptor(cur)
     migrar_factura_arca_snapshot_fiscal(cur)
+    migrar_factura_arca_ambiente(cur)
     migrar_factura_arca_ruta_pdf(cur)
     migrar_indices_unicos_factura_arca(cur)
 

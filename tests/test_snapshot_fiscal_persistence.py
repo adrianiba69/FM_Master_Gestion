@@ -1,10 +1,16 @@
+import json
 import os
 import sqlite3
 import tempfile
 import unittest
 from decimal import Decimal
 
-from database import crear_base, migrar_factura_arca_snapshot_fiscal
+from database import (
+    completar_ambiente_factura_arca_desde_snapshot,
+    crear_base,
+    migrar_factura_arca_ambiente,
+    migrar_factura_arca_snapshot_fiscal,
+)
 from models.factura_arca import FacturaArca
 from services.arca.snapshot_fiscal_persistence_service import (
     CODIGO_FACTURA_INEXISTENTE,
@@ -97,11 +103,11 @@ class SnapshotFiscalPersistenceTest(unittest.TestCase):
         conexion.close()
         return factura_id
 
-    def _snapshot(self, numero=123, cae="12345678901234"):
+    def _snapshot(self, numero=123, cae="12345678901234", ambiente="HOMOLOGACION"):
         snapshot = construir_snapshot_fiscal_v1(
             fuente="cierre_normal",
             creado_en="2026-08-23T12:34:56",
-            ambiente="HOMOLOGACION",
+            ambiente=ambiente,
             emisor={
                 "emisor_id": 20,
                 "emisor_fiscal_id": 2,
@@ -192,6 +198,88 @@ class SnapshotFiscalPersistenceTest(unittest.TestCase):
         conexion.close()
         self.assertEqual(columnas.count("snapshot_fiscal_json"), 1)
 
+    def test_migracion_ambiente_nullable_idempotente_sin_backfill(self):
+        factura_id = self._insertar_factura()
+        conexion = sqlite3.connect(self.ruta)
+        antes = conexion.execute(
+            "SELECT snapshot_fiscal_json, snapshot_version, snapshot_hash FROM factura_arca WHERE id=?", (factura_id,)
+        ).fetchone()
+        migrar_factura_arca_ambiente(conexion.cursor())
+        migrar_factura_arca_ambiente(conexion.cursor())
+        columnas = [fila for fila in conexion.execute("PRAGMA table_info(factura_arca)") if fila[1] == "ambiente_arca"]
+        ambiente = conexion.execute("SELECT ambiente_arca FROM factura_arca WHERE id=?", (factura_id,)).fetchone()[0]
+        despues = conexion.execute(
+            "SELECT snapshot_fiscal_json, snapshot_version, snapshot_hash FROM factura_arca WHERE id=?", (factura_id,)
+        ).fetchone()
+        conexion.close()
+        self.assertEqual(len(columnas), 1)
+        self.assertEqual(columnas[0][4], None)
+        self.assertIsNone(ambiente)
+        self.assertEqual(antes, despues)
+
+    def _preparar_backfill(self, snapshot_columnas=None):
+        factura_id = self._insertar_factura()
+        conexion = sqlite3.connect(self.ruta)
+        conexion.execute("CREATE TABLE emisores_facturacion(id INTEGER PRIMARY KEY, cuit TEXT)")
+        conexion.execute("INSERT INTO emisores_facturacion VALUES(20, '20-11111111-7')")
+        migrar_factura_arca_ambiente(conexion.cursor())
+        if snapshot_columnas is not None:
+            conexion.execute(
+                "UPDATE factura_arca SET snapshot_fiscal_json=?, snapshot_version=?, snapshot_hash=? WHERE id=?",
+                (*snapshot_columnas, factura_id),
+            )
+        conexion.commit()
+        return conexion, factura_id
+
+    def test_backfill_controlado_snapshot_valido_h_y_p(self):
+        for ambiente in ("HOMOLOGACION", "PRODUCCION"):
+            with self.subTest(ambiente=ambiente):
+                snapshot = self._snapshot(ambiente=ambiente)
+                conexion, factura_id = self._preparar_backfill(snapshot)
+                antes = self._snapshot_db(factura_id)
+                self.assertIsNone(conexion.execute("SELECT ambiente_arca FROM factura_arca").fetchone()[0])
+                self.assertEqual(completar_ambiente_factura_arca_desde_snapshot(conexion.cursor()), 1)
+                self.assertEqual(completar_ambiente_factura_arca_desde_snapshot(conexion.cursor()), 0)
+                self.assertEqual(conexion.execute("SELECT ambiente_arca FROM factura_arca").fetchone()[0], ambiente)
+                self.assertEqual(self._snapshot_db(factura_id), antes)
+                conexion.close()
+                if ambiente == "HOMOLOGACION":
+                    os.remove(self.ruta)
+                    archivo = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+                    self.ruta = archivo.name
+                    archivo.close()
+                    self._crear_schema_base()
+
+    def test_backfill_no_clasifica_ausente_corrupto_invalido_o_contradicciones(self):
+        valido = self._snapshot()
+        datos_invalidos = json.loads(valido[0])
+        datos_invalidos["ambiente"] = "OTRO"
+        invalido = json.dumps(datos_invalidos, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        casos = (
+            ("ausente", None, None),
+            ("json_corrupto", ("{mal", 1, "0" * 64), None),
+            ("hash_invalido", (valido[0], valido[1], "0" * 64), None),
+            ("ambiente_invalido", (invalido, valido[1], calcular_hash_snapshot(invalido)), None),
+            ("numero_distinto", self._snapshot(numero=124), None),
+            ("cae_distinto", self._snapshot(cae="12345678909999"), None),
+            ("cuit_distinto", valido, "20999999999"),
+        )
+        for nombre, snapshot, cuit_distinto in casos:
+            with self.subTest(caso=nombre):
+                conexion, factura_id = self._preparar_backfill(snapshot)
+                if cuit_distinto:
+                    conexion.execute("UPDATE emisores_facturacion SET cuit=?", (cuit_distinto,))
+                antes = self._snapshot_db(factura_id)
+                self.assertEqual(completar_ambiente_factura_arca_desde_snapshot(conexion.cursor()), 0)
+                self.assertIsNone(conexion.execute("SELECT ambiente_arca FROM factura_arca").fetchone()[0])
+                self.assertEqual(self._snapshot_db(factura_id), antes)
+                conexion.close()
+                os.remove(self.ruta)
+                archivo = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+                self.ruta = archivo.name
+                archivo.close()
+                self._crear_schema_base()
+
     def test_filas_historicas_conservan_snapshot_null(self):
         factura_id = self._insertar_factura()
         self.assertEqual(self._snapshot_db(factura_id), (None, None, None))
@@ -219,6 +307,13 @@ class SnapshotFiscalPersistenceTest(unittest.TestCase):
         finally:
             database.DB_NAME = original
         self.assertIn("snapshot_fiscal_json", columnas)
+        self.assertIn("ambiente_arca", columnas)
+
+    def test_lectura_base_historica_sin_columna_ambiente(self):
+        factura_id = self._insertar_factura()
+        fila = self._con_servicio_temporal(lambda: FacturaArcaService.obtener(factura_id))
+        self.assertIsNone(fila[-1])
+        self.assertEqual(fila[19:22], (None, None, None))
 
     def test_modelo_acepta_snapshot_opcional(self):
         json_text, version, digest = self._snapshot()
@@ -237,6 +332,70 @@ class SnapshotFiscalPersistenceTest(unittest.TestCase):
         json_text, version, digest = self._snapshot()
         factura_id = self._guardar_factura_service(FacturaArca(cliente_id=10, emisor_id=20, resumen_id=30, fecha="2026-08-23", punto_venta="5", tipo_comprobante="Factura A", importe_total=1210, estado="Facturada manualmente", numero_factura="00005-00000123", snapshot_fiscal_json=json_text, snapshot_version=version, snapshot_hash=digest))
         self.assertEqual(self._snapshot_db(factura_id), (json_text, version, digest))
+
+    def test_guardar_confirmada_h_y_p_desde_snapshot_y_leer_ambiente(self):
+        for ambiente in ("HOMOLOGACION", "PRODUCCION"):
+            with self.subTest(ambiente=ambiente):
+                conexion = sqlite3.connect(self.ruta)
+                migrar_factura_arca_ambiente(conexion.cursor())
+                conexion.commit()
+                conexion.close()
+                json_texto, version, digest = self._snapshot(ambiente=ambiente)
+                factura_id = self._guardar_factura_service(FacturaArca(
+                    cliente_id=10, emisor_id=20, resumen_id=30, fecha="2026-08-23",
+                    punto_venta="5", tipo_comprobante="Factura A", importe_total=1210,
+                    estado="Facturada manualmente", numero_factura="00005-00000123",
+                    cae="12345678901234", snapshot_fiscal_json=json_texto,
+                    snapshot_version=version, snapshot_hash=digest,
+                ))
+                self.assertEqual(self._con_servicio_temporal(lambda: FacturaArcaService.obtener(factura_id))[-1], ambiente)
+                self.assertEqual(self._con_servicio_temporal(lambda: FacturaArcaService.listar())[0][-1], ambiente)
+                self.assertEqual(self._snapshot_db(factura_id), (json_texto, version, digest))
+                if ambiente == "HOMOLOGACION":
+                    os.remove(self.ruta)
+                    archivo = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+                    self.ruta = archivo.name
+                    archivo.close()
+                    self._crear_schema_base()
+
+    def test_guardar_confirmada_sin_evidencia_o_ambiente_contradictorio_falla(self):
+        conexion = sqlite3.connect(self.ruta)
+        migrar_factura_arca_ambiente(conexion.cursor())
+        conexion.commit()
+        conexion.close()
+        base = dict(cliente_id=10, emisor_id=20, resumen_id=30, fecha="2026-08-23", punto_venta="5",
+                    tipo_comprobante="Factura A", importe_total=1210, estado="Facturada manualmente",
+                    numero_factura="00005-00000123", cae="12345678901234")
+        json_texto, version, digest = self._snapshot()
+        for cambios in (
+            {}, {"ambiente_arca": "OTRO"},
+            {"snapshot_fiscal_json": json_texto, "snapshot_version": version,
+             "snapshot_hash": digest, "ambiente_arca": "PRODUCCION"},
+            {"snapshot_fiscal_json": json_texto, "snapshot_version": version, "snapshot_hash": "0" * 64},
+        ):
+            with self.subTest(cambios=cambios), self.assertRaises(ValueError):
+                self._guardar_factura_service(FacturaArca(**(base | cambios)))
+        conexion = sqlite3.connect(self.ruta)
+        self.assertEqual(conexion.execute("SELECT COUNT(*) FROM factura_arca").fetchone()[0], 0)
+        conexion.close()
+
+    def test_guardado_legacy_no_fiscal_y_edicion_sin_desincronizar_identidad(self):
+        conexion = sqlite3.connect(self.ruta)
+        migrar_factura_arca_ambiente(conexion.cursor())
+        conexion.commit()
+        conexion.close()
+        factura = FacturaArca(cliente_id=10, emisor_id=20, resumen_id=30, fecha="2026-08-23",
+                             punto_venta="5", tipo_comprobante="Factura A", importe_total=1210)
+        factura.id = self._guardar_factura_service(factura)
+        self.assertIsNone(self._con_servicio_temporal(lambda: FacturaArcaService.obtener(factura.id))[-1])
+        factura.numero_factura = "00005-00000123"
+        self._con_servicio_temporal(lambda: FacturaArcaService.actualizar(factura))
+        conexion = sqlite3.connect(self.ruta)
+        self.assertEqual(conexion.execute(
+            "SELECT punto_venta_num, tipo_comprobante_num, numero_comprobante_num, ambiente_arca "
+            "FROM factura_arca WHERE id=?", (factura.id,)
+        ).fetchone(), (5, 1, 123, None))
+        conexion.close()
 
     def test_select_recupera_campos_snapshot(self):
         json_text, version, digest = self._snapshot()

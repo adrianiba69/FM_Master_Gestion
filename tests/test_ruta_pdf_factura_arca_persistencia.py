@@ -297,7 +297,7 @@ class RutaPdfFacturaArcaPersistenciaTest(unittest.TestCase):
             )
         )
         fila = self._con_servicio_temporal(lambda: FacturaArcaService.obtener(factura_id))
-        self.assertEqual(fila[-2:], (relativa, absoluta))
+        self.assertEqual(fila[-3:-1], (relativa, absoluta))
 
     # H) listar recupera ambas rutas.
     def test_listar_recupera_ambas_rutas(self):
@@ -315,7 +315,7 @@ class RutaPdfFacturaArcaPersistenciaTest(unittest.TestCase):
         )
         filas = self._con_servicio_temporal(lambda: FacturaArcaService.listar())
         self.assertEqual(len(filas), 1)
-        self.assertEqual(filas[0][-2:], (relativa, absoluta))
+        self.assertEqual(filas[0][-3:-1], (relativa, absoluta))
 
     # I) actualizar posteriormente: NULL -> rutas funciona.
     def test_actualizar_ruta_pdf_desde_null_funciona(self):

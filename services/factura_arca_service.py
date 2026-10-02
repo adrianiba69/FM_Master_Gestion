@@ -3,6 +3,8 @@ from datetime import datetime
 from database import conectar
 from models.factura_arca import FacturaArca
 from services.arca.fiscal_normalization import normalizar_identidad_factura
+from services.arca import ambiente_arca
+from services.arca.snapshot_fiscal_service import CODIGO_VALIDO, validar_integridad_snapshot
 
 
 class FacturaArcaService:
@@ -12,7 +14,7 @@ class FacturaArcaService:
         "importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, "
         "punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, "
         "documento_receptor, snapshot_fiscal_json, snapshot_version, snapshot_hash, "
-        "ruta_pdf_relativa, ruta_pdf_absoluta"
+        "ruta_pdf_relativa, ruta_pdf_absoluta, ambiente_arca"
     )
 
     @staticmethod
@@ -25,7 +27,8 @@ class FacturaArcaService:
         columnas = FacturaArcaService._columnas_existentes(cur)
         tiene_snapshot = {"snapshot_fiscal_json", "snapshot_version", "snapshot_hash"}.issubset(columnas)
         tiene_ruta_pdf = {"ruta_pdf_relativa", "ruta_pdf_absoluta"}.issubset(columnas)
-        if tiene_snapshot and tiene_ruta_pdf:
+        tiene_ambiente = "ambiente_arca" in columnas
+        if tiene_snapshot and tiene_ruta_pdf and tiene_ambiente:
             return FacturaArcaService.COLUMNAS_BASE
 
         partes_snapshot = (
@@ -38,11 +41,12 @@ class FacturaArcaService:
             if tiene_ruta_pdf
             else "NULL AS ruta_pdf_relativa, NULL AS ruta_pdf_absoluta"
         )
+        parte_ambiente = "ambiente_arca" if tiene_ambiente else "NULL AS ambiente_arca"
         return (
             "id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, "
             "importe_total, estado, numero_factura, cae, vencimiento_cae, observaciones, fecha_creacion, "
             "punto_venta_num, tipo_comprobante_num, numero_comprobante_num, tipo_documento_receptor, "
-            f"documento_receptor, {partes_snapshot}, {partes_ruta_pdf}"
+            f"documento_receptor, {partes_snapshot}, {partes_ruta_pdf}, {parte_ambiente}"
         )
 
     @staticmethod
@@ -143,11 +147,49 @@ class FacturaArcaService:
 
     @staticmethod
     def guardar(factura: FacturaArca):
+        ambiente_informado = (
+            ambiente_arca.normalizar_ambiente_arca(factura.ambiente_arca)
+            if factura.ambiente_arca is not None else None
+        )
         conn = conectar()
         cur = conn.cursor()
+        columnas_existentes = FacturaArcaService._columnas_existentes(cur)
         punto_num, tipo_num, numero_num = normalizar_identidad_factura(
             factura.punto_venta, factura.tipo_comprobante, factura.numero_factura
         )
+        ambiente = None
+        if "ambiente_arca" in columnas_existentes:
+            if any(valor is not None for valor in (
+                factura.snapshot_fiscal_json, factura.snapshot_version, factura.snapshot_hash
+            )):
+                validacion = validar_integridad_snapshot(
+                    factura.snapshot_fiscal_json, factura.snapshot_version, factura.snapshot_hash
+                )
+                if validacion.codigo != CODIGO_VALIDO:
+                    conn.close()
+                    raise ValueError("Snapshot fiscal inválido para guardar factura ARCA.")
+                snapshot = validacion.snapshot
+                comprobante = snapshot["comprobante"]
+                if (
+                    (punto_num, tipo_num, numero_num) != (
+                        comprobante["punto_venta_num"], comprobante["tipo_comprobante_num"],
+                        comprobante["numero_comprobante_num"],
+                    )
+                    or factura.emisor_id != snapshot["emisor"]["emisor_id"]
+                    or factura.cliente_id != snapshot["receptor"]["cliente_id"]
+                    or str(factura.cae or "").strip() != snapshot["autorizacion"]["cae"]
+                ):
+                    conn.close()
+                    raise ValueError("Identidad fiscal contradictoria con el snapshot.")
+                ambiente = snapshot["ambiente"]
+                if ambiente_informado is not None and ambiente_informado != ambiente:
+                    conn.close()
+                    raise ValueError("Ambiente ARCA contradictorio con el snapshot.")
+            elif factura.cae or (factura.numero_factura and str(factura.estado or "").lower().startswith("facturad")):
+                conn.close()
+                raise ValueError("Una factura fiscal confirmada requiere snapshot y ambiente ARCA.")
+            else:
+                ambiente = ambiente_informado
         columnas = [
             "cliente_id", "emisor_id", "resumen_id", "fecha", "punto_venta", "tipo_comprobante",
             "importe_total", "estado", "numero_factura", "cae", "vencimiento_cae", "observaciones",
@@ -174,13 +216,15 @@ class FacturaArcaService:
             factura.tipo_documento_receptor,
             factura.documento_receptor,
         ]
-        columnas_existentes = FacturaArcaService._columnas_existentes(cur)
         if {"snapshot_fiscal_json", "snapshot_version", "snapshot_hash"}.issubset(columnas_existentes):
             columnas.extend(["snapshot_fiscal_json", "snapshot_version", "snapshot_hash"])
             valores.extend([factura.snapshot_fiscal_json, factura.snapshot_version, factura.snapshot_hash])
         if {"ruta_pdf_relativa", "ruta_pdf_absoluta"}.issubset(columnas_existentes):
             columnas.extend(["ruta_pdf_relativa", "ruta_pdf_absoluta"])
             valores.extend([factura.ruta_pdf_relativa, factura.ruta_pdf_absoluta])
+        if "ambiente_arca" in columnas_existentes:
+            columnas.append("ambiente_arca")
+            valores.append(ambiente)
         try:
             placeholders = ",".join("?" for _ in columnas)
             cur.execute(
@@ -196,27 +240,37 @@ class FacturaArcaService:
     @staticmethod
     def actualizar(factura: FacturaArca):
         conn = conectar()
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE factura_arca SET cliente_id=?, emisor_id=?, resumen_id=?, fecha=?, punto_venta=?, tipo_comprobante=?, importe_total=?, estado=?, numero_factura=?, cae=?, vencimiento_cae=?, observaciones=? WHERE id=?",
-            (
-                factura.cliente_id,
-                factura.emisor_id,
-                factura.resumen_id,
-                factura.fecha,
-                factura.punto_venta,
-                factura.tipo_comprobante,
-                factura.importe_total,
-                factura.estado,
-                factura.numero_factura,
-                factura.cae,
-                factura.vencimiento_cae,
-                factura.observaciones,
-                factura.id,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            cur = conn.cursor()
+            columnas = FacturaArcaService._columnas_existentes(cur)
+            cur.execute(
+                "SELECT emisor_id, punto_venta, tipo_comprobante, numero_factura, cae, "
+                + ("ambiente_arca" if "ambiente_arca" in columnas else "NULL")
+                + (", snapshot_fiscal_json" if "snapshot_fiscal_json" in columnas else ", NULL")
+                + " FROM factura_arca WHERE id=?", (factura.id,),
+            )
+            actual = cur.fetchone()
+            if actual and (actual[5] is not None or actual[6] is not None):
+                if (factura.emisor_id, factura.punto_venta, factura.tipo_comprobante,
+                    factura.numero_factura, factura.cae) != actual[:5]:
+                    raise ValueError("No se puede modificar la identidad de una factura fiscal congelada.")
+            punto_num, tipo_num, numero_num = normalizar_identidad_factura(
+                factura.punto_venta, factura.tipo_comprobante, factura.numero_factura
+            )
+            cur.execute(
+                "UPDATE factura_arca SET cliente_id=?, emisor_id=?, resumen_id=?, fecha=?, punto_venta=?, "
+                "tipo_comprobante=?, importe_total=?, estado=?, numero_factura=?, cae=?, vencimiento_cae=?, "
+                "observaciones=?, punto_venta_num=?, tipo_comprobante_num=?, numero_comprobante_num=? WHERE id=?",
+                (
+                    factura.cliente_id, factura.emisor_id, factura.resumen_id, factura.fecha,
+                    factura.punto_venta, factura.tipo_comprobante, factura.importe_total,
+                    factura.estado, factura.numero_factura, factura.cae, factura.vencimiento_cae,
+                    factura.observaciones, punto_num, tipo_num, numero_num, factura.id,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     @staticmethod
     def actualizar_ruta_pdf(factura_id, ruta_pdf_relativa, ruta_pdf_absoluta):
