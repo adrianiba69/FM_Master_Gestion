@@ -351,6 +351,11 @@ class PdfLeyendaAmbienteTest(unittest.TestCase):
             self.subject = None
             self.title = None
             self.author = None
+            self.ruta_pdf = None
+
+        def asignar_ruta(self, ruta_pdf, **_kwargs):
+            self.ruta_pdf = ruta_pdf
+            return self
 
         def saveState(self):
             pass
@@ -404,7 +409,7 @@ class PdfLeyendaAmbienteTest(unittest.TestCase):
             self.subject = subject
 
         def save(self):
-            pass
+            Path(self.ruta_pdf).write_bytes(b"%PDF-1.4\ncontenido de prueba\n")
 
     def test_homologacion_mantiene_leyenda(self):
         canvas_falso = self._CanvasFalso()
@@ -429,9 +434,11 @@ class PdfLeyendaAmbienteTest(unittest.TestCase):
 
     def test_generacion_subject_y_footer_en_homologacion(self):
         canvas_falso = self._CanvasFalso()
-        with patch("services.arca.pdf_fiscal_service.canvas.Canvas", return_value=canvas_falso):
+        with tempfile.TemporaryDirectory() as carpeta, patch(
+            "services.arca.pdf_fiscal_service.canvas.Canvas", side_effect=canvas_falso.asignar_ruta
+        ):
             resultado = PDFFiscalService.generar_factura_c(
-                ruta_destino="temp.pdf",
+                ruta_destino=str(Path(carpeta) / "temp.pdf"),
                 datos_emisor={"razon_social": "Test Emisor", "cuit": "20111111112"},
                 datos_receptor={"razon_social": "Test Receptor", "cuit": "20222222223"},
                 datos_comprobante={"tipo": "Factura A", "ambiente": "HOMOLOGACION", "numero": 1, "punto_venta": 2},
@@ -443,9 +450,11 @@ class PdfLeyendaAmbienteTest(unittest.TestCase):
 
     def test_generacion_subject_y_footer_en_produccion(self):
         canvas_falso = self._CanvasFalso()
-        with patch("services.arca.pdf_fiscal_service.canvas.Canvas", return_value=canvas_falso):
+        with tempfile.TemporaryDirectory() as carpeta, patch(
+            "services.arca.pdf_fiscal_service.canvas.Canvas", side_effect=canvas_falso.asignar_ruta
+        ):
             resultado = PDFFiscalService.generar_factura_c(
-                ruta_destino="temp.pdf",
+                ruta_destino=str(Path(carpeta) / "temp.pdf"),
                 datos_emisor={"razon_social": "Test Emisor", "cuit": "20111111112"},
                 datos_receptor={"razon_social": "Test Receptor", "cuit": "20222222223"},
                 datos_comprobante={"tipo": "Factura A", "ambiente": "PRODUCCION", "numero": 1, "punto_venta": 2},
@@ -457,9 +466,11 @@ class PdfLeyendaAmbienteTest(unittest.TestCase):
 
     def test_generacion_subject_y_footer_fail_safe_invalido_default_homologacion(self):
         canvas_falso = self._CanvasFalso()
-        with patch("services.arca.pdf_fiscal_service.canvas.Canvas", return_value=canvas_falso):
+        with tempfile.TemporaryDirectory() as carpeta, patch(
+            "services.arca.pdf_fiscal_service.canvas.Canvas", side_effect=canvas_falso.asignar_ruta
+        ):
             resultado = PDFFiscalService.generar_factura_c(
-                ruta_destino="temp.pdf",
+                ruta_destino=str(Path(carpeta) / "temp.pdf"),
                 datos_emisor={"razon_social": "Test Emisor", "cuit": "20111111112"},
                 datos_receptor={"razon_social": "Test Receptor", "cuit": "20222222223"},
                 datos_comprobante={"tipo": "Factura B", "ambiente": "VALOR_INVALIDO", "numero": 5, "punto_venta": 1},
@@ -471,9 +482,11 @@ class PdfLeyendaAmbienteTest(unittest.TestCase):
 
     def test_generacion_sin_ambiente_aplica_fail_safe_homologacion(self):
         canvas_falso = self._CanvasFalso()
-        with patch("services.arca.pdf_fiscal_service.canvas.Canvas", return_value=canvas_falso):
+        with tempfile.TemporaryDirectory() as carpeta, patch(
+            "services.arca.pdf_fiscal_service.canvas.Canvas", side_effect=canvas_falso.asignar_ruta
+        ):
             resultado = PDFFiscalService.generar_factura_c(
-                ruta_destino="temp.pdf",
+                ruta_destino=str(Path(carpeta) / "temp.pdf"),
                 datos_emisor={"razon_social": "Test Emisor", "cuit": "20111111112"},
                 datos_receptor={"razon_social": "Test Receptor", "cuit": "20222222223"},
                 datos_comprobante={"tipo": "Factura C", "numero": 7, "punto_venta": 1},

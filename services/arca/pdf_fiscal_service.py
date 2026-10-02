@@ -1,4 +1,5 @@
-from datetime import datetime
+import os
+import tempfile
 from pathlib import Path
 
 from reportlab.lib.colors import HexColor, black, white
@@ -62,6 +63,7 @@ class PDFFiscalService:
             resultado["errores"].append("datos_comprobante invalido.")
             return resultado
 
+        ruta_temporal = None
         try:
             destino_final = PDFFiscalService._resolver_ruta_destino(ruta_destino)
             destino_final.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +72,16 @@ class PDFFiscalService:
             ambiente_es_produccion = PDFFiscalService._es_ambiente_produccion(datos_comprobante)
             subject = tipo_comprobante if ambiente_es_produccion else f"{tipo_comprobante} - Homologacion"
 
-            pdf = canvas.Canvas(str(destino_final), pagesize=A4, pageCompression=1)
+            # Temporal unico en la MISMA carpeta del destino: os.replace() atomico exige mismo filesystem.
+            descriptor, ruta_temporal_texto = tempfile.mkstemp(
+                suffix=".tmp",
+                prefix=f".{destino_final.stem}_",
+                dir=str(destino_final.parent),
+            )
+            ruta_temporal = Path(ruta_temporal_texto)
+            os.close(descriptor)  # cerrar antes de que ReportLab abra esa misma ruta (Windows no admite doble handle)
+
+            pdf = canvas.Canvas(str(ruta_temporal), pagesize=A4, pageCompression=1)
             pdf.setTitle(tipo_comprobante)
             pdf.setAuthor(str(PDFFiscalService._pick(datos_emisor, "razon_social", "nombre_fantasia", default="Emisor")))
             pdf.setSubject(subject)
@@ -78,12 +89,32 @@ class PDFFiscalService:
             PDFFiscalService._dibujar_estructura(pdf, datos_emisor, datos_receptor, datos_comprobante)
 
             pdf.save()
+
+            if not ruta_temporal.is_file() or ruta_temporal.stat().st_size <= 0:
+                resultado["errores"].append("El PDF temporal generado quedó vacío o inválido.")
+                return resultado
+
+            try:
+                os.replace(str(ruta_temporal), str(destino_final))
+            except OSError as error_replace:
+                if PDFFiscalService._es_error_archivo_bloqueado(error_replace):
+                    resultado["tipo_error"] = "archivo_bloqueado"
+                resultado["errores"].append(f"No se pudo reemplazar el PDF fiscal destino: {error_replace}")
+                return resultado
+
             resultado["ok"] = True
             resultado["ruta_pdf"] = str(destino_final)
             return resultado
         except Exception as error:
             resultado["errores"].append(f"No se pudo generar el PDF fiscal: {error}")
             return resultado
+        finally:
+            if ruta_temporal is not None:
+                try:
+                    if ruta_temporal.exists():
+                        ruta_temporal.unlink()
+                except OSError:
+                    pass
 
     @staticmethod
     def _dibujar_estructura(pdf, datos_emisor, datos_receptor, datos_comprobante):
@@ -509,17 +540,35 @@ class PDFFiscalService:
 
     @staticmethod
     def _resolver_ruta_destino(ruta_destino):
+        """Destino final documental: nunca agrega sufijo timestamp por colision.
+        El reemplazo en ese mismo nombre es responsabilidad de la escritura atomica."""
         destino = Path(ruta_destino)
 
         if destino.suffix.lower() != ".pdf":
             destino = destino / "factura_c.pdf"
 
-        if not destino.exists():
-            return destino
+        return destino
 
-        base = destino.stem
-        sello = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return destino.with_name(f"{base}_{sello}.pdf")
+    @staticmethod
+    def _es_error_archivo_bloqueado(error):
+        """Detecta bloqueo de archivo (Windows) sin depender de otros modulos/vistas."""
+        if isinstance(error, PermissionError):
+            return True
+
+        winerror = getattr(error, "winerror", None)
+        if winerror in {32, 33}:
+            return True
+
+        texto = str(error or "").lower()
+        marcadores = (
+            "being used by another process",
+            "used by another process",
+            "permiso denegado",
+            "permission denied",
+            "acceso denegado",
+            "archivo en uso",
+        )
+        return any(marcador in texto for marcador in marcadores)
 
     @staticmethod
     def _es_ambiente_produccion(datos_comprobante):

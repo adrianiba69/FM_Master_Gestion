@@ -1230,6 +1230,9 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             if not tiene_desglose:
                 requiere_regenerar = True
 
+            # Heurística histórica (pre-3B.3B/3B.3C): dispara regeneración si existe un
+            # archivo resuelto distinto y más nuevo que el estándar. No selecciona
+            # identidad documental entre candidatos, solo decide si conviene regenerar.
             if ruta_resuelta.is_file() and ruta_resuelta.resolve() != ruta_estandar.resolve():
                 try:
                     if ruta_resuelta.stat().st_mtime > ruta_estandar.stat().st_mtime:
@@ -1238,7 +1241,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
                     pass
 
         if not requiere_regenerar:
-            return ruta_estandar if ruta_estandar.is_file() else ruta_resuelta, False
+            return (ruta_estandar if ruta_estandar.is_file() else ruta_resuelta), False, None
 
         datos_pdf = self._construir_datos_pdf_para_regeneracion(
             factura=factura,
@@ -1250,18 +1253,10 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             codigo_factura=codigo_factura,
         )
         if not datos_pdf:
-            return ruta_resuelta, False
+            return ruta_resuelta, False, None
 
-        if forzar_reemplazo_estandar and ruta_estandar.is_file():
-            try:
-                ruta_estandar.unlink()
-            except PermissionError:
-                raise
-            except OSError as error:
-                if self._es_error_archivo_bloqueado(error):
-                    raise PermissionError(str(error)) from error
-                return ruta_resuelta, False
-
+        # PDFFiscalService reemplaza el destino de forma atómica (temporal + os.replace);
+        # el PDF estándar anterior ya no se elimina antes de generar el nuevo.
         resultado = PDFFiscalService.generar_factura_c(
             ruta_destino=str(ruta_destino),
             datos_emisor=datos_pdf["datos_emisor"],
@@ -1269,6 +1264,8 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             datos_comprobante=datos_pdf["datos_comprobante"],
         )
         if not resultado.get("ok"):
+            if resultado.get("tipo_error") == "archivo_bloqueado":
+                raise PermissionError("; ".join(resultado.get("errores") or []) or "Archivo bloqueado.")
             return ruta_resuelta, False, None
 
         ruta_generada = Path(str(resultado.get("ruta_pdf") or ruta_destino))
