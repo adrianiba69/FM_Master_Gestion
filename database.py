@@ -128,49 +128,59 @@ def migrar_factura_arca_ruta_pdf(cur):
         agregar_columna_si_falta(cur, "factura_arca", columna, "TEXT")
 
 
-def _prevalidar_duplicados_cae(cur):
-    cur.execute(
-        "SELECT TRIM(cae), COUNT(*), GROUP_CONCAT(id) FROM factura_arca "
-        "WHERE TRIM(COALESCE(cae, '')) <> '' GROUP BY TRIM(cae) HAVING COUNT(*) > 1"
-    )
-    return cur.fetchall()
+def _columnas_tabla(cur, nombre_tabla):
+    cur.execute(f"PRAGMA table_info({nombre_tabla})")
+    return {fila[1] for fila in cur.fetchall()}
 
 
-def _prevalidar_duplicados_identidad(cur):
-    cur.execute(
-        "SELECT emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num, COUNT(*), GROUP_CONCAT(id) "
-        "FROM factura_arca WHERE numero_comprobante_num IS NOT NULL "
-        "GROUP BY emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num HAVING COUNT(*) > 1"
+def _migrar_indice_factura_arca(cur, nombre_indice, clave, condicion):
+    ddl_sql = (
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {nombre_indice} "
+        f"ON factura_arca({clave}) WHERE {condicion}"
     )
-    return cur.fetchall()
+    cur.execute(
+        f"SELECT {clave}, COUNT(*), GROUP_CONCAT(id) FROM factura_arca "
+        f"WHERE {condicion} GROUP BY {clave} HAVING COUNT(*) > 1"
+    )
+    duplicados = cur.fetchall()
+    cur.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (nombre_indice,))
+    fila = cur.fetchone()
+    sql_existente = (fila[0] if fila else "").strip() if fila else ""
+    sql_existente_normalizado = " ".join(sql_existente.lower().split()).replace(" if not exists", "")
+    ddl_normalizado = " ".join(ddl_sql.lower().split()).replace(" if not exists", "")
+    if sql_existente and sql_existente_normalizado != ddl_normalizado:
+        print(f"ADVERTENCIA: {nombre_indice} tiene una definicion anterior; se retira para migrar su unicidad.")
+        cur.execute(f"DROP INDEX IF EXISTS {nombre_indice}")
+    if duplicados:
+        print(f"ADVERTENCIA: {nombre_indice} NO se creo por duplicados: {duplicados}")
+        return
+    if sql_existente_normalizado == ddl_normalizado:
+        return
+    try:
+        cur.execute(ddl_sql)
+    except sqlite3.IntegrityError as error:
+        print(f"ADVERTENCIA: {nombre_indice} no se pudo crear (IntegrityError): {error}")
 
 
 def migrar_indices_unicos_factura_arca(cur):
-    """Crea índices únicos parciales de forma aditiva; nunca borra ni corrige filas."""
-    duplicados_cae = _prevalidar_duplicados_cae(cur)
-    if duplicados_cae:
-        print(f"ADVERTENCIA: idx_factura_arca_cae_unico NO se creó por CAE duplicados: {duplicados_cae}")
-    else:
-        try:
-            cur.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_factura_arca_cae_unico "
-                "ON factura_arca(cae) WHERE TRIM(COALESCE(cae, '')) <> ''"
-            )
-        except sqlite3.IntegrityError as error:
-            print(f"ADVERTENCIA: idx_factura_arca_cae_unico no se pudo crear (IntegrityError): {error}")
-
-    duplicados_identidad = _prevalidar_duplicados_identidad(cur)
-    if duplicados_identidad:
-        print(f"ADVERTENCIA: idx_factura_arca_identidad_unica NO se creó por identidad fiscal duplicada: {duplicados_identidad}")
-    else:
-        try:
-            cur.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_factura_arca_identidad_unica "
-                "ON factura_arca(emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num) "
-                "WHERE numero_comprobante_num IS NOT NULL"
-            )
-        except sqlite3.IntegrityError as error:
-            print(f"ADVERTENCIA: idx_factura_arca_identidad_unica no se pudo crear (IntegrityError): {error}")
+    """Protege por separado ambientes conocidos e historicos sin atribuir ambiente."""
+    agregar_columna_si_falta(cur, "factura_arca", "ambiente_arca", "TEXT")
+    identidad = "emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num"
+    utilizables = (
+        "numero_comprobante_num IS NOT NULL AND emisor_id > 0 AND punto_venta_num > 0 "
+        "AND tipo_comprobante_num > 0 AND numero_comprobante_num > 0"
+    )
+    for nombre, clave, condicion in (
+        ("idx_factura_arca_identidad_unica", f"ambiente_arca, {identidad}",
+         f"ambiente_arca IS NOT NULL AND {utilizables}"),
+        ("idx_factura_arca_identidad_historica_unica", identidad,
+         f"ambiente_arca IS NULL AND {utilizables}"),
+        ("idx_factura_arca_cae_unico", "ambiente_arca, TRIM(cae)",
+         "ambiente_arca IS NOT NULL AND TRIM(COALESCE(cae, '')) <> ''"),
+        ("idx_factura_arca_cae_historico_unico", "TRIM(cae)",
+         "ambiente_arca IS NULL AND TRIM(COALESCE(cae, '')) <> ''"),
+    ):
+        _migrar_indice_factura_arca(cur, nombre, clave, condicion)
 
 
 def sumar_un_mes(fecha):

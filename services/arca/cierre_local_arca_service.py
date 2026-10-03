@@ -29,6 +29,12 @@ class CierreLocalArcaService:
 
     @staticmethod
     def _fila_compatible(fila, datos):
+        ambiente_esperado = str(datos.get("ambiente_arca") or "").strip()
+        if ambiente_esperado and len(fila) > 12:
+            ambiente_actual = str(fila[12] if len(fila) > 12 and fila[12] is not None else "").strip()
+            if ambiente_actual != ambiente_esperado:
+                return False
+
         esperado = (
             int(datos["cliente_id"]),
             int(datos["emisor_id"]),
@@ -54,29 +60,77 @@ class CierreLocalArcaService:
         return actual == esperado
 
     @staticmethod
-    def _seleccion_factura(cursor, datos):
+    def _seleccion_factura(cursor, datos, tiene_ambiente=False):
         columnas = (
             "id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, "
             "tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae"
         )
+        if tiene_ambiente:
+            columnas += ", ambiente_arca"
         candidatas = []
+        ambiente_filtro = str(datos.get("ambiente_arca") or "").strip()
+        cursor.execute("PRAGMA table_info(factura_arca)")
+        disponibles = {fila[1] for fila in cursor.fetchall()}
+        normalizadas = {"punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num"}
+        identidad = (
+            "emisor_id=? AND punto_venta_num=? AND tipo_comprobante_num=? AND numero_comprobante_num=?"
+            if normalizadas.issubset(disponibles) else
+            "emisor_id=? AND TRIM(COALESCE(punto_venta,''))=? "
+            "AND TRIM(COALESCE(tipo_comprobante,''))=? AND TRIM(COALESCE(numero_factura,''))=?"
+        )
+        valores_identidad = (
+            (int(datos["emisor_id"]), *normalizar_identidad_factura(
+                datos["punto_venta"], datos["tipo_comprobante"], datos["numero_factura"]
+            )) if normalizadas.issubset(disponibles) else
+            (int(datos["emisor_id"]), str(datos["punto_venta"]),
+             str(datos["tipo_comprobante"]), str(datos["numero_factura"]))
+        )
         if datos.get("factura_arca_id"):
-            cursor.execute(f"SELECT {columnas} FROM factura_arca WHERE id=?", (int(datos["factura_arca_id"]),))
+            consulta = f"SELECT {columnas} FROM factura_arca WHERE id=?"
+            params = [int(datos["factura_arca_id"])]
+            cursor.execute(consulta, tuple(params))
             fila = cursor.fetchone()
             if fila:
                 candidatas.append(fila)
 
-        cursor.execute(f"SELECT {columnas} FROM factura_arca WHERE resumen_id=? ORDER BY id", (int(datos["resumen_id"]),))
+        consulta = f"SELECT {columnas} FROM factura_arca WHERE resumen_id=?"
+        params = [int(datos["resumen_id"])]
+        consulta += " ORDER BY id"
+        cursor.execute(consulta, tuple(params))
         candidatas.extend(cursor.fetchall())
 
-        cursor.execute(
-            f"SELECT {columnas} FROM factura_arca WHERE emisor_id=? AND TRIM(COALESCE(punto_venta,''))=? "
-            "AND TRIM(COALESCE(tipo_comprobante,''))=? AND TRIM(COALESCE(numero_factura,''))=? ORDER BY id",
-            (int(datos["emisor_id"]), str(datos["punto_venta"]), str(datos["tipo_comprobante"]), str(datos["numero_factura"])),
-        )
+        consulta = f"SELECT {columnas} FROM factura_arca WHERE {identidad}"
+        params = list(valores_identidad)
+        if tiene_ambiente and ambiente_filtro:
+            consulta += " AND (ambiente_arca=? OR ambiente_arca IS NULL)"
+            params.append(ambiente_filtro)
+        consulta += " ORDER BY id"
+        cursor.execute(consulta, tuple(params))
         candidatas.extend(cursor.fetchall())
 
-        cursor.execute(f"SELECT {columnas} FROM factura_arca WHERE cae=? ORDER BY id", (str(datos["cae"]),))
+        if normalizadas.issubset(disponibles):
+            consulta = (
+                f"SELECT {columnas} FROM factura_arca WHERE emisor_id=? AND "
+                "(punto_venta_num IS NULL OR tipo_comprobante_num IS NULL OR numero_comprobante_num IS NULL)"
+            )
+            params = [int(datos["emisor_id"])]
+            if tiene_ambiente and ambiente_filtro:
+                consulta += " AND (ambiente_arca=? OR ambiente_arca IS NULL)"
+                params.append(ambiente_filtro)
+            cursor.execute(consulta, tuple(params))
+            candidatas.extend(
+                fila for fila in cursor.fetchall()
+                if normalizar_identidad_factura(fila[5], fila[6], fila[9]) == valores_identidad[1:]
+            )
+
+        consulta = f"SELECT {columnas} FROM factura_arca WHERE TRIM(cae)=?"
+        params = [str(datos["cae"])]
+        if tiene_ambiente and ambiente_filtro:
+            consulta += f" AND (ambiente_arca=? OR ambiente_arca IS NULL OR NOT COALESCE(({identidad}), 0))"
+            params.append(ambiente_filtro)
+            params.extend(valores_identidad)
+        consulta += " ORDER BY id"
+        cursor.execute(consulta, tuple(params))
         candidatas.extend(cursor.fetchall())
 
         unicas = {fila[0]: fila for fila in candidatas}
@@ -135,6 +189,7 @@ class CierreLocalArcaService:
             "snapshot_fiscal_json": snapshot_fiscal_json,
             "snapshot_version": snapshot_version,
             "snapshot_hash": snapshot_hash,
+            "ambiente_arca": ambiente_snapshot,
         }
         conexion = self._conexion_factory()
         try:
@@ -147,7 +202,7 @@ class CierreLocalArcaService:
                 return ResultadoCierreLocalArca(
                     False, ResultadoReconciliacion.CONFLICTO, mensaje="Falta snapshot fiscal con ambiente ARCA."
                 )
-            compatibles, incompatibles = self._seleccion_factura(cursor, datos)
+            compatibles, incompatibles = self._seleccion_factura(cursor, datos, tiene_ambiente=tiene_ambiente)
             if incompatibles or len(compatibles) > 1:
                 conexion.rollback()
                 return ResultadoCierreLocalArca(

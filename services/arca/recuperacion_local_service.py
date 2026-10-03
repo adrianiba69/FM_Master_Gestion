@@ -90,6 +90,11 @@ class RecuperacionLocalArcaService:
     def _fila_compatible(cls, fila, intento, snapshot_final, consulta):
         if not fila:
             return False
+        ambiente_esperado = str(snapshot_final.get("ambiente") or "").strip()
+        if ambiente_esperado and len(fila) > 12:
+            ambiente_actual = str(fila[12] or "").strip()
+            if ambiente_actual != ambiente_esperado:
+                return False
         emisor = snapshot_final["emisor"]
         receptor = snapshot_final["receptor"]
         comprobante = snapshot_final["comprobante"]
@@ -126,34 +131,78 @@ class RecuperacionLocalArcaService:
         return str(fila[3] or "").strip() == numero_factura and str(fila[1] or "").strip() == cae
 
     @staticmethod
-    def _buscar_facturas(cursor, intento, snapshot_final, consulta):
+    def _buscar_facturas(cursor, intento, snapshot_final, consulta, tiene_ambiente=False):
         seleccion = "id, cliente_id, emisor_id, resumen_id, fecha, punto_venta, tipo_comprobante, importe_total, estado, numero_factura, cae, vencimiento_cae"
+        if tiene_ambiente:
+            seleccion += ", ambiente_arca"
         candidatas = []
+        ambiente_esperado = str(snapshot_final.get("ambiente") or "").strip()
+        emisor = snapshot_final["emisor"]
+        comprobante = snapshot_final["comprobante"]
+        cursor.execute("PRAGMA table_info(factura_arca)")
+        disponibles = {fila[1] for fila in cursor.fetchall()}
+        normalizadas = {"punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num"}
+        identidad = (
+            "emisor_id=? AND punto_venta_num=? AND tipo_comprobante_num=? AND numero_comprobante_num=?"
+            if normalizadas.issubset(disponibles) else
+            "emisor_id=? AND TRIM(COALESCE(punto_venta,''))=? "
+            "AND TRIM(COALESCE(tipo_comprobante,''))=? AND TRIM(COALESCE(numero_factura,''))=?"
+        )
+        valores_identidad = (
+            (emisor["emisor_id"], comprobante["punto_venta_num"],
+             comprobante["tipo_comprobante_num"], comprobante["numero_comprobante_num"])
+            if normalizadas.issubset(disponibles) else
+            (emisor["emisor_id"], str(comprobante["punto_venta_num"]),
+             RecuperacionLocalArcaService._tipo_factura(comprobante["tipo_comprobante_num"]),
+             comprobante["numero_textual"])
+        )
 
         if intento.factura_arca_id:
-            cursor.execute(f"SELECT {seleccion} FROM factura_arca WHERE id=?", (intento.factura_arca_id,))
+            consulta_sql = f"SELECT {seleccion} FROM factura_arca WHERE id=?"
+            params = [intento.factura_arca_id]
+            cursor.execute(consulta_sql, tuple(params))
             fila = cursor.fetchone()
             if fila:
                 candidatas.append(fila)
 
-        cursor.execute(f"SELECT {seleccion} FROM factura_arca WHERE resumen_id=? ORDER BY id", (intento.resumen_id,))
+        consulta_sql = f"SELECT {seleccion} FROM factura_arca WHERE resumen_id=?"
+        params = [intento.resumen_id]
+        consulta_sql += " ORDER BY id"
+        cursor.execute(consulta_sql, tuple(params))
         candidatas.extend(cursor.fetchall())
 
-        emisor = snapshot_final["emisor"]
-        comprobante = snapshot_final["comprobante"]
-        numero = comprobante["numero_textual"]
-        cursor.execute(
-            f"SELECT {seleccion} FROM factura_arca WHERE emisor_id=? AND TRIM(COALESCE(punto_venta, ''))=? AND TRIM(COALESCE(tipo_comprobante, ''))=? AND TRIM(COALESCE(numero_factura, ''))=? ORDER BY id",
-            (
-                emisor["emisor_id"],
-                str(comprobante["punto_venta_num"]),
-                RecuperacionLocalArcaService._tipo_factura(comprobante["tipo_comprobante_num"]),
-                numero,
-            ),
-        )
+        consulta_sql = f"SELECT {seleccion} FROM factura_arca WHERE {identidad}"
+        params = valores_identidad
+        if tiene_ambiente and ambiente_esperado:
+            consulta_sql += " AND (ambiente_arca=? OR ambiente_arca IS NULL)"
+            params = params + (ambiente_esperado,)
+        consulta_sql += " ORDER BY id"
+        cursor.execute(consulta_sql, params)
         candidatas.extend(cursor.fetchall())
 
-        cursor.execute(f"SELECT {seleccion} FROM factura_arca WHERE cae=? ORDER BY id", (str(consulta.get("cae") or "").strip(),))
+        if normalizadas.issubset(disponibles):
+            consulta_sql = (
+                f"SELECT {seleccion} FROM factura_arca WHERE emisor_id=? AND "
+                "(punto_venta_num IS NULL OR tipo_comprobante_num IS NULL OR numero_comprobante_num IS NULL)"
+            )
+            params = [emisor["emisor_id"]]
+            if tiene_ambiente and ambiente_esperado:
+                consulta_sql += " AND (ambiente_arca=? OR ambiente_arca IS NULL)"
+                params.append(ambiente_esperado)
+            cursor.execute(consulta_sql, tuple(params))
+            candidatas.extend(
+                fila for fila in cursor.fetchall()
+                if normalizar_identidad_factura(fila[5], fila[6], fila[9]) == valores_identidad[1:]
+            )
+
+        consulta_sql = f"SELECT {seleccion} FROM factura_arca WHERE TRIM(cae)=?"
+        params = [str(consulta.get("cae") or "").strip()]
+        if tiene_ambiente and ambiente_esperado:
+            consulta_sql += f" AND (ambiente_arca=? OR ambiente_arca IS NULL OR NOT COALESCE(({identidad}), 0))"
+            params.append(ambiente_esperado)
+            params.extend(valores_identidad)
+        consulta_sql += " ORDER BY id"
+        cursor.execute(consulta_sql, tuple(params))
         candidatas.extend(cursor.fetchall())
 
         unicas = {fila[0]: fila for fila in candidatas}
@@ -227,7 +276,7 @@ class RecuperacionLocalArcaService:
             cursor.execute("PRAGMA table_info(factura_arca)")
             tiene_ambiente = any(fila[1] == "ambiente_arca" for fila in cursor.fetchall())
 
-            compatibles, incompatibles = self._buscar_facturas(cursor, intento, snapshot_final, consulta)
+            compatibles, incompatibles = self._buscar_facturas(cursor, intento, snapshot_final, consulta, tiene_ambiente=tiene_ambiente)
             if incompatibles or len(compatibles) > 1:
                 conexion.rollback()
                 return ResultadoRecuperacionLocal(ResultadoReconciliacion.CONFLICTO, mensaje="Factura local incompatible o duplicada.")

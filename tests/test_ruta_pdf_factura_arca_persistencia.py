@@ -398,8 +398,8 @@ class RutaPdfFacturaArcaPersistenciaTest(unittest.TestCase):
         self.assertNotIn("ruta_pdf_absoluta", claves_planas)
         self.assertNotIn("carpeta_facturas", claves_planas)
 
-    # N) índice H/P existente permanece sin cambios en este bloque.
-    def test_indice_identidad_unica_no_incluye_ambiente(self):
+    # N) el índice de identidad fiscal incorpora el ambiente para separar H/P.
+    def test_indice_identidad_unica_incluye_ambiente(self):
         import database
 
         original = database.DB_NAME
@@ -412,8 +412,8 @@ class RutaPdfFacturaArcaPersistenciaTest(unittest.TestCase):
         finally:
             database.DB_NAME = original
         self.assertIsNotNone(sql_indice)
+        self.assertIn("ambiente_arca", sql_indice[0].lower())
         self.assertIn("emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num", sql_indice[0])
-        self.assertNotIn("ambiente", sql_indice[0].lower())
 
 
 if __name__ == "__main__":

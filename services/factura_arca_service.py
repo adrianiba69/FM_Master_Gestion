@@ -319,19 +319,27 @@ class FacturaArcaService:
             conn.close()
 
     @staticmethod
-    def buscar_por_identidad_fiscal(emisor_id, punto_venta, tipo_comprobante, numero_factura):
+    def buscar_por_identidad_fiscal(emisor_id, punto_venta, tipo_comprobante, numero_factura, ambiente_arca=None):
         conn = conectar()
         try:
             cur = conn.cursor()
-            cur.execute(
-                f"SELECT {FacturaArcaService._select_columnas(cur)} FROM factura_arca WHERE emisor_id=? AND TRIM(COALESCE(punto_venta, ''))=? AND TRIM(COALESCE(tipo_comprobante, ''))=? AND TRIM(COALESCE(numero_factura, ''))=? ORDER BY id",
-                (
-                    int(emisor_id),
-                    str(punto_venta or "").strip(),
-                    str(tipo_comprobante or "").strip(),
-                    str(numero_factura or "").strip(),
-                ),
+            columnas = FacturaArcaService._columnas_existentes(cur)
+            sql = (
+                f"SELECT {FacturaArcaService._select_columnas(cur)} FROM factura_arca "
+                "WHERE emisor_id=? AND TRIM(COALESCE(punto_venta, ''))=? "
+                "AND TRIM(COALESCE(tipo_comprobante, ''))=? AND TRIM(COALESCE(numero_factura, ''))=?"
             )
+            params = (
+                int(emisor_id),
+                str(punto_venta or "").strip(),
+                str(tipo_comprobante or "").strip(),
+                str(numero_factura or "").strip(),
+            )
+            if "ambiente_arca" in columnas and ambiente_arca is not None:
+                sql += " AND ambiente_arca=?"
+                params += (str(ambiente_arca).strip(),)
+            sql += " ORDER BY id"
+            cur.execute(sql, params)
             return cur.fetchall()
         finally:
             conn.close()

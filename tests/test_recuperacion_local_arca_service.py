@@ -6,7 +6,7 @@ import unittest
 from dataclasses import replace
 from decimal import Decimal
 
-from database import crear_tabla_intentos_emision_arca
+from database import crear_tabla_intentos_emision_arca, migrar_indices_unicos_factura_arca
 from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.recuperacion_local_service import RecuperacionLocalArcaService
 from services.arca.reconciliacion_contracts import ResultadoReconciliacion, SnapshotFiscalEsperado
@@ -449,6 +449,110 @@ class RecuperacionLocalArcaServiceTest(unittest.TestCase):
         with self.assertRaises(sqlite3.DatabaseError):
             self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
         self.assertEqual(len(self._filas("factura_arca")), 0)
+
+
+    def _preparar_3b4b(self, ambiente):
+        self.tearDown()
+        self.setUp()
+        contexto = self._contexto()
+        contexto["ambiente"] = ambiente
+        validacion = ContextoFiscalService.validar(contexto)
+        self.assertTrue(validacion.valido, validacion.errores)
+        conexion = sqlite3.connect(self.ruta)
+        try:
+            conexion.execute("ALTER TABLE factura_arca ADD COLUMN ambiente_arca TEXT")
+            migrar_indices_unicos_factura_arca(conexion.cursor())
+            conexion.execute(
+                "UPDATE intentos_emision_arca SET contexto_fiscal_json=?, contexto_fiscal_version=?, "
+                "contexto_fiscal_hash=? WHERE id=?",
+                (validacion.json_canonico, validacion.version, validacion.hash_calculado, self.intento_id),
+            )
+            conexion.commit()
+        finally:
+            conexion.close()
+
+    def _factura_candidata_3b4b(self, ambiente, resumen_id=99, numero=123, cae="86330766550000", enlazar=False):
+        conexion = sqlite3.connect(self.ruta)
+        try:
+            cursor = conexion.execute(
+                "INSERT INTO factura_arca(cliente_id,emisor_id,resumen_id,fecha,punto_venta,"
+                "tipo_comprobante,importe_total,estado,numero_factura,cae,vencimiento_cae,"
+                "punto_venta_num,tipo_comprobante_num,numero_comprobante_num,ambiente_arca) "
+                "VALUES(20,40,?,'20260817','00005','Factura C',100,'Facturada manualmente',"
+                "?,?,'20260827',5,11,?,?)",
+                (resumen_id, f"00005-{numero:08d}", cae, numero, ambiente),
+            )
+            if enlazar:
+                conexion.execute("UPDATE intentos_emision_arca SET factura_arca_id=? WHERE id=?",
+                                 (cursor.lastrowid, self.intento_id))
+            conexion.commit()
+        finally:
+            conexion.close()
+
+    def test_3b4b_h_y_p_idempotentes_localmente(self):
+        for ambiente in ("HOMOLOGACION", "PRODUCCION"):
+            with self.subTest(ambiente=ambiente):
+                self._preparar_3b4b(ambiente)
+                primero = self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
+                antes = self._filas("factura_arca")
+                segundo = self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
+                self.assertEqual(primero.resultado, ResultadoReconciliacion.AUTORIZADO)
+                self.assertEqual(segundo.resultado, ResultadoReconciliacion.AUTORIZADO)
+                self.assertEqual(primero.factura_arca_id, segundo.factura_arca_id)
+                self.assertEqual(self._filas("factura_arca"), antes)
+
+    def test_3b4b_ambiente_opuesto_misma_identidad_y_cae_no_se_reutiliza(self):
+        for ambiente, opuesto in (("HOMOLOGACION", "PRODUCCION"), ("PRODUCCION", "HOMOLOGACION")):
+            with self.subTest(ambiente=ambiente):
+                self._preparar_3b4b(ambiente)
+                self._factura_candidata_3b4b(opuesto)
+                antes = self._filas("factura_arca")[0]
+                resultado = self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
+                self.assertEqual(resultado.resultado, ResultadoReconciliacion.AUTORIZADO)
+                self.assertTrue(resultado.insertada)
+                self.assertNotEqual(resultado.factura_arca_id, antes[0])
+                self.assertEqual(self._filas("factura_arca")[0], antes)
+                self.assertEqual(len(self._filas("factura_arca")), 2)
+
+    def test_3b4b_null_relevante_es_conflicto_sin_adopcion(self):
+        for ambiente in ("HOMOLOGACION", "PRODUCCION"):
+            for criterio in ("identidad", "identidad_sin_numeros", "cae", "resumen", "id"):
+                with self.subTest(ambiente=ambiente, criterio=criterio):
+                    self._preparar_3b4b(ambiente)
+                    self._factura_candidata_3b4b(
+                        None, resumen_id=10 if criterio == "resumen" else 99,
+                        numero=123 if criterio.startswith("identidad") else 999,
+                        cae="86330766550000" if criterio == "cae" else "99999999999999",
+                        enlazar=criterio == "id",
+                    )
+                    if criterio == "identidad_sin_numeros":
+                        conexion = sqlite3.connect(self.ruta)
+                        try:
+                            conexion.execute("UPDATE factura_arca SET punto_venta_num=NULL, "
+                                             "tipo_comprobante_num=NULL, numero_comprobante_num=NULL")
+                            conexion.commit()
+                        finally:
+                            conexion.close()
+                    antes = self._filas("factura_arca")
+                    resultado = self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
+                    self.assertEqual(resultado.resultado, ResultadoReconciliacion.CONFLICTO)
+                    self.assertEqual(self._filas("factura_arca"), antes)
+                    self.assertEqual(self._filas("resumenes")[0][1], "Pendiente")
+                    self.assertEqual(self.intentos.obtener(self.intento_id).estado, "PENDIENTE_RECONCILIAR")
+
+    def test_3b4b_contradiccion_opuesta_por_id_resumen_o_cae_es_conflicto(self):
+        for ambiente, opuesto in (("HOMOLOGACION", "PRODUCCION"), ("PRODUCCION", "HOMOLOGACION")):
+            for criterio in ("id", "resumen", "cae"):
+                with self.subTest(ambiente=ambiente, criterio=criterio):
+                    self._preparar_3b4b(ambiente)
+                    self._factura_candidata_3b4b(
+                        opuesto, resumen_id=10 if criterio == "resumen" else 99,
+                        numero=999 if criterio == "cae" else 123, enlazar=criterio == "id",
+                    )
+                    antes = self._filas("factura_arca")
+                    resultado = self.service.registrar_factura_recuperada(self._intento(), self.snapshot, self._consulta())
+                    self.assertEqual(resultado.resultado, ResultadoReconciliacion.CONFLICTO)
+                    self.assertEqual(self._filas("factura_arca"), antes)
 
 
 if __name__ == "__main__":
