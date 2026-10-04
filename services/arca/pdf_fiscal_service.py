@@ -38,6 +38,9 @@ class PDFFiscalService:
     LOGO_PATH = _ASSETS_DIR / "logos" / "logo_fm_master.png"
     LOGO_MAX_WIDTH = 120
     LOGO_MAX_HEIGHT = 44
+    # Marcador explicito para facturas cuyo ambiente fiscal historico no esta demostrado.
+    AMBIENTE_DESCONOCIDO = "DESCONOCIDO"
+    TEXTO_AMBIENTE_DESCONOCIDO = "Desconocido / histórico"
 
     @staticmethod
     def generar_factura_c(ruta_destino, datos_emisor, datos_receptor, datos_comprobante):
@@ -70,7 +73,10 @@ class PDFFiscalService:
 
             tipo_comprobante = str(PDFFiscalService._pick(datos_comprobante, "tipo", default="Factura C") or "Factura C")
             ambiente_es_produccion = PDFFiscalService._es_ambiente_produccion(datos_comprobante)
-            subject = tipo_comprobante if ambiente_es_produccion else f"{tipo_comprobante} - Homologacion"
+            if PDFFiscalService._es_ambiente_desconocido(datos_comprobante):
+                subject = f"{tipo_comprobante} - Ambiente desconocido"
+            else:
+                subject = tipo_comprobante if ambiente_es_produccion else f"{tipo_comprobante} - Homologacion"
 
             # Temporal unico en la MISMA carpeta del destino: os.replace() atomico exige mismo filesystem.
             descriptor, ruta_temporal_texto = tempfile.mkstemp(
@@ -146,6 +152,9 @@ class PDFFiscalService:
         ambiente = str(PDFFiscalService._pick(datos_comprobante, "ambiente", default="HOMOLOGACION"))
         # Ante ambiente vacio/desconocido, nunca se asume Produccion (se conserva la marca de agua).
         ambiente_es_produccion = PDFFiscalService._es_ambiente_produccion(datos_comprobante)
+        ambiente_desconocido = PDFFiscalService._es_ambiente_desconocido(datos_comprobante)
+        if ambiente_desconocido:
+            ambiente = PDFFiscalService.TEXTO_AMBIENTE_DESCONOCIDO
 
         # Extraer datos del emisor
         emisor_nombre_fantasia = str(PDFFiscalService._pick(datos_emisor, "nombre_fantasia", default=""))
@@ -232,7 +241,9 @@ class PDFFiscalService:
         pdf.setLineWidth(1)
         pdf.line(30, y - 80, ancho - 30, y - 80)
 
-        PDFFiscalService._dibujar_marca_homologacion(pdf, ancho, alto, mostrar=not ambiente_es_produccion)
+        PDFFiscalService._dibujar_marca_homologacion(
+            pdf, ancho, alto, mostrar=not ambiente_es_produccion and not ambiente_desconocido
+        )
 
         # Datos del receptor
         y = y - 110
@@ -402,9 +413,11 @@ class PDFFiscalService:
                 PDFFiscalService._pick(datos_comprobante, "cotizacion", default=None)
             ) or 1.0
 
-            # Si tenemos datos suficientes, intentar construir QR
+            # Si tenemos datos suficientes, intentar construir QR. Con ambiente no demostrado se
+            # suprime: el verificador de ARCA daria al documento una identidad fiscal que no consta.
             if (
-                cuit_emisor
+                not ambiente_desconocido
+                and cuit_emisor
                 and punto_venta_num is not None
                 and tipo_comprobante_num is not None
                 and numero_comprobante_num is not None
@@ -462,8 +475,15 @@ class PDFFiscalService:
                 pass
 
         # ══════════════════ PIE DEL DOCUMENTO ══════════════════
-        # Leyenda inferior solo en Homologacion (en Produccion se omite el footer de homologacion)
-        if not ambiente_es_produccion:
+        # Leyenda inferior: Homologacion o ambiente no demostrado (en Produccion se omite)
+        if ambiente_desconocido:
+            pdf.setFont("Helvetica", 8)
+            pdf.setFillColor(HexColor("#666666"))
+            pdf.drawString(
+                30, 26,
+                "Ambiente fiscal original no demostrado (documento histórico). No es Producción ni Homologación comprobada.",
+            )
+        elif not ambiente_es_produccion:
             pdf.setFont("Helvetica", 8)
             pdf.setFillColor(HexColor("#666666"))
             pdf.drawString(30, 26, "Documento generado localmente para pruebas de homologacion. Sin validez fiscal.")
@@ -581,6 +601,14 @@ class PDFFiscalService:
             return ambiente_arca.normalizar_ambiente_arca(ambiente) == ambiente_arca.AMBIENTE_PRODUCCION
         except (ambiente_arca.AmbienteArcaInvalidoError, TypeError, ValueError):
             return False
+
+    @staticmethod
+    def _es_ambiente_desconocido(datos_comprobante):
+        """Solo el marcador explicito cuenta como desconocido; un valor ausente/invalido conserva el fail-safe previo."""
+        if not isinstance(datos_comprobante, dict):
+            return False
+        valor = str(PDFFiscalService._pick(datos_comprobante, "ambiente", default="")).strip().upper()
+        return valor == PDFFiscalService.AMBIENTE_DESCONOCIDO
 
     @staticmethod
     def _dibujar_qr_fiscal(

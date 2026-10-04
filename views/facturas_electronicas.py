@@ -8,6 +8,7 @@ import customtkinter as ctk
 from config import COLOR_PRINCIPAL
 from database import conectar
 from pdf.nombre_archivos import nombre_cliente_archivo, nombre_factura_pdf
+from services.arca import ambiente_arca
 from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.arca.carpeta_facturas_resolver import resolver_carpeta_facturas_por_ambiente
 from services.arca.ruta_pdf_fiscal_service import (
@@ -480,6 +481,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         snapshot_hash = fila[21] if len(fila) > 21 else None
         ruta_pdf_relativa = fila[22] if len(fila) > 22 else None
         ruta_pdf_absoluta = fila[23] if len(fila) > 23 else None
+        ambiente_arca_persistido = fila[24] if len(fila) > 24 else None
         return {
             "factura_id": factura_id,
             "cliente_id": cliente_id,
@@ -491,6 +493,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "snapshot_hash": snapshot_hash,
             "ruta_pdf_relativa": ruta_pdf_relativa,
             "ruta_pdf_absoluta": ruta_pdf_absoluta,
+            "ambiente_arca": ambiente_arca_persistido,
             "cobrado_total": cobrado,
             "saldo_cobro": saldo,
             "estado_cobro": estado_cobro,
@@ -1590,7 +1593,7 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
             "moneda": "PES",
             "cae": str(valores_fila[6] if valores_fila and len(valores_fila) > 6 else "" or ""),
             "vencimiento_cae": vto_cae,
-            "ambiente": str(emisor_fiscal[9] if len(emisor_fiscal) > 9 else "Homologación"),
+            "ambiente": self._ambiente_documental_legacy(factura),
             "punto_venta_num": punto_venta_num_persistido,
             "tipo_comprobante_num": tipo_comprobante_num_persistido,
             "numero_comprobante_num": numero_comprobante_num_persistido,
@@ -1955,6 +1958,15 @@ class FacturasElectronicasFrame(ctk.CTkFrame):
         if decision is None or decision.modo != MODO_SNAPSHOT:
             return None
         return str((decision.snapshot.get("emisor") or {}).get("cuit") or "").strip() or None
+
+    @staticmethod
+    def _ambiente_documental_legacy(factura):
+        """Factura sin snapshot: solo un ambiente_arca persistido y canonico es demostrable.
+        Nunca se infiere del emisor vivo; sin evidencia queda DESCONOCIDO."""
+        valor = factura.get("ambiente_arca") if isinstance(factura, dict) else None
+        if valor in (ambiente_arca.AMBIENTE_HOMOLOGACION, ambiente_arca.AMBIENTE_PRODUCCION):
+            return valor
+        return PDFFiscalService.AMBIENTE_DESCONOCIDO
 
     @staticmethod
     def _ambiente_snapshot_factura(factura):
