@@ -301,6 +301,10 @@ class Reconciliacion5B2IntegrationTest(unittest.TestCase):
         self.assertEqual(recuperacion.llamadas, 0)
 
     def test_intento_reconciliado_no_consulta_ni_recupera(self):
+        conexion = sqlite3.connect(self.ruta_db)
+        conexion.execute("ALTER TABLE factura_arca ADD COLUMN ambiente_arca TEXT")
+        conexion.commit()
+        conexion.close()
         intento_id = self._crear_intento()
         self.recuperacion.registrar_factura_recuperada(self._estado_intento(intento_id), self.snapshot, self._consulta_autorizada())
         arca = ArcaFake(self._consulta_autorizada())

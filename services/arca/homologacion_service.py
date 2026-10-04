@@ -212,6 +212,11 @@ class HomologacionService:
             resultado["errores"].append("Contexto fiscal base obligatorio para la ruta de emision fiscal real.")
             return resultado
 
+        # El ambiente de envio y el congelado en el contexto deben ser el mismo, antes de cualquier red.
+        if isinstance(contexto_fiscal_base, dict) and contexto_fiscal_base.get("ambiente") != ambiente_normalizado:
+            resultado["errores"].append("El ambiente del contexto fiscal no coincide con el ambiente de emision.")
+            return resultado
+
         ruta_tra = WSAAService.guardar_tra(
             Path(carpeta_texto) / "tra_wsfe_emitir.xml",
             servicio="wsfe",

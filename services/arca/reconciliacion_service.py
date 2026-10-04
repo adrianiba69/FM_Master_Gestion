@@ -120,29 +120,108 @@ class ReconciliacionArcaService:
         )
 
     @staticmethod
-    def _resultado_terminal(intento):
-        estado = str(intento.estado or "").strip()
-        if estado == EstadoIntentoEmision.RECONCILIADO.value:
-            if intento.factura_arca_id:
-                return ResultadoEjecucionReconciliacion(
-                    ok=True,
-                    intento_id=intento.id,
-                    resultado=ResultadoReconciliacion.AUTORIZADO,
-                    estado_intento=estado,
-                    factura_arca_id=intento.factura_arca_id,
-                    cae=str(intento.cae or ""),
-                    vencimiento_cae=str(intento.vencimiento_cae or ""),
-                    recuperado=True,
-                    detalle="Intento ya reconciliado; no se consultó ARCA.",
-                )
+    def _coherencia_intento(intento, contexto):
+        """(resultado, codigo, mensaje) si columna/contexto/identidad no son demostrablemente coherentes; si no, None."""
+        _, codigo, errores = IntentoEmisionArcaService.evaluar_coherencia_contexto(
+            contexto, intento.cuit_emisor, intento.punto_venta, intento.tipo_comprobante,
+            intento.numero_planificado, intento.ambiente_arca,
+        )
+        if codigo is None and intento.ambiente_arca is None:
+            codigo, errores = "AMBIENTE_INTENTO_AUSENTE", ("el intento no tiene ambiente_arca; no se atribuye uno",)
+        if codigo is None:
+            return None
+        resultado = (
+            ResultadoReconciliacion.CONFLICTO if codigo.startswith("CONFLICTO_")
+            else ResultadoReconciliacion.CONSULTA_INCIERTA
+        )
+        return resultado, codigo, "; ".join(errores)
+
+    def _validar_reconciliado_local(self, intento):
+        """Valida sin red ni escrituras que el vinculo RECONCILIADO siga siendo coherente."""
+        estado = EstadoIntentoEmision.RECONCILIADO.value
+
+        def falla(resultado, mensaje):
             return ResultadoEjecucionReconciliacion(
                 ok=False,
                 intento_id=intento.id,
-                resultado=ResultadoReconciliacion.CONSULTA_INCIERTA,
+                resultado=resultado,
                 estado_intento=estado,
-                errores=("Intento RECONCILIADO sin factura_arca_id.",),
-                detalle="Inconsistencia local; no se corrigió automáticamente.",
+                factura_arca_id=intento.factura_arca_id,
+                errores=(mensaje,),
+                detalle="RECONCILIADO sin validación local satisfactoria; no se consultó ARCA ni se modificó el intento.",
             )
+
+        incierta, conflicto = ResultadoReconciliacion.CONSULTA_INCIERTA, ResultadoReconciliacion.CONFLICTO
+        if not intento.factura_arca_id:
+            return falla(incierta, "Intento RECONCILIADO sin factura_arca_id.")
+        campos = (intento.contexto_fiscal_json, intento.contexto_fiscal_version, intento.contexto_fiscal_hash)
+        if any(valor is None for valor in campos):
+            return falla(incierta, "Intento RECONCILIADO sin contexto fiscal íntegro; requiere revisión manual.")
+        integridad = ContextoFiscalService.validar_integridad(*campos)
+        if not integridad.valido:
+            return falla(incierta, "Contexto fiscal inválido en intento RECONCILIADO: " + "; ".join(integridad.errores))
+        contexto = integridad.contexto
+        incoherencia = self._coherencia_intento(intento, contexto)
+        if incoherencia:
+            return falla(incoherencia[0], f"Intento RECONCILIADO incoherente ({incoherencia[1]}): {incoherencia[2]}")
+
+        factura = self._intentos_service.obtener_factura_para_validacion(intento.factura_arca_id)
+        if factura is None:
+            return falla(conflicto, f"La factura vinculada {intento.factura_arca_id} no existe.")
+        if not factura.get("_esquema_con_ambiente"):
+            return falla(incierta, "factura_arca sin columna ambiente_arca; no se puede demostrar el ambiente.")
+        ambiente_factura = factura.get("ambiente_arca")
+        if ambiente_factura is None:
+            return falla(incierta, "La factura vinculada tiene ambiente desconocido; requiere revisión manual.")
+        if ambiente_factura != intento.ambiente_arca:
+            return falla(
+                conflicto,
+                f"La factura vinculada es de {ambiente_factura!r} y el intento de {intento.ambiente_arca!r}.",
+            )
+        if int(factura.get("resumen_id") or 0) != int(intento.resumen_id):
+            return falla(conflicto, "La factura vinculada pertenece a otro resumen.")
+        if int(factura.get("emisor_id") or 0) != int(intento.emisor_id):
+            return falla(conflicto, "La factura vinculada pertenece a otro emisor.")
+
+        comprobante = contexto["comprobante"]
+        esperado = (
+            int(comprobante["punto_venta_num"]), int(comprobante["tipo_comprobante_num"]),
+            int(comprobante["numero_comprobante_planificado"]),
+        )
+        actual = (
+            factura.get("punto_venta_num"), factura.get("tipo_comprobante_num"), factura.get("numero_comprobante_num"),
+        )
+        texto_factura = str(factura.get("numero_factura") or "").strip()
+        if all(valor is not None for valor in actual):
+            if tuple(int(valor) for valor in actual) != esperado:
+                return falla(conflicto, "La identidad fiscal de la factura contradice el intento.")
+        elif texto_factura:
+            if texto_factura != str(comprobante.get("numero_textual_planificado") or "").strip():
+                return falla(conflicto, "El número de la factura contradice el intento.")
+        else:
+            return falla(incierta, "La factura vinculada no tiene identidad fiscal verificable.")
+
+        cae_factura = str(factura.get("cae") or "").strip()
+        cae_intento = str(intento.cae or "").strip()
+        if cae_factura and cae_intento and cae_factura != cae_intento:
+            return falla(conflicto, "El CAE de la factura contradice el del intento.")
+
+        return ResultadoEjecucionReconciliacion(
+            ok=True,
+            intento_id=intento.id,
+            resultado=ResultadoReconciliacion.AUTORIZADO,
+            estado_intento=estado,
+            factura_arca_id=intento.factura_arca_id,
+            cae=cae_intento or cae_factura,
+            vencimiento_cae=str(intento.vencimiento_cae or ""),
+            recuperado=True,
+            detalle="Intento ya reconciliado; vínculo validado localmente, no se consultó ARCA.",
+        )
+
+    def _resultado_terminal(self, intento):
+        estado = str(intento.estado or "").strip()
+        if estado == EstadoIntentoEmision.RECONCILIADO.value:
+            return self._validar_reconciliado_local(intento)
 
         if estado in {
             EstadoIntentoEmision.CONFLICTO_MANUAL.value,
@@ -219,6 +298,28 @@ class ReconciliacionArcaService:
                 f"Contexto fiscal incompatible con reconciliación: {error}",
                 error_codigo="CONTEXTO_FISCAL_INCOMPATIBLE",
             )
+
+        incoherencia = self._coherencia_intento(intento, contexto)
+        if incoherencia:
+            resultado_incoherencia, codigo_incoherencia, mensaje_incoherencia = incoherencia
+            mensaje_incoherencia = f"Intento sin coherencia ambiente/contexto/identidad: {mensaje_incoherencia}"
+            if resultado_incoherencia == ResultadoReconciliacion.CONFLICTO:
+                self._intentos_service.guardar_resultado_reconciliacion(
+                    intento.id,
+                    ResultadoReconciliacion.CONFLICTO,
+                    error_codigo=codigo_incoherencia,
+                    error_mensaje=mensaje_incoherencia,
+                    detalle_tecnico=self._detalle_consulta(None),
+                )
+                return ResultadoEjecucionReconciliacion(
+                    ok=False,
+                    intento_id=intento.id,
+                    resultado=ResultadoReconciliacion.CONFLICTO,
+                    mensaje=mensaje_incoherencia,
+                    estado_intento=EstadoIntentoEmision.CONFLICTO_MANUAL.value,
+                    errores=(mensaje_incoherencia,),
+                )
+            return self._guardar_consulta_incierta(intento.id, mensaje_incoherencia, error_codigo=codigo_incoherencia)
 
         emisor_fiscal = self._emisor_fiscal_provider.obtener(emisor_fiscal_id)
         if not emisor_fiscal:

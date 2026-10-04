@@ -217,7 +217,7 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         self.assertEqual(resultado.resultado, ResultadoReconciliacion.CONSULTA_INCIERTA)
         self.assertEqual(intento.estado, EstadoIntentoEmision.PENDIENTE_RECONCILIAR.value)
 
-    def test_intento_reconciliado_no_consulta(self):
+    def test_intento_reconciliado_sin_contexto_ni_factura_valida_no_es_exito_ni_consulta(self):
         intento_id = self._crear_intento(EstadoIntentoEmision.RECONCILIADO, con_contexto=False)
         conexion = sqlite3.connect(self.ruta_db)
         conexion.execute("UPDATE intentos_emision_arca SET factura_arca_id=88 WHERE id=?", (intento_id,))
@@ -225,7 +225,8 @@ class ReconciliacionArcaServiceTest(unittest.TestCase):
         conexion.close()
         servicio, consulta, _, recuperacion = self._crear_servicio(self._consulta_autorizada())
         resultado = servicio.reconciliar_intento(intento_id)
-        self.assertTrue(resultado.ok)
+        self.assertFalse(resultado.ok)
+        self.assertEqual(resultado.resultado, ResultadoReconciliacion.CONSULTA_INCIERTA)
         self.assertEqual(consulta.llamadas, [])
         self.assertEqual(recuperacion.llamadas, [])
 

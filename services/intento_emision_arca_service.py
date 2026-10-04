@@ -22,6 +22,13 @@ from services.arca.contexto_fiscal_service import (
 )
 
 
+AMBIENTES_CANONICOS = ("HOMOLOGACION", "PRODUCCION")
+
+
+class ConflictoIntentoAmbiguoError(ValueError):
+    """Existe un intento activo de ambiente desconocido para la misma clave fiscal."""
+
+
 class IntentoEmisionArcaService:
 
     _COLUMNAS = (
@@ -81,6 +88,49 @@ class IntentoEmisionArcaService:
     def _normalizar_cuit(cuit):
         return "".join(caracter for caracter in str(cuit or "") if caracter.isdigit())
 
+    @staticmethod
+    def _tiene_columna_ambiente(cursor):
+        cursor.execute("PRAGMA table_info(intentos_emision_arca)")
+        return any(fila[1] == "ambiente_arca" for fila in cursor.fetchall())
+
+    @classmethod
+    def _select_columnas(cls, cursor):
+        # Esquema fisicamente antiguo (sin columna): se lee como NULL, nunca como un ambiente.
+        return cls._COLUMNAS + (", ambiente_arca" if cls._tiene_columna_ambiente(cursor) else ", NULL")
+
+    @classmethod
+    def evaluar_coherencia_contexto(
+        cls, contexto, cuit_emisor, punto_venta, tipo_comprobante, numero_planificado, ambiente_columna=None,
+    ):
+        """Devuelve (ambiente_contexto, codigo, errores); codigo None si contexto, columna e identidad concuerdan."""
+        ambiente = contexto.get("ambiente") if isinstance(contexto, dict) else None
+        if ambiente not in AMBIENTES_CANONICOS:
+            return None, "AMBIENTE_CONTEXTO_INVALIDO", (f"ambiente del contexto no canonico: {ambiente!r}",)
+        try:
+            emisor = contexto["emisor"]
+            comprobante = contexto["comprobante"]
+            puntos = {
+                int(valor) for valor in (comprobante.get("punto_venta_num"), emisor.get("punto_venta_num"))
+                if valor is not None
+            }
+            if not puntos:
+                raise KeyError("punto_venta_num")
+            contexto_cuit = cls._normalizar_cuit(emisor["cuit"])
+            contexto_tipo = int(comprobante["tipo_comprobante_num"])
+            contexto_numero = int(comprobante["numero_comprobante_planificado"])
+            esperado = (cls._normalizar_cuit(cuit_emisor), int(punto_venta), int(tipo_comprobante), int(numero_planificado))
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            return ambiente, "CONTEXTO_INCOMPLETO", (f"identidad del contexto incompleta: {error!r}",)
+        if ambiente_columna is not None and ambiente_columna != ambiente:
+            return ambiente, "CONFLICTO_AMBIENTE", (
+                f"ambiente_arca {ambiente_columna!r} contradice el contexto {ambiente!r}",
+            )
+        if len(puntos) != 1 or (contexto_cuit, next(iter(puntos)), contexto_tipo, contexto_numero) != esperado:
+            return ambiente, "CONFLICTO_IDENTIDAD", (
+                "identidad escalar del intento contradice el contexto fiscal",
+            )
+        return ambiente, None, ()
+
     @classmethod
     def _desde_fila(cls, fila):
         if not fila:
@@ -127,6 +177,20 @@ class IntentoEmisionArcaService:
             raise ValueError("Contexto fiscal inválido para crear intento: " + "; ".join(integridad.errores))
         return (integridad.json_canonico, integridad.version, integridad.hash_calculado)
 
+    @classmethod
+    def _resolver_ambiente_nuevo(cls, snapshot, contexto_valores, ambiente_arca):
+        if ambiente_arca is not None and ambiente_arca not in AMBIENTES_CANONICOS:
+            raise ValueError(f"ambiente_arca no canonico: {ambiente_arca!r}")
+        if contexto_valores[0] is None:
+            return ambiente_arca
+        ambiente, codigo, errores = cls.evaluar_coherencia_contexto(
+            json.loads(contexto_valores[0]), snapshot.cuit_emisor, snapshot.punto_venta,
+            snapshot.tipo_comprobante, snapshot.numero_planificado, ambiente_arca,
+        )
+        if codigo:
+            raise ValueError(f"Contexto fiscal incoherente con el intento ({codigo}): " + "; ".join(errores))
+        return ambiente
+
     def crear_intento(
         self,
         snapshot,
@@ -134,6 +198,7 @@ class IntentoEmisionArcaService:
         contexto_fiscal_json=None,
         contexto_fiscal_version=None,
         contexto_fiscal_hash=None,
+        ambiente_arca=None,
     ):
         estado_normalizado = self._validar_estado(estado)
         contexto_fiscal_valores = self._parametros_contexto_fiscal(
@@ -141,12 +206,28 @@ class IntentoEmisionArcaService:
             contexto_fiscal_version,
             contexto_fiscal_hash,
         )
-        ahora = self._ahora()
+        ambiente = self._resolver_ambiente_nuevo(snapshot, contexto_fiscal_valores, ambiente_arca)
+        parametros = self._parametros_snapshot(snapshot, estado_normalizado, self._ahora()) + contexto_fiscal_valores
         conexion = self._conexion_factory()
         try:
             cursor = conexion.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            tiene_ambiente = self._tiene_columna_ambiente(cursor)
+            if ambiente is not None and not tiene_ambiente:
+                raise ValueError("El esquema de intentos no tiene ambiente_arca para persistir el ambiente.")
+            if ambiente is not None and estado_normalizado in self._ESTADOS_ACTIVOS:
+                cursor.execute(
+                    "SELECT id FROM intentos_emision_arca WHERE ambiente_arca IS NULL AND cuit_emisor=? "
+                    f"AND punto_venta=? AND tipo_comprobante=? AND numero_planificado=? AND estado IN ({','.join('?' for _ in self._ESTADOS_ACTIVOS)}) ORDER BY id",
+                    (parametros[4], parametros[5], parametros[6], parametros[7], *self._ESTADOS_ACTIVOS),
+                )
+                ambiguos = [fila[0] for fila in cursor.fetchall()]
+                if ambiguos:
+                    raise ConflictoIntentoAmbiguoError(
+                        f"Intento activo de ambiente desconocido para la misma clave fiscal: ids {ambiguos}."
+                    )
             cursor.execute(
-                """
+                f"""
                 INSERT INTO intentos_emision_arca(
                     resumen_id, cliente_id, emisor_fiscal_id, emisor_id, cuit_emisor,
                     punto_venta, tipo_comprobante, numero_planificado, fecha_comprobante,
@@ -154,10 +235,10 @@ class IntentoEmisionArcaService:
                     importe_total, importe_neto, importe_iva, importe_exento,
                     importe_no_gravado, importe_tributos, moneda, cotizacion, alicuotas_iva,
                     estado, creado_en, actualizado_en,
-                    contexto_fiscal_json, contexto_fiscal_version, contexto_fiscal_hash
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    contexto_fiscal_json, contexto_fiscal_version, contexto_fiscal_hash{', ambiente_arca' if tiene_ambiente else ''}
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?{',?' if tiene_ambiente else ''})
                 """,
-                self._parametros_snapshot(snapshot, estado_normalizado, ahora) + contexto_fiscal_valores,
+                parametros + ((ambiente,) if tiene_ambiente else ()),
             )
             intento_id = cursor.lastrowid
             conexion.commit()
@@ -172,7 +253,9 @@ class IntentoEmisionArcaService:
         conexion = self._conexion_factory()
         try:
             cursor = conexion.cursor()
-            cursor.execute(f"SELECT {self._COLUMNAS} FROM intentos_emision_arca WHERE id=?", (int(intento_id),))
+            cursor.execute(
+                f"SELECT {self._select_columnas(cursor)} FROM intentos_emision_arca WHERE id=?", (int(intento_id),)
+            )
             return self._desde_fila(cursor.fetchone())
         finally:
             conexion.close()
@@ -199,8 +282,12 @@ class IntentoEmisionArcaService:
         conexion = self._conexion_factory()
         try:
             conexion.execute("BEGIN IMMEDIATE")
+            columna_ambiente = (
+                "ambiente_arca" if self._tiene_columna_ambiente(conexion.cursor()) else "NULL"
+            )
             fila = conexion.execute(
-                "SELECT contexto_fiscal_json, contexto_fiscal_version, contexto_fiscal_hash "
+                "SELECT contexto_fiscal_json, contexto_fiscal_version, contexto_fiscal_hash, "
+                f"cuit_emisor, punto_venta, tipo_comprobante, numero_planificado, {columna_ambiente} "
                 "FROM intentos_emision_arca WHERE id=?",
                 (int(intento_id),),
             ).fetchone()
@@ -209,9 +296,17 @@ class IntentoEmisionArcaService:
                     False, CODIGO_CONTEXTO_INVALIDO, "intento de emisión inexistente"
                 )
 
-            actual_json, actual_version, actual_hash = fila
+            actual_json, actual_version, actual_hash, *identidad_y_ambiente = fila
             campos_vacios = (actual_json is None, actual_version is None, actual_hash is None)
             if all(campos_vacios):
+                _, codigo, errores = self.evaluar_coherencia_contexto(
+                    integridad.contexto, *identidad_y_ambiente
+                )
+                if codigo:
+                    conexion.rollback()
+                    return ResultadoPersistenciaContextoFiscal(
+                        False, CODIGO_CONTEXTO_INVALIDO, f"{codigo}: " + "; ".join(errores)
+                    )
                 conexion.execute(
                     "UPDATE intentos_emision_arca SET contexto_fiscal_json=?, "
                     "contexto_fiscal_version=?, contexto_fiscal_hash=? WHERE id=?",
@@ -319,7 +414,7 @@ class IntentoEmisionArcaService:
         try:
             cursor = conexion.cursor()
             cursor.execute(
-                f"SELECT {self._COLUMNAS} FROM intentos_emision_arca WHERE estado IN ({marcadores}) ORDER BY creado_en, id",
+                f"SELECT {self._select_columnas(cursor)} FROM intentos_emision_arca WHERE estado IN ({marcadores}) ORDER BY creado_en, id",
                 self._ESTADOS_ACTIVOS,
             )
             return [self._desde_fila(fila) for fila in cursor.fetchall()]
@@ -353,7 +448,7 @@ class IntentoEmisionArcaService:
         try:
             cursor = conexion.cursor()
             cursor.execute(
-                f"SELECT {self._COLUMNAS} FROM intentos_emision_arca "
+                f"SELECT {self._select_columnas(cursor)} FROM intentos_emision_arca "
                 f"WHERE resumen_id=? AND estado IN ({marcadores}) ORDER BY id DESC",
                 (int(resumen_id), *self._ESTADOS_ACTIVOS),
             )
@@ -361,15 +456,69 @@ class IntentoEmisionArcaService:
         finally:
             conexion.close()
 
-    def obtener_por_clave_fiscal(self, cuit_emisor, punto_venta, tipo_comprobante, numero_planificado):
+    def obtener_por_clave_fiscal(
+        self, cuit_emisor, punto_venta, tipo_comprobante, numero_planificado, ambiente_arca=None,
+    ):
+        """Con ambiente_arca solo devuelve ese ambiente exacto; sin el, todos (listado legacy)."""
         conexion = self._conexion_factory()
         try:
             cursor = conexion.cursor()
-            cursor.execute(
-                f"SELECT {self._COLUMNAS} FROM intentos_emision_arca "
-                "WHERE cuit_emisor=? AND punto_venta=? AND tipo_comprobante=? AND numero_planificado=? ORDER BY id DESC",
-                (self._normalizar_cuit(cuit_emisor), int(punto_venta), int(tipo_comprobante), int(numero_planificado)),
+            consulta = (
+                f"SELECT {self._select_columnas(cursor)} FROM intentos_emision_arca "
+                "WHERE cuit_emisor=? AND punto_venta=? AND tipo_comprobante=? AND numero_planificado=?"
             )
+            parametros = [
+                self._normalizar_cuit(cuit_emisor), int(punto_venta), int(tipo_comprobante), int(numero_planificado),
+            ]
+            if ambiente_arca is not None and self._tiene_columna_ambiente(cursor):
+                consulta += " AND ambiente_arca=?"
+                parametros.append(ambiente_arca)
+            cursor.execute(consulta + " ORDER BY id DESC", tuple(parametros))
             return [self._desde_fila(fila) for fila in cursor.fetchall()]
+        finally:
+            conexion.close()
+
+    def buscar_activos_por_clave_fiscal(
+        self, cuit_emisor, punto_venta, tipo_comprobante, numero_planificado, ambiente_arca,
+    ):
+        """Para una operacion nueva con ambiente conocido: (activos del mismo ambiente, activos NULL ambiguos).
+
+        El ambiente opuesto nunca es candidato.
+        """
+        if ambiente_arca not in AMBIENTES_CANONICOS:
+            raise ValueError(f"ambiente_arca no canonico: {ambiente_arca!r}")
+        activos = [
+            intento for intento in self.obtener_por_clave_fiscal(
+                cuit_emisor, punto_venta, tipo_comprobante, numero_planificado
+            )
+            if intento.estado in self._ESTADOS_ACTIVOS
+        ]
+        return (
+            [intento for intento in activos if intento.ambiente_arca == ambiente_arca],
+            [intento for intento in activos if intento.ambiente_arca is None],
+        )
+
+    def obtener_factura_para_validacion(self, factura_arca_id):
+        """Lectura local de la factura vinculada; None si no existe. Sin red ni escrituras."""
+        conexion = self._conexion_factory()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute("PRAGMA table_info(factura_arca)")
+            disponibles = {fila[1] for fila in cursor.fetchall()}
+            if not disponibles:
+                return None
+            nombres = [
+                nombre for nombre in (
+                    "id", "cliente_id", "emisor_id", "resumen_id", "numero_factura", "cae",
+                    "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num", "ambiente_arca",
+                ) if nombre in disponibles
+            ]
+            cursor.execute(f"SELECT {', '.join(nombres)} FROM factura_arca WHERE id=?", (int(factura_arca_id),))
+            fila = cursor.fetchone()
+            if fila is None:
+                return None
+            datos = dict(zip(nombres, fila))
+            datos["_esquema_con_ambiente"] = "ambiente_arca" in disponibles
+            return datos
         finally:
             conexion.close()

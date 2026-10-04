@@ -133,13 +133,13 @@ def _columnas_tabla(cur, nombre_tabla):
     return {fila[1] for fila in cur.fetchall()}
 
 
-def _migrar_indice_factura_arca(cur, nombre_indice, clave, condicion):
+def _migrar_indice_factura_arca(cur, nombre_indice, clave, condicion, tabla="factura_arca"):
     ddl_sql = (
         f"CREATE UNIQUE INDEX IF NOT EXISTS {nombre_indice} "
-        f"ON factura_arca({clave}) WHERE {condicion}"
+        f"ON {tabla}({clave}) WHERE {condicion}"
     )
     cur.execute(
-        f"SELECT {clave}, COUNT(*), GROUP_CONCAT(id) FROM factura_arca "
+        f"SELECT {clave}, COUNT(*), GROUP_CONCAT(id) FROM {tabla} "
         f"WHERE {condicion} GROUP BY {clave} HAVING COUNT(*) > 1"
     )
     duplicados = cur.fetchall()
@@ -239,12 +239,32 @@ def crear_tabla_intentos_emision_arca(cur):
         "CREATE INDEX IF NOT EXISTS idx_intentos_emision_arca_clave_fiscal "
         "ON intentos_emision_arca(cuit_emisor, punto_venta, tipo_comprobante, numero_planificado)"
     )
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_intentos_emision_arca_clave_activa "
-        "ON intentos_emision_arca(cuit_emisor, punto_venta, tipo_comprobante, numero_planificado) "
-        "WHERE estado IN ('PENDIENTE_RECONCILIAR', 'ENVIANDO', 'CONFLICTO_MANUAL')"
-    )
     migrar_intentos_emision_arca_contexto_fiscal(cur)
+    migrar_indices_activos_intentos_emision_arca(cur)
+
+
+def migrar_intentos_emision_arca_ambiente(cur):
+    # Sin DEFAULT ni backfill: NULL significa ambiente historico/desconocido.
+    agregar_columna_si_falta(cur, "intentos_emision_arca", "ambiente_arca", "TEXT")
+
+
+def migrar_indices_activos_intentos_emision_arca(cur):
+    """Reemplaza el UNIQUE activo global por uno por ambiente conocido y otro historico NULL."""
+    migrar_intentos_emision_arca_ambiente(cur)
+    cur.execute("DROP INDEX IF EXISTS idx_intentos_emision_arca_clave_activa")
+    clave = "cuit_emisor, punto_venta, tipo_comprobante, numero_planificado"
+    utilizable = (
+        "TRIM(COALESCE(cuit_emisor, '')) <> '' AND punto_venta > 0 "
+        "AND tipo_comprobante > 0 AND numero_planificado > 0 "
+        "AND estado IN ('PENDIENTE_RECONCILIAR', 'ENVIANDO', 'CONFLICTO_MANUAL')"
+    )
+    for nombre, columnas, condicion in (
+        ("idx_intentos_emision_arca_clave_activa_ambiente", f"ambiente_arca, {clave}",
+         f"ambiente_arca IS NOT NULL AND {utilizable}"),
+        ("idx_intentos_emision_arca_clave_activa_historica", clave,
+         f"ambiente_arca IS NULL AND {utilizable}"),
+    ):
+        _migrar_indice_factura_arca(cur, nombre, columnas, condicion, tabla="intentos_emision_arca")
 
 
 def migrar_intentos_emision_arca_contexto_fiscal(cur):

@@ -236,6 +236,20 @@ class RecuperacionLocalArcaService:
                 ResultadoReconciliacion.CONSULTA_INCIERTA,
                 mensaje="Contexto fiscal persistido inválido: " + "; ".join(integridad_contexto.errores),
             )
+        ambiente_intento = getattr(intento_persistido, "ambiente_arca", None)
+        _, codigo_coherencia, errores_coherencia = IntentoEmisionArcaService.evaluar_coherencia_contexto(
+            integridad_contexto.contexto, intento_persistido.cuit_emisor, intento_persistido.punto_venta,
+            intento_persistido.tipo_comprobante, intento_persistido.numero_planificado, ambiente_intento,
+        )
+        if codigo_coherencia is None and ambiente_intento is None:
+            codigo_coherencia, errores_coherencia = "AMBIENTE_INTENTO_AUSENTE", ("el intento no tiene ambiente_arca",)
+        if codigo_coherencia:
+            return ResultadoRecuperacionLocal(
+                ResultadoReconciliacion.CONFLICTO if codigo_coherencia.startswith("CONFLICTO_")
+                else ResultadoReconciliacion.CONSULTA_INCIERTA,
+                mensaje=f"Intento sin coherencia ambiente/contexto/identidad ({codigo_coherencia}): "
+                + "; ".join(errores_coherencia),
+            )
         try:
             snapshot_construido = construir_snapshot_final_desde_contexto_persistido(
                 intento_persistido.contexto_fiscal_json,

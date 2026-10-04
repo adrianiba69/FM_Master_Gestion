@@ -228,8 +228,8 @@ class RecuperacionLocalArcaServiceTest(unittest.TestCase):
                 validacion = ContextoFiscalService.validar(contexto)
                 conexion.execute(
                     "UPDATE intentos_emision_arca SET contexto_fiscal_json=?, contexto_fiscal_version=?, "
-                    "contexto_fiscal_hash=? WHERE id=?",
-                    (validacion.json_canonico, validacion.version, validacion.hash_calculado, self.intento_id),
+                    "contexto_fiscal_hash=?, ambiente_arca=? WHERE id=?",
+                    (validacion.json_canonico, validacion.version, validacion.hash_calculado, ambiente, self.intento_id),
                 )
                 conexion.commit()
                 conexion.close()
@@ -464,8 +464,8 @@ class RecuperacionLocalArcaServiceTest(unittest.TestCase):
             migrar_indices_unicos_factura_arca(conexion.cursor())
             conexion.execute(
                 "UPDATE intentos_emision_arca SET contexto_fiscal_json=?, contexto_fiscal_version=?, "
-                "contexto_fiscal_hash=? WHERE id=?",
-                (validacion.json_canonico, validacion.version, validacion.hash_calculado, self.intento_id),
+                "contexto_fiscal_hash=?, ambiente_arca=? WHERE id=?",
+                (validacion.json_canonico, validacion.version, validacion.hash_calculado, ambiente, self.intento_id),
             )
             conexion.commit()
         finally:

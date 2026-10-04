@@ -40,3 +40,4 @@ class IntentoEmisionArca:
     contexto_fiscal_json: str = None
     contexto_fiscal_version: int = None
     contexto_fiscal_hash: str = None
+    ambiente_arca: str = None

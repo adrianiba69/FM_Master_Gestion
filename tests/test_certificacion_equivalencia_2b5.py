@@ -75,7 +75,8 @@ class CertificacionEquivalencia2B5Test(unittest.TestCase):
                 documento_receptor INTEGER,
                 snapshot_fiscal_json TEXT,
                 snapshot_version INTEGER,
-                snapshot_hash TEXT
+                snapshot_hash TEXT,
+                ambiente_arca TEXT
             );
             INSERT INTO resumenes VALUES(10, 'Pendiente', '', '', '', '');
             """

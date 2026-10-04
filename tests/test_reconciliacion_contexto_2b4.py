@@ -255,8 +255,7 @@ class ReconciliacionContexto2B4Test(unittest.TestCase):
         intento_id = self._crear_intento(contexto)
         conexion = sqlite3.connect(self.ruta)
         conexion.execute(
-            "UPDATE intentos_emision_arca SET cuit_emisor='20999999999', punto_venta=99, "
-            "tipo_comprobante=1, numero_planificado=999, documento_receptor=99999999, "
+            "UPDATE intentos_emision_arca SET documento_receptor=99999999, "
             "condicion_iva_receptor_id=1, importe_total='999', importe_neto='999', importe_iva='99' "
             "WHERE id=?",
             (intento_id,),
@@ -304,12 +303,21 @@ class ReconciliacionContexto2B4Test(unittest.TestCase):
         for ambiente in casos:
             with self.subTest(ambiente=ambiente):
                 self._limpiar_intentos()
+                intento_id = self._crear_intento(self._contexto_c())
+                # Un contexto historico con ambiente invalido pero hash coherente (no creable por crear_intento).
                 contexto = self._contexto_c()
                 if ambiente is None:
                     contexto.pop("ambiente")
                 else:
                     contexto["ambiente"] = ambiente
-                intento_id = self._crear_intento(contexto)
+                validacion = ContextoFiscalService.validar(contexto)
+                conexion = sqlite3.connect(self.ruta)
+                conexion.execute(
+                    "UPDATE intentos_emision_arca SET contexto_fiscal_json=?, contexto_fiscal_hash=? WHERE id=?",
+                    (validacion.json_canonico, validacion.hash_calculado, intento_id),
+                )
+                conexion.commit()
+                conexion.close()
                 servicio, consulta, recuperacion = self._servicio(self._consulta(self._contexto_c()))
 
                 resultado = servicio.reconciliar_intento(intento_id)
@@ -467,7 +475,9 @@ class ReconciliacionContexto2B4Test(unittest.TestCase):
         reconciliado = servicio.reconciliar_intento(reconciliado_id)
         conflicto = servicio.reconciliar_intento(conflicto_id)
 
-        self.assertTrue(reconciliado.ok)
+        # La factura 88 no existe: un RECONCILIADO ya no es exito solo por tener factura_arca_id.
+        self.assertFalse(reconciliado.ok)
+        self.assertEqual(reconciliado.resultado, ResultadoReconciliacion.CONFLICTO)
         self.assertEqual(conflicto.resultado, ResultadoReconciliacion.CONFLICTO)
         self.assertEqual(consulta.llamadas, [])
         self.assertEqual(recuperacion.llamadas, [])

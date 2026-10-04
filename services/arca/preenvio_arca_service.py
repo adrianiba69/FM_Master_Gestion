@@ -76,14 +76,16 @@ class PreenvioArcaService:
             return ResultadoPreenvioArca(False, errores=(f"No se pudo persistir el intento ARCA: {error}",))
 
         # 5-6. releer y verificar hash/integridad de lo realmente persistido.
-        error_verificacion = self._verificar_contexto_persistido(intento_id, integridad.hash_calculado)
+        error_verificacion = self._verificar_contexto_persistido(
+            intento_id, integridad.hash_calculado, integridad.contexto.get("ambiente")
+        )
         if error_verificacion:
             return ResultadoPreenvioArca(False, intento_id=intento_id, errores=(error_verificacion,))
 
         # 7-8. recien aqui se marca ENVIANDO y se ejecuta el callback FECAESolicitar.
         return self._marcar_enviando_y_ejecutar(intento_id, enviar_fecae)
 
-    def _verificar_contexto_persistido(self, intento_id, hash_esperado):
+    def _verificar_contexto_persistido(self, intento_id, hash_esperado, ambiente_esperado=None):
         try:
             intento = self._intentos_service.obtener(intento_id)
         except Exception as error:
@@ -100,6 +102,9 @@ class PreenvioArcaService:
             return f"Contexto fiscal persistido inválido ({integridad.codigo}): {'; '.join(integridad.errores)}"
         if integridad.hash_calculado != hash_esperado:
             return "El hash del contexto fiscal persistido no coincide con el esperado."
+        # Los dobles de prueba sin atributo no se verifican; el modelo real siempre lo expone.
+        if hasattr(intento, "ambiente_arca") and intento.ambiente_arca != ambiente_esperado:
+            return "El ambiente persistido del intento no coincide con el del contexto fiscal."
         return None
 
     def _marcar_enviando_y_ejecutar(self, intento_id, enviar_fecae):
