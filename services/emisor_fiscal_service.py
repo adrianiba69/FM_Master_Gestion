@@ -1,10 +1,146 @@
 import os
+import sqlite3
+from dataclasses import dataclass, field
+from typing import Optional
 
 from database import conectar
+from services.arca.ambiente_arca import AmbienteArcaInvalidoError, normalizar_ambiente_arca
+from services.arca_certificados_service import ArcaCertificadosService
 from services.emisor_service import EmisorService
 
 
+@dataclass(frozen=True)
+class ConfiguracionArcaEmisor:
+    id: int
+    emisor_fiscal_id: int
+    ambiente_arca: str
+    punto_venta: Optional[str]
+    ruta_certificado: Optional[str] = field(repr=False)
+    ruta_clave_privada: Optional[str] = field(repr=False)
+    carpeta_facturas: Optional[str] = field(repr=False)
+
+
+class ConfiguracionArcaError(ValueError):
+    def __init__(self, codigo, mensaje):
+        self.codigo = codigo
+        super().__init__(mensaje)
+
+
+@dataclass(frozen=True)
+class ResultadoValidacionArcaPorAmbiente:
+    ok: bool
+    codigo: str
+    errores: tuple = ()
+    advertencias: tuple = ()
+    controles_no_realizados: tuple = ()
+    configuracion: Optional[ConfiguracionArcaEmisor] = field(default=None, repr=False)
+
+
 class EmisorFiscalService:
+
+    @staticmethod
+    def obtener_configuracion_arca(emisor_fiscal_id, ambiente):
+        """Lee la tabla hija por ambiente; nunca usa la configuracion legacy."""
+        try:
+            ambiente_canonico = normalizar_ambiente_arca(ambiente)
+        except AmbienteArcaInvalidoError:
+            raise ConfiguracionArcaError("AMBIENTE_ARCA_INVALIDO", "Ambiente ARCA no reconocido.") from None
+        if isinstance(emisor_fiscal_id, bool) or not isinstance(emisor_fiscal_id, (int, str)):
+            raise ConfiguracionArcaError("EMISOR_FISCAL_ID_INVALIDO", "Identificador del emisor fiscal invalido.")
+        try:
+            emisor_id = int(emisor_fiscal_id)
+        except ValueError:
+            raise ConfiguracionArcaError("EMISOR_FISCAL_ID_INVALIDO", "Identificador del emisor fiscal invalido.") from None
+        if emisor_id <= 0:
+            raise ConfiguracionArcaError("EMISOR_FISCAL_ID_INVALIDO", "Identificador del emisor fiscal invalido.")
+
+        conexion = None
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+            cursor.execute("SELECT id FROM emisores_fiscales WHERE id=?", (emisor_id,))
+            if cursor.fetchone() is None:
+                raise ConfiguracionArcaError("EMISOR_FISCAL_NO_ENCONTRADO", "El emisor fiscal solicitado no existe.")
+            cursor.execute(
+                "SELECT id, emisor_fiscal_id, ambiente_arca, punto_venta, ruta_certificado, "
+                "ruta_clave_privada, carpeta_facturas FROM emisor_fiscal_arca_config "
+                "WHERE emisor_fiscal_id=? AND ambiente_arca=? ORDER BY id",
+                (emisor_id, ambiente_canonico),
+            )
+            filas = cursor.fetchall()
+            if not filas:
+                raise ConfiguracionArcaError("CONFIGURACION_ARCA_NO_ENCONTRADA", "Falta configuracion ARCA para el ambiente solicitado.")
+            if len(filas) != 1:
+                raise ConfiguracionArcaError("CONFIGURACION_ARCA_AMBIGUA", "Hay varias configuraciones ARCA para el mismo emisor y ambiente.")
+            fila = filas[0]
+            if (
+                not isinstance(fila[0], int) or fila[0] <= 0 or fila[1] != emisor_id
+                or fila[2] != ambiente_canonico
+                or any(valor is not None and not isinstance(valor, str) for valor in fila[3:])
+            ):
+                raise ConfiguracionArcaError("CONFIGURACION_ARCA_INCOHERENTE", "La configuracion ARCA no es coherente con la solicitud.")
+            return ConfiguracionArcaEmisor(*fila)
+        except (sqlite3.Error, OSError):
+            raise ConfiguracionArcaError("LECTURA_CONFIGURACION_ARCA_FALLIDA", "No se pudo leer la configuracion ARCA del emisor.") from None
+        finally:
+            if conexion is not None:
+                conexion.close()
+
+    @staticmethod
+    def validar_configuracion_arca_por_ambiente(emisor_fiscal_id, ambiente):
+        """Valida recursos locales, sin acreditar validez criptografica ni habilitacion ARCA."""
+        controles = (
+            "vigencia_certificado: no verificada",
+            "cuit_certificado: no verificado",
+            "correspondencia_certificado_clave: no verificada",
+            "autorizacion_arca: no verificada",
+            "escritura_carpeta: no demostrada; solo se comprueban permisos",
+        )
+        try:
+            configuracion = EmisorFiscalService.obtener_configuracion_arca(emisor_fiscal_id, ambiente)
+        except ConfiguracionArcaError as error:
+            return ResultadoValidacionArcaPorAmbiente(
+                False, error.codigo, errores=(str(error),), controles_no_realizados=controles,
+            )
+        errores = []
+        try:
+            punto_venta = int(configuracion.punto_venta)
+            if punto_venta <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            errores.append("Punto de venta invalido: debe ser un entero positivo.")
+        for etiqueta, ruta in (
+            ("certificado", configuracion.ruta_certificado),
+            ("clave privada", configuracion.ruta_clave_privada),
+        ):
+            if not ruta or not ruta.strip():
+                errores.append(f"Falta ruta del archivo de {etiqueta}.")
+                continue
+            try:
+                if not ArcaCertificadosService.validar_archivo(ruta):
+                    errores.append(f"No existe un archivo de {etiqueta} utilizable.")
+                    continue
+                with open(ruta, "rb") as archivo:
+                    archivo.read(1)
+            except (OSError, ValueError):
+                errores.append(f"El archivo de {etiqueta} no es legible.")
+        carpeta = configuracion.carpeta_facturas
+        if not carpeta or not carpeta.strip():
+            errores.append("Falta carpeta de facturas.")
+        else:
+            try:
+                if not os.path.isdir(carpeta):
+                    errores.append("La carpeta de facturas no existe.")
+                elif not os.access(carpeta, os.W_OK | os.X_OK):
+                    errores.append("La carpeta de facturas no tiene permisos de escritura y acceso.")
+            except (OSError, ValueError):
+                errores.append("No se pudo comprobar la carpeta de facturas.")
+        return ResultadoValidacionArcaPorAmbiente(
+            not errores, "VALIDACION_OFFLINE_OK" if not errores else "CONFIGURACION_ARCA_INVALIDA",
+            errores=tuple(errores),
+            advertencias=("La validacion offline basica no demuestra habilitacion ARCA ni validez criptografica.",),
+            controles_no_realizados=controles, configuracion=configuracion,
+        )
 
     @staticmethod
     def _normalizar_cuit(valor):
