@@ -321,16 +321,32 @@ class ReconciliacionArcaService:
                 )
             return self._guardar_consulta_incierta(intento.id, mensaje_incoherencia, error_codigo=codigo_incoherencia)
 
-        emisor_fiscal = self._emisor_fiscal_provider.obtener(emisor_fiscal_id)
-        if not emisor_fiscal:
+        try:
+            configuracion_arca = self._emisor_fiscal_provider.obtener_configuracion_arca(emisor_fiscal_id, ambiente_contexto)
+        except ValueError:
             return self._guardar_consulta_incierta(
                 intento.id,
-                "No se encontró el emisor fiscal del intento para consultar ARCA.",
+                "Falta configuracion ARCA utilizable para el emisor y ambiente congelados.",
+                error_codigo="CONFIGURACION_ARCA_NO_DISPONIBLE",
             )
 
-        ruta_certificado = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
-        ruta_clave = str(emisor_fiscal[14] if len(emisor_fiscal) > 14 else "" or "").strip()
-        carpeta_trabajo = str(emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or "").strip()
+        try:
+            configuracion_coherente = (
+                configuracion_arca.emisor_fiscal_id == emisor_fiscal_id
+                and emisor_fiscal_id == intento.emisor_fiscal_id
+                and configuracion_arca.ambiente_arca == ambiente_contexto
+                and int(configuracion_arca.punto_venta) == punto_venta_consulta
+            )
+        except (TypeError, ValueError):
+            configuracion_coherente = False
+        if not configuracion_coherente:
+            return self._guardar_consulta_incierta(
+                intento.id, "La configuracion ARCA contradice el emisor, ambiente o PV congelados.",
+                error_codigo="CONFIGURACION_ARCA_INCOMPATIBLE",
+            )
+        ruta_certificado = str(configuracion_arca.ruta_certificado or "").strip()
+        ruta_clave = str(configuracion_arca.ruta_clave_privada or "").strip()
+        carpeta_trabajo = str(configuracion_arca.carpeta_facturas or "").strip()
         if not ruta_certificado or not ruta_clave or not carpeta_trabajo:
             return self._guardar_consulta_incierta(
                 intento.id,

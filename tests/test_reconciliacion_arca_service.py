@@ -14,6 +14,7 @@ from services.arca.reconciliacion_contracts import (
 from services.arca.reconciliacion_service import ReconciliacionArcaService
 from services.intento_emision_arca_service import IntentoEmisionArcaService
 from services.arca.recuperacion_local_service import ResultadoRecuperacionLocal
+from tests._cierre_contexto_helper import configuracion_arca_para_test
 
 
 class EmisorFiscalFake:
@@ -25,6 +26,12 @@ class EmisorFiscalFake:
     def obtener(self, emisor_id):
         self.ids_consultados.append(emisor_id)
         return self.emisor
+
+    def obtener_configuracion_arca(self, emisor_id, ambiente):
+        emisor = self.obtener(emisor_id)
+        if emisor is None:
+            raise ValueError("Configuracion inexistente")
+        return configuracion_arca_para_test(ambiente, emisor_id)
 
 
 class ConsultaArcaFake:

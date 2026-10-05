@@ -15,12 +15,17 @@ from services.arca.reconciliacion_service import ReconciliacionArcaService
 from services.arca.recuperacion_local_service import RecuperacionLocalArcaService
 from services.arca.snapshot_fiscal_service import CODIGO_VALIDO, validar_integridad_snapshot
 from services.intento_emision_arca_service import IntentoEmisionArcaService
+from tests._cierre_contexto_helper import configuracion_arca_para_test
 
 
 class EmisorFiscalFake:
 
     def __init__(self):
         self.llamadas = []
+
+    def obtener_configuracion_arca(self, emisor_id, ambiente):
+        self.llamadas.append(emisor_id)
+        return configuracion_arca_para_test(ambiente, emisor_id)
 
     def obtener(self, emisor_id):
         self.llamadas.append(emisor_id)

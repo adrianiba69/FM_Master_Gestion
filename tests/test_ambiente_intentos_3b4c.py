@@ -27,6 +27,7 @@ from services.intento_emision_arca_service import (
     ConflictoIntentoAmbiguoError,
     IntentoEmisionArcaService,
 )
+from tests._cierre_contexto_helper import configuracion_arca_para_test
 
 H, P = "HOMOLOGACION", "PRODUCCION"
 CUIT = "20206871629"
@@ -106,6 +107,11 @@ class ConsultaFake:
 
 
 class EmisorFake:
+    def obtener_configuracion_arca(self, emisor_id, ambiente):
+        return configuracion_arca_para_test(
+            ambiente, emisor_id, "c.crt", "k.key", "C:/t",
+        )
+
     # El ambiente "vivo" del emisor es deliberadamente el contrario: nunca debe decidir.
     def obtener(self, emisor_id):
         return (30, "Emisor", "", CUIT, "", "", 5, 1, "", "Homologación", "", "", "", "c.crt", "k.key", "C:/t", 1)

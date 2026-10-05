@@ -11,6 +11,7 @@ SQLite temporal.
 """
 
 from decimal import Decimal
+from services.emisor_fiscal_service import ConfiguracionArcaEmisor
 
 from services.arca.snapshot_fiscal_service import (
     SNAPSHOT_VERSION,
@@ -18,6 +19,14 @@ from services.arca.snapshot_fiscal_service import (
     construir_snapshot_fiscal_v1,
     serializar_snapshot_fiscal,
 )
+
+
+def configuracion_arca_para_test(ambiente="HOMOLOGACION", emisor_fiscal_id=30,
+                                ruta_certificado="cert.crt", ruta_clave_privada="clave.key",
+                                carpeta_facturas="C:/trabajo", punto_venta="5"):
+    return ConfiguracionArcaEmisor(
+        1, emisor_fiscal_id, ambiente, punto_venta, ruta_certificado, ruta_clave_privada, carpeta_facturas,
+    )
 
 
 def construir_snapshot_cierre_para_test(

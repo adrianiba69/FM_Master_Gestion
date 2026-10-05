@@ -28,7 +28,7 @@ from services.arca.snapshot_fiscal_service import (
     validar_integridad_snapshot,
 )
 from services.facturacion_service import FacturacionService
-from tests._cierre_contexto_helper import resultado_snapshot_cierre_para_test
+from tests._cierre_contexto_helper import resultado_snapshot_cierre_para_test, configuracion_arca_para_test
 
 
 def _emisor_fiscal(cuit="20206871629", ambiente="Homologación"):
@@ -715,6 +715,8 @@ class SnapshotFiscalFlujoCompletoTest(unittest.TestCase):
             patch.object(FacturacionService, "resolver_cliente", return_value={"ok": True, "cliente": cliente_final}),
             patch.object(FacturacionService, "resolver_conceptos", return_value={"ok": True, "resumen": resumen, "conceptos": [object()]}),
             patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "emisor_fiscal": emisor}),
+            patch("services.facturacion_service.EmisorFiscalService.obtener_configuracion_arca",
+                return_value=configuracion_arca_para_test(ambiente_esperado)),
             patch.object(FacturacionService, "_resolver_emisor_facturacion_id", return_value=(40, "id")),
             patch.object(
                 FacturacionService, "_armar_items_factura_desde_resumen",
@@ -811,7 +813,7 @@ class SnapshotFiscalFlujoCompletoTest(unittest.TestCase):
         self.assertFalse(resultado["ok"])
         self.assertEqual(resultado["etapa"], "arca")
         self.assertTrue(any("Producción" in error or "Produccion" in error for error in resultado["errores"]))
-        self.assertEqual(emitir_comprobante.call_args.kwargs["ambiente"], ambiente_arca.AMBIENTE_PRODUCCION)
+        emitir_comprobante.assert_not_called()
         guardar_tra.assert_not_called()
         login.assert_not_called()
         ultimo.assert_not_called()

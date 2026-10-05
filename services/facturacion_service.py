@@ -747,11 +747,7 @@ class FacturacionService:
             return resultado
 
         cuit_emisor = str(emisor_fiscal[3] if len(emisor_fiscal) > 3 else "" or "").strip()
-        punto_venta = emisor_fiscal[6] if len(emisor_fiscal) > 6 else ""
         ambiente_emisor = emisor_fiscal[9] if len(emisor_fiscal) > 9 else ""
-        ruta_certificado = str(emisor_fiscal[13] if len(emisor_fiscal) > 13 else "" or "").strip()
-        ruta_clave = str(emisor_fiscal[14] if len(emisor_fiscal) > 14 else "" or "").strip()
-        carpeta_facturas = str(emisor_fiscal[15] if len(emisor_fiscal) > 15 else "" or "").strip()
 
         try:
             ambiente_normalizado = ambiente_arca.normalizar_ambiente_arca(ambiente_emisor)
@@ -760,6 +756,34 @@ class FacturacionService:
             resultado["errores"] = [str(error)]
             resultado["mensaje"] = str(error)
             return resultado
+
+        try:
+            ambiente_arca.asegurar_emision_habilitada(ambiente_normalizado)
+        except ambiente_arca.EmisionProduccionNoHabilitadaError as error:
+            resultado["etapa"] = "arca"
+            resultado["errores"] = [str(error)]
+            return resultado
+        try:
+            configuracion_arca = EmisorFiscalService.obtener_configuracion_arca(emisor_fiscal[0], ambiente_normalizado)
+        except ValueError:
+            resultado["etapa"] = "configuracion_arca"
+            resultado["errores"] = ["No se pudo resolver la configuracion ARCA del emisor y ambiente solicitados."]
+            return resultado
+        if (
+            configuracion_arca.emisor_fiscal_id != emisor_fiscal[0]
+            or configuracion_arca.ambiente_arca != ambiente_normalizado
+            or not all(str(valor or "").strip() for valor in (
+                configuracion_arca.ruta_certificado, configuracion_arca.ruta_clave_privada,
+                configuracion_arca.carpeta_facturas,
+            ))
+        ):
+            resultado["etapa"] = "configuracion_arca"
+            resultado["errores"] = ["Configuracion ARCA incompleta o incompatible con la operacion."]
+            return resultado
+        punto_venta = configuracion_arca.punto_venta
+        ruta_certificado = configuracion_arca.ruta_certificado
+        ruta_clave = configuracion_arca.ruta_clave_privada
+        carpeta_facturas = configuracion_arca.carpeta_facturas
 
         cuit_emisor_normalizado = cls._normalizar_cuit(cuit_emisor)
         punto_venta_normalizado = cls._normalizar_punto_venta(punto_venta)

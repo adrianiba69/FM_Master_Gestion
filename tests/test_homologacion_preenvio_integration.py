@@ -108,6 +108,7 @@ class HomologacionPreenvioIntegrationTest(unittest.TestCase):
             "receptor": {"cliente_id": 20, "razon_social": "Cliente SA", "documento_visible": "30712345678", "tipo_documento_receptor": 80, "documento_receptor": 30712345678},
             "comprobante": {
                 "fecha": "2026-08-16", "fecha_arca": "20260816",
+                "punto_venta_num": 5,
                 "tipo_comprobante_num": tipo_comprobante,
                 "numero_comprobante_planificado": None,
                 "numero_textual_planificado": None,

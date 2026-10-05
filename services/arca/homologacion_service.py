@@ -217,6 +217,19 @@ class HomologacionService:
             resultado["errores"].append("El ambiente del contexto fiscal no coincide con el ambiente de emision.")
             return resultado
 
+        if contexto_fiscal_base is not None:
+            try:
+                coherente = (
+                    int(contexto_fiscal_base["emisor"]["punto_venta_num"]) == int(punto_venta)
+                    and int(contexto_fiscal_base["comprobante"]["punto_venta_num"]) == int(punto_venta)
+                    and int(contexto_fiscal_base["emisor"]["emisor_fiscal_id"]) == int(datos_intento["emisor_fiscal_id"])
+                )
+            except (KeyError, TypeError, ValueError):
+                coherente = False
+            if not coherente:
+                resultado["errores"].append("El emisor o punto de venta del contexto contradice la operacion de emision.")
+                return resultado
+
         ruta_tra = WSAAService.guardar_tra(
             Path(carpeta_texto) / "tra_wsfe_emitir.xml",
             servicio="wsfe",

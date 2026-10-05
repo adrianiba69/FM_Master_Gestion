@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.reconciliacion_contracts import ResultadoReconciliacion
 from services.facturacion_service import FacturacionService
-from tests._cierre_contexto_helper import resultado_snapshot_cierre_para_test
+from tests._cierre_contexto_helper import resultado_snapshot_cierre_para_test, configuracion_arca_para_test
 
 
 class CierreIntentoExitosoTest(unittest.TestCase):
@@ -188,6 +188,8 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch.object(FacturacionService, "resolver_cliente", return_value={"ok": True, "cliente": cliente}),
             patch.object(FacturacionService, "resolver_conceptos", return_value={"ok": True, "resumen": resumen, "conceptos": [object()]}),
             patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "emisor_fiscal": emisor}),
+            patch("services.facturacion_service.EmisorFiscalService.obtener_configuracion_arca",
+                return_value=configuracion_arca_para_test()),
             patch.object(FacturacionService, "_resolver_emisor_facturacion_id", return_value=(40, "id")),
             patch.object(FacturacionService, "_armar_items_factura_desde_resumen", return_value=[{"importe": 100, "cantidad": 1, "precio_unitario": 100, "descripcion": "Servicio"}]),
             patch.object(FacturacionService, "calcular_importes_fiscales", return_value=fiscal),

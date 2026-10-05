@@ -17,11 +17,16 @@ from services.arca.reconciliacion_contracts import (
 from services.arca.reconciliacion_service import ReconciliacionArcaService
 from services.arca.recuperacion_local_service import ResultadoRecuperacionLocal
 from services.intento_emision_arca_service import IntentoEmisionArcaService
+from tests._cierre_contexto_helper import configuracion_arca_para_test
 
 
 class EmisorTecnicoFake:
     def __init__(self):
         self.llamadas = []
+
+    def obtener_configuracion_arca(self, emisor_id, ambiente):
+        self.llamadas.append(emisor_id)
+        return configuracion_arca_para_test(ambiente, emisor_id)
 
     def obtener(self, emisor_id):
         self.llamadas.append(emisor_id)
@@ -201,6 +206,10 @@ class ReconciliacionContexto2B4Test(unittest.TestCase):
             def obtener(self, emisor_id):
                 self.llamadas.append(emisor_id)
                 return self.fila
+
+            def obtener_configuracion_arca(self, emisor_id, ambiente):
+                self.llamadas.append(emisor_id)
+                return configuracion_arca_para_test(ambiente, emisor_id)
 
         consulta = ConsultaSecuencialFake(*respuestas)
         recuperacion = RecuperacionMarcadoraFake(self.intentos)

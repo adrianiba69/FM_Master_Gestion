@@ -24,6 +24,7 @@ from services.arca.snapshot_fiscal_service import (
 )
 from services.facturacion_service import FacturacionService
 from services.intento_emision_arca_service import IntentoEmisionArcaService
+from tests._cierre_contexto_helper import configuracion_arca_para_test
 from tests.test_cierre_normal_desde_contexto_2b2 import _consulta_a, _consulta_c, _contexto_a, _contexto_c
 
 
@@ -259,6 +260,10 @@ class CertificacionEquivalencia2B5Test(unittest.TestCase):
             return {"ok": True, **consulta}
 
         class EmisorTecnico:
+            @staticmethod
+            def obtener_configuracion_arca(emisor_id, ambiente):
+                return configuracion_arca_para_test(ambiente, emisor_id, "cert.fake", "clave.fake", "C:/trabajo-fake")
+
             @staticmethod
             def obtener(emisor_id):
                 return (
