@@ -3,6 +3,7 @@ import calendar
 from datetime import date, datetime
 
 from runtime_paths import DATABASE_PATH
+from services.arca.ambiente_arca import AmbienteArcaInvalidoError, normalizar_ambiente_arca
 from services.arca.fiscal_normalization import normalizar_identidad_factura
 from services.arca.snapshot_fiscal_service import CODIGO_VALIDO, validar_integridad_snapshot
 
@@ -274,6 +275,66 @@ def migrar_intentos_emision_arca_contexto_fiscal(cur):
         ("contexto_fiscal_hash", "TEXT"),
     ):
         agregar_columna_si_falta(cur, "intentos_emision_arca", columna, definicion)
+
+
+def crear_tabla_emisor_fiscal_arca_config(cur):
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS emisor_fiscal_arca_config(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        emisor_fiscal_id INTEGER NOT NULL,
+        ambiente_arca TEXT NOT NULL CHECK(ambiente_arca IN ('HOMOLOGACION', 'PRODUCCION')),
+        punto_venta TEXT,
+        ruta_certificado TEXT,
+        ruta_clave_privada TEXT,
+        carpeta_facturas TEXT,
+        UNIQUE(emisor_fiscal_id, ambiente_arca),
+        FOREIGN KEY(emisor_fiscal_id) REFERENCES emisores_fiscales(id)
+    )
+    """)
+
+
+def migrar_emisor_fiscal_arca_config(cur):
+    resultado = {"creadas": 0, "identicas": 0, "invalidas": 0, "conflictos": 0}
+    cur.execute("SAVEPOINT migracion_emisor_fiscal_arca_config")
+    try:
+        crear_tabla_emisor_fiscal_arca_config(cur)
+        cur.execute(
+            "SELECT id, ambiente_arca, punto_venta, ruta_certificado, ruta_clave_privada, "
+            "carpeta_facturas FROM emisores_fiscales ORDER BY id"
+        )
+        for emisor_id, ambiente_legacy, *configuracion in cur.fetchall():
+            try:
+                ambiente = normalizar_ambiente_arca(ambiente_legacy)
+            except AmbienteArcaInvalidoError:
+                resultado["invalidas"] += 1
+                print(f"ADVERTENCIA: emisor fiscal {emisor_id}: ambiente legacy no reconocido; configuracion conservada sin migrar.")
+                continue
+            cur.execute(
+                "SELECT punto_venta, ruta_certificado, ruta_clave_privada, carpeta_facturas "
+                "FROM emisor_fiscal_arca_config WHERE emisor_fiscal_id=? AND ambiente_arca=?",
+                (emisor_id, ambiente),
+            )
+            existente = cur.fetchone()
+            if existente is not None:
+                if existente == tuple(configuracion):
+                    resultado["identicas"] += 1
+                else:
+                    resultado["conflictos"] += 1
+                    print(f"ADVERTENCIA: emisor fiscal {emisor_id}, {ambiente}: conflicto con configuracion hija; ambas configuraciones conservadas.")
+                continue
+            cur.execute(
+                "INSERT INTO emisor_fiscal_arca_config(emisor_fiscal_id, ambiente_arca, "
+                "punto_venta, ruta_certificado, ruta_clave_privada, carpeta_facturas) "
+                "VALUES(?,?,?,?,?,?)",
+                (emisor_id, ambiente, *configuracion),
+            )
+            resultado["creadas"] += 1
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT migracion_emisor_fiscal_arca_config")
+        cur.execute("RELEASE SAVEPOINT migracion_emisor_fiscal_arca_config")
+        raise
+    cur.execute("RELEASE SAVEPOINT migracion_emisor_fiscal_arca_config")
+    return resultado
 
 
 def crear_base():
@@ -558,6 +619,8 @@ def crear_base():
                 """,
                 emisor,
             )
+
+    migrar_emisor_fiscal_arca_config(cur)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS arca_config(
