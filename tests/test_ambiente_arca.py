@@ -38,10 +38,11 @@ class EndpointsPorAmbienteTest(unittest.TestCase):
         )
 
     def test_homologacion_selecciona_url_wsfe_homologacion(self):
-        self.assertEqual(
-            ambiente_arca.resolver_endpoint_wsfe(ambiente_arca.AMBIENTE_HOMOLOGACION),
-            WSFEService.WSFE_HOMOLOGACION_URL,
-        )
+        url = ambiente_arca.resolver_endpoint_wsfe(ambiente_arca.AMBIENTE_HOMOLOGACION)
+        self.assertEqual(url, "https://wswhomo.afip.gov.ar/wsfev1/service.asmx")
+        self.assertEqual(url, WSFEService.WSFE_HOMOLOGACION_URL)
+        self.assertNotEqual(url, "https://servicios1.afip.gov.ar/wsfev1/service.asmx")
+        self.assertNotEqual(url, WSFEService.WSFE_PRODUCCION_URL)
 
     def test_produccion_selecciona_url_wsaa_productiva(self):
         url = ambiente_arca.resolver_endpoint_wsaa(ambiente_arca.AMBIENTE_PRODUCCION)
@@ -50,7 +51,9 @@ class EndpointsPorAmbienteTest(unittest.TestCase):
 
     def test_produccion_selecciona_url_wsfe_productiva(self):
         url = ambiente_arca.resolver_endpoint_wsfe(ambiente_arca.AMBIENTE_PRODUCCION)
+        self.assertEqual(url, "https://servicios1.afip.gov.ar/wsfev1/service.asmx")
         self.assertEqual(url, WSFEService.WSFE_PRODUCCION_URL)
+        self.assertNotEqual(url, "https://wswhomo.afip.gov.ar/wsfev1/service.asmx")
         self.assertNotEqual(url, WSFEService.WSFE_HOMOLOGACION_URL)
 
     def test_cache_homologacion_y_produccion_tienen_prefijos_distintos(self):

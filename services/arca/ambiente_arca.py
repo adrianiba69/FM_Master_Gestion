@@ -30,7 +30,7 @@ WSAA_URLS = {
 
 WSFE_URLS = {
     AMBIENTE_HOMOLOGACION: "https://wswhomo.afip.gov.ar/wsfev1/service.asmx",
-    AMBIENTE_PRODUCCION: "https://servicio1.afip.gov.ar/wsfev1/service.asmx",
+    AMBIENTE_PRODUCCION: "https://servicios1.afip.gov.ar/wsfev1/service.asmx",
 }
 
 _CACHE_PREFIJOS = {

@@ -19,7 +19,10 @@ from tests.test_ambiente_intentos_3b4c import (
     CUIT, H, P, Base3B4C, EmisorFake, consulta_autorizada, contexto,
 )
 
-URL_POR_AMBIENTE = {H: WSFEService.WSFE_HOMOLOGACION_URL, P: WSFEService.WSFE_PRODUCCION_URL}
+URL_POR_AMBIENTE = {
+    H: "https://wswhomo.afip.gov.ar/wsfev1/service.asmx",
+    P: "https://servicios1.afip.gov.ar/wsfev1/service.asmx",
+}
 
 
 class CadenaReconciliacionTest(Base3B4C):
