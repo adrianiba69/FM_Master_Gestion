@@ -4,7 +4,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from database import conectar
-from services.arca.ambiente_arca import AmbienteArcaInvalidoError, normalizar_ambiente_arca
+from services.arca.ambiente_arca import (
+    AMBIENTE_HOMOLOGACION,
+    AMBIENTE_PRODUCCION,
+    AmbienteArcaInvalidoError,
+    normalizar_ambiente_arca,
+)
 from services.arca_certificados_service import ArcaCertificadosService
 from services.emisor_service import EmisorService
 
@@ -36,15 +41,30 @@ class ResultadoValidacionArcaPorAmbiente:
     configuracion: Optional[ConfiguracionArcaEmisor] = field(default=None, repr=False)
 
 
+@dataclass(frozen=True)
+class ResultadoGuardadoConfiguracionArca:
+    configuracion: ConfiguracionArcaEmisor = field(repr=False)
+    espejo_legacy_actualizado: bool
+
+
+# Valor legacy de emisores_fiscales.ambiente_arca (forma historica visible en UI).
+_AMBIENTE_LEGACY = {
+    AMBIENTE_HOMOLOGACION: "Homologación",
+    AMBIENTE_PRODUCCION: "Producción",
+}
+
+
 class EmisorFiscalService:
 
     @staticmethod
-    def obtener_configuracion_arca(emisor_fiscal_id, ambiente):
-        """Lee la tabla hija por ambiente; nunca usa la configuracion legacy."""
+    def _canonizar_ambiente(ambiente):
         try:
-            ambiente_canonico = normalizar_ambiente_arca(ambiente)
+            return normalizar_ambiente_arca(ambiente)
         except AmbienteArcaInvalidoError:
             raise ConfiguracionArcaError("AMBIENTE_ARCA_INVALIDO", "Ambiente ARCA no reconocido.") from None
+
+    @staticmethod
+    def _canonizar_emisor_id(emisor_fiscal_id):
         if isinstance(emisor_fiscal_id, bool) or not isinstance(emisor_fiscal_id, (int, str)):
             raise ConfiguracionArcaError("EMISOR_FISCAL_ID_INVALIDO", "Identificador del emisor fiscal invalido.")
         try:
@@ -53,6 +73,238 @@ class EmisorFiscalService:
             raise ConfiguracionArcaError("EMISOR_FISCAL_ID_INVALIDO", "Identificador del emisor fiscal invalido.") from None
         if emisor_id <= 0:
             raise ConfiguracionArcaError("EMISOR_FISCAL_ID_INVALIDO", "Identificador del emisor fiscal invalido.")
+        return emisor_id
+
+    @staticmethod
+    def _normalizar_punto_venta_configuracion(punto_venta):
+        """Vacio/None => '' (configuracion incompleta); valido => texto de 5 digitos."""
+        error = ConfiguracionArcaError(
+            "PUNTO_VENTA_INVALIDO", "Punto de venta invalido: debe ser un entero entre 1 y 99999."
+        )
+        if punto_venta is None:
+            return ""
+        if isinstance(punto_venta, bool):
+            raise error
+        if isinstance(punto_venta, int):
+            numero = punto_venta
+        elif isinstance(punto_venta, str):
+            texto = punto_venta.strip()
+            if not texto:
+                return ""
+            if not (texto.isascii() and texto.isdigit()):
+                raise error
+            numero = int(texto)
+        else:
+            raise error
+        if not 1 <= numero <= 99999:
+            raise error
+        return f"{numero:05d}"
+
+    @staticmethod
+    def _normalizar_ruta_configuracion(valor):
+        """Normaliza sin tocar el filesystem; la existencia la comprueba el validador."""
+        if valor is None:
+            return ""
+        if isinstance(valor, os.PathLike):
+            valor = os.fspath(valor)
+        if not isinstance(valor, str) or "\x00" in valor:
+            raise ConfiguracionArcaError("VALOR_CONFIGURACION_INVALIDO", "Valor de ruta de configuracion ARCA invalido.")
+        return valor.strip()
+
+    @staticmethod
+    def _ambiente_activo_legacy(valor):
+        try:
+            return normalizar_ambiente_arca(valor)
+        except AmbienteArcaInvalidoError:
+            return None
+
+    @staticmethod
+    def guardar_configuracion_arca(
+        emisor_fiscal_id, ambiente, punto_venta, ruta_certificado, ruta_clave_privada, carpeta_facturas,
+    ):
+        """Crea/actualiza solo la hija del ambiente indicado; espeja al legacy solo si es el ambiente activo."""
+        ambiente_canonico = EmisorFiscalService._canonizar_ambiente(ambiente)
+        emisor_id = EmisorFiscalService._canonizar_emisor_id(emisor_fiscal_id)
+        valores = (
+            EmisorFiscalService._normalizar_punto_venta_configuracion(punto_venta),
+            EmisorFiscalService._normalizar_ruta_configuracion(ruta_certificado),
+            EmisorFiscalService._normalizar_ruta_configuracion(ruta_clave_privada),
+            EmisorFiscalService._normalizar_ruta_configuracion(carpeta_facturas),
+        )
+
+        conexion = None
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute("SELECT ambiente_arca FROM emisores_fiscales WHERE id=?", (emisor_id,))
+            fila_emisor = cursor.fetchone()
+            if fila_emisor is None:
+                raise ConfiguracionArcaError("EMISOR_FISCAL_NO_ENCONTRADO", "El emisor fiscal solicitado no existe.")
+            cursor.execute(
+                "SELECT id FROM emisor_fiscal_arca_config WHERE emisor_fiscal_id=? AND ambiente_arca=? ORDER BY id",
+                (emisor_id, ambiente_canonico),
+            )
+            ids = [fila[0] for fila in cursor.fetchall()]
+            if len(ids) > 1:
+                raise ConfiguracionArcaError("CONFIGURACION_ARCA_AMBIGUA", "Hay varias configuraciones ARCA para el mismo emisor y ambiente.")
+            if ids:
+                configuracion_id = ids[0]
+                if not isinstance(configuracion_id, int) or configuracion_id <= 0:
+                    raise ConfiguracionArcaError("CONFIGURACION_ARCA_INCOHERENTE", "La configuracion ARCA no es coherente con la solicitud.")
+                cursor.execute(
+                    "UPDATE emisor_fiscal_arca_config SET punto_venta=?, ruta_certificado=?, "
+                    "ruta_clave_privada=?, carpeta_facturas=? WHERE id=? AND emisor_fiscal_id=? AND ambiente_arca=?",
+                    (*valores, configuracion_id, emisor_id, ambiente_canonico),
+                )
+                if cursor.rowcount != 1:
+                    raise ConfiguracionArcaError("CONFIGURACION_ARCA_INCOHERENTE", "La configuracion ARCA no es coherente con la solicitud.")
+            else:
+                cursor.execute(
+                    "INSERT INTO emisor_fiscal_arca_config(emisor_fiscal_id, ambiente_arca, punto_venta, "
+                    "ruta_certificado, ruta_clave_privada, carpeta_facturas) VALUES(?,?,?,?,?,?)",
+                    (emisor_id, ambiente_canonico, *valores),
+                )
+                configuracion_id = cursor.lastrowid
+
+            espejo = EmisorFiscalService._ambiente_activo_legacy(fila_emisor[0]) == ambiente_canonico
+            if espejo:
+                cursor.execute(
+                    "UPDATE emisores_fiscales SET punto_venta=?, ruta_certificado=?, ruta_clave_privada=?, "
+                    "carpeta_facturas=? WHERE id=?",
+                    (*valores, emisor_id),
+                )
+                if cursor.rowcount != 1:
+                    raise ConfiguracionArcaError("CONFIGURACION_ARCA_INCOHERENTE", "La configuracion ARCA no es coherente con la solicitud.")
+            conexion.commit()
+        except ConfiguracionArcaError:
+            if conexion is not None:
+                conexion.rollback()
+            raise
+        except (sqlite3.Error, OSError):
+            if conexion is not None:
+                conexion.rollback()
+            raise ConfiguracionArcaError("ESCRITURA_CONFIGURACION_ARCA_FALLIDA", "No se pudo guardar la configuracion ARCA del emisor.") from None
+        finally:
+            if conexion is not None:
+                conexion.close()
+        return ResultadoGuardadoConfiguracionArca(
+            ConfiguracionArcaEmisor(configuracion_id, emisor_id, ambiente_canonico, *valores), espejo,
+        )
+
+    @staticmethod
+    def cambiar_ambiente_arca_activo(emisor_fiscal_id, ambiente):
+        """Copia atomicamente la hija exacta al legacy; no habilita emision (ver asegurar_emision_habilitada)."""
+        ambiente_canonico = EmisorFiscalService._canonizar_ambiente(ambiente)
+        emisor_id = EmisorFiscalService._canonizar_emisor_id(emisor_fiscal_id)
+
+        conexion = None
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute("SELECT id FROM emisores_fiscales WHERE id=?", (emisor_id,))
+            if cursor.fetchone() is None:
+                raise ConfiguracionArcaError("EMISOR_FISCAL_NO_ENCONTRADO", "El emisor fiscal solicitado no existe.")
+            cursor.execute(
+                "SELECT id, emisor_fiscal_id, ambiente_arca, punto_venta, ruta_certificado, "
+                "ruta_clave_privada, carpeta_facturas FROM emisor_fiscal_arca_config "
+                "WHERE emisor_fiscal_id=? AND ambiente_arca=? ORDER BY id",
+                (emisor_id, ambiente_canonico),
+            )
+            filas = cursor.fetchall()
+            if not filas:
+                raise ConfiguracionArcaError("CONFIGURACION_ARCA_NO_ENCONTRADA", "Falta configuracion ARCA para el ambiente solicitado.")
+            if len(filas) != 1:
+                raise ConfiguracionArcaError("CONFIGURACION_ARCA_AMBIGUA", "Hay varias configuraciones ARCA para el mismo emisor y ambiente.")
+            fila = filas[0]
+            if (
+                not isinstance(fila[0], int) or fila[0] <= 0 or fila[1] != emisor_id
+                or fila[2] != ambiente_canonico
+                or any(valor is not None and not isinstance(valor, str) for valor in fila[3:])
+            ):
+                raise ConfiguracionArcaError("CONFIGURACION_ARCA_INCOHERENTE", "La configuracion ARCA no es coherente con la solicitud.")
+            cursor.execute(
+                "UPDATE emisores_fiscales SET ambiente_arca=?, punto_venta=?, ruta_certificado=?, "
+                "ruta_clave_privada=?, carpeta_facturas=? WHERE id=?",
+                (_AMBIENTE_LEGACY[ambiente_canonico], *fila[3:], emisor_id),
+            )
+            if cursor.rowcount != 1:
+                raise ConfiguracionArcaError("CONFIGURACION_ARCA_INCOHERENTE", "La configuracion ARCA no es coherente con la solicitud.")
+            conexion.commit()
+        except ConfiguracionArcaError:
+            if conexion is not None:
+                conexion.rollback()
+            raise
+        except (sqlite3.Error, OSError):
+            if conexion is not None:
+                conexion.rollback()
+            raise ConfiguracionArcaError("ESCRITURA_CONFIGURACION_ARCA_FALLIDA", "No se pudo cambiar el ambiente ARCA activo.") from None
+        finally:
+            if conexion is not None:
+                conexion.close()
+        return ConfiguracionArcaEmisor(*fila)
+
+    @staticmethod
+    def actualizar_datos_fiscales(
+        id_,
+        razon_social,
+        nombre_fantasia,
+        cuit,
+        condicion_iva,
+        tipo_factura,
+        activo=1,
+        observaciones="",
+        domicilio="",
+        ingresos_brutos="",
+        fecha_inicio_actividades="",
+    ):
+        """Actualiza solo la identidad fiscal comun; nunca columnas ARCA legacy."""
+        emisor_id = EmisorFiscalService._canonizar_emisor_id(id_)
+        conexion = conectar()
+        try:
+            cursor = conexion.cursor()
+            cursor.execute(
+                """
+                UPDATE emisores_fiscales
+                SET razon_social=?,
+                    nombre_fantasia=?,
+                    cuit=?,
+                    condicion_iva=?,
+                    tipo_factura=?,
+                    activo=?,
+                    observaciones=?,
+                    domicilio=?,
+                    ingresos_brutos=?,
+                    fecha_inicio_actividades=?
+                WHERE id=?
+                """,
+                (
+                    razon_social,
+                    nombre_fantasia,
+                    cuit,
+                    condicion_iva,
+                    tipo_factura,
+                    1 if activo else 0,
+                    observaciones,
+                    domicilio,
+                    ingresos_brutos,
+                    fecha_inicio_actividades,
+                    emisor_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                conexion.rollback()
+                raise ConfiguracionArcaError("EMISOR_FISCAL_NO_ENCONTRADO", "El emisor fiscal solicitado no existe.")
+            conexion.commit()
+        finally:
+            conexion.close()
+
+    @staticmethod
+    def obtener_configuracion_arca(emisor_fiscal_id, ambiente):
+        """Lee la tabla hija por ambiente; nunca usa la configuracion legacy."""
+        ambiente_canonico = EmisorFiscalService._canonizar_ambiente(ambiente)
+        emisor_id = EmisorFiscalService._canonizar_emisor_id(emisor_fiscal_id)
 
         conexion = None
         try:
