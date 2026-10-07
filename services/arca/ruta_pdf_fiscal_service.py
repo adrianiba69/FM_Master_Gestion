@@ -41,6 +41,20 @@ def _carpeta_canonica_windows(carpeta_configurada, ambiente_fiscal):
     return PureWindowsPath(str(resolver_carpeta_facturas_por_ambiente(carpeta_configurada, ambiente_fiscal)))
 
 
+def _carpeta_documental_windows(carpeta_configurada, ambiente_fiscal):
+    """Acepta raiz neutral o bucket del documento, nunca el bucket contrario."""
+    suministrada = _path_windows(carpeta_configurada, "carpeta_documental")
+    canonica = _carpeta_canonica_windows(carpeta_configurada, ambiente_fiscal)
+    if (
+        len(suministrada.parts) >= 2
+        and suministrada.parts[-1].casefold() == "facturas"
+        and suministrada.parts[-2].casefold() in {"homologacion", "produccion"}
+        and not _partes_iguales(suministrada.parts[-2:], canonica.parts[-2:])
+    ):
+        raise RutaPdfFiscalInvalidaError("La carpeta documental pertenece al ambiente contrario.")
+    return canonica
+
+
 def validar_ruta_pdf_relativa(ruta_pdf_relativa, ambiente_fiscal):
     """Valida una clave relativa `<ambiente>\\facturas\\archivo.pdf`."""
     ruta = _path_windows(ruta_pdf_relativa, "ruta_pdf_relativa")
@@ -109,17 +123,21 @@ def construir_rutas_pdf_persistibles_para_factura(factura, carpeta_configurada, 
 
 
 def reconstruir_ruta_pdf_relativa(carpeta_configurada, ambiente_fiscal, ruta_pdf_relativa):
-    """Reconstruye una clave relativa validada bajo la raíz fiscal actual."""
+    """Reconstruye una clave relativa bajo una raiz documental compatible."""
     relativa = validar_ruta_pdf_relativa(ruta_pdf_relativa, ambiente_fiscal)
-    carpeta_canonica = _carpeta_canonica_windows(carpeta_configurada, ambiente_fiscal)
+    carpeta_canonica = _carpeta_documental_windows(carpeta_configurada, ambiente_fiscal)
     raiz_actual = PureWindowsPath(*carpeta_canonica.parts[:-2])
     return Path(str(raiz_actual / relativa))
 
 
 def resolver_ruta_pdf_documental(factura, carpeta_configurada, nombre_legacy):
-    """Prioriza la identidad persistida y bloquea snapshots corruptos.
+    """Con snapshot: absoluta validada, relativa coherente o reconstruccion.
 
-    Las facturas legacy sin snapshot ni ruta conservan la ubicación configurada.
+    La absoluta historica no depende de la carpeta recibida. Si hay relativa,
+    debe coincidir con su bucket y archivo (la raiz no forma parte de la clave).
+    Solo sin absoluta se requiere una raiz documental compatible. Resolver es
+    una operacion pura: no comprueba existencia ni busca archivos alternativos.
+    Legacy sin snapshot conserva su contrato; no se infiere un ambiente.
     """
     if not isinstance(factura, dict):
         raise RutaPdfFiscalInvalidaError("Factura fiscal inválida.")
@@ -137,15 +155,24 @@ def resolver_ruta_pdf_documental(factura, carpeta_configurada, nombre_legacy):
     if decision.modo == MODO_SNAPSHOT:
         ambiente = decision.snapshot.get("ambiente")
         if absoluta:
-            validar_ruta_pdf_absoluta(absoluta, ambiente)
+            ruta_absoluta = validar_ruta_pdf_absoluta(absoluta, ambiente)
+            if relativa:
+                ruta_relativa = validar_ruta_pdf_relativa(relativa, ambiente)
+                if not _partes_iguales(ruta_absoluta.parts[-3:], ruta_relativa.parts):
+                    raise RutaPdfFiscalInvalidaError("Las rutas PDF persistidas identifican documentos distintos.")
+            return RutaPdfFiscalResuelta(Path(str(ruta_absoluta)), persistida=True, snapshot=True)
         if relativa:
             return RutaPdfFiscalResuelta(
                 reconstruir_ruta_pdf_relativa(carpeta_configurada, ambiente, relativa),
                 persistida=True,
                 snapshot=True,
             )
-        carpeta = resolver_carpeta_facturas_por_ambiente(carpeta_configurada, ambiente)
-        return RutaPdfFiscalResuelta(Path(carpeta) / str(nombre_legacy), persistida=False, snapshot=True)
+        carpeta = _carpeta_documental_windows(carpeta_configurada, ambiente)
+        nombre = _path_windows(nombre_legacy, "nombre_pdf_documental")
+        if len(nombre.parts) != 1 or nombre.anchor:
+            raise RutaPdfFiscalInvalidaError("El nombre PDF documental no puede contener una ruta.")
+        _validar_nombre_pdf(nombre.name, "nombre_pdf_documental")
+        return RutaPdfFiscalResuelta(Path(str(carpeta)) / nombre.name, persistida=False, snapshot=True)
 
     if absoluta:
         ruta_legacy = _path_windows(absoluta, "ruta_pdf_absoluta")

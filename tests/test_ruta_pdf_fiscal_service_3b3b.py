@@ -6,6 +6,9 @@ CERO DB. CERO filesystem real. CERO ARCA/WSAA/WSFE.
 """
 
 import unittest
+import json
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from decimal import Decimal
 from pathlib import Path
 
@@ -319,6 +322,166 @@ class ResolverRutaPdfDocumentalTest(unittest.TestCase):
         json_antes = factura["snapshot_fiscal_json"]
         resolver_ruta_pdf_documental(factura, CARPETA_CONFIGURADA, self.NOMBRE_LEGACY)
         self.assertEqual(factura["snapshot_fiscal_json"], json_antes)
+
+
+class ContratoRutaDocumental4B2E3ATest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.raiz = Path(self.tmp.name)
+        self.nombre = "Cliente_Original_Factura_A_00002-00000010.pdf"
+        self.rutas = {}
+        for ambiente, bucket in ((AMBIENTE_H, "Homologacion"), (AMBIENTE_P, "Produccion")):
+            ruta = self.raiz / "historica" / bucket / "facturas" / self.nombre
+            ruta.parent.mkdir(parents=True)
+            ruta.write_bytes(b"%PDF prueba temporal")
+            self.rutas[ambiente] = ruta
+        for destino in ("sqlite3.connect", "urllib.request.urlopen", "socket.socket.connect"):
+            parche = patch(destino, side_effect=AssertionError("DB/red prohibida"))
+            mock = parche.start()
+            self.addCleanup(parche.stop)
+            self.addCleanup(mock.assert_not_called)
+
+    def resolver(self, factura, carpeta="", nombre="Nombre_Actual.pdf"):
+        return resolver_ruta_pdf_documental(factura, carpeta, nombre)
+
+    def test_absoluta_h_y_p_prevalecen_sobre_carpeta_cambiada(self):
+        for ambiente, absoluta in self.rutas.items():
+            with self.subTest(ambiente=ambiente):
+                factura = _factura(ambiente=ambiente, ruta_pdf_absoluta=str(absoluta))
+                resultado = self.resolver(factura, str(self.raiz / "carpeta_nueva"))
+                self.assertEqual(resultado.ruta, absoluta)
+                self.assertTrue(resultado.persistida)
+                self.assertTrue(resultado.snapshot)
+
+    def test_absoluta_no_depende_de_carpeta_vacia_o_invalida(self):
+        for ambiente, absoluta in self.rutas.items():
+            for carpeta in (None, "", r"C:\actual\..\invalida", str(self.raiz / "Produccion" / "facturas")):
+                with self.subTest(ambiente=ambiente, carpeta=carpeta):
+                    factura = _factura(ambiente=ambiente, ruta_pdf_absoluta=str(absoluta))
+                    self.assertEqual(self.resolver(factura, carpeta).ruta, absoluta)
+
+    def test_cambio_posterior_carpeta_no_reubica_absoluta(self):
+        factura = _factura(ambiente=AMBIENTE_P, ruta_pdf_absoluta=str(self.rutas[AMBIENTE_P]))
+        antes = factura.copy()
+        for carpeta in (str(self.raiz), str(self.raiz / "nueva"), ""):
+            self.assertEqual(self.resolver(factura, carpeta).ruta, self.rutas[AMBIENTE_P])
+        self.assertEqual(factura, antes)
+
+    def test_cross_environment_absolutas_rechazadas_en_ambos_sentidos(self):
+        for ambiente, contrario in ((AMBIENTE_H, AMBIENTE_P), (AMBIENTE_P, AMBIENTE_H)):
+            with self.subTest(ambiente=ambiente):
+                factura = _factura(ambiente=ambiente, ruta_pdf_absoluta=str(self.rutas[contrario]))
+                with self.assertRaises(RutaPdfFiscalInvalidaError):
+                    self.resolver(factura)
+
+    def test_absolutas_fuera_bucket_o_con_traversal_rechazadas(self):
+        for absoluta in (r"C:\historica\Homologacion\facturas\..\x.pdf", r"C:\historica\x.pdf", r"Homologacion\facturas\x.pdf"):
+            with self.subTest(absoluta=absoluta):
+                with self.assertRaises(RutaPdfFiscalInvalidaError):
+                    self.resolver(_factura(ambiente=AMBIENTE_H, ruta_pdf_absoluta=absoluta))
+
+    def test_relativa_en_raiz_documental_neutral_o_bucket_exacto(self):
+        for ambiente, bucket in ((AMBIENTE_H, "Homologacion"), (AMBIENTE_P, "Produccion")):
+            relativa = str(Path(bucket) / "facturas" / self.nombre)
+            factura = _factura(ambiente=ambiente, ruta_pdf_relativa=relativa)
+            for carpeta in (self.raiz, self.raiz / bucket / "facturas"):
+                with self.subTest(ambiente=ambiente, carpeta=carpeta):
+                    resultado = self.resolver(factura, str(carpeta))
+                    self.assertEqual(resultado.ruta, self.raiz / bucket / "facturas" / self.nombre)
+                    self.assertTrue(resultado.persistida)
+
+    def test_relativa_no_se_resuelve_con_carpeta_del_otro_ambiente(self):
+        for ambiente, bucket, contrario in ((AMBIENTE_H, "Homologacion", "Produccion"), (AMBIENTE_P, "Produccion", "Homologacion")):
+            factura = _factura(ambiente=ambiente, ruta_pdf_relativa=str(Path(bucket) / "facturas" / self.nombre))
+            with self.subTest(ambiente=ambiente), self.assertRaises(RutaPdfFiscalInvalidaError):
+                self.resolver(factura, str(self.raiz / contrario / "facturas"))
+
+    def test_relativa_con_traversal_y_raiz_con_traversal_rechazadas(self):
+        factura = _factura(ambiente=AMBIENTE_H, ruta_pdf_relativa=r"Homologacion\..\facturas\x.pdf")
+        with self.assertRaises(RutaPdfFiscalInvalidaError):
+            self.resolver(factura, str(self.raiz))
+        factura["ruta_pdf_relativa"] = RELATIVA_H
+        with self.assertRaises(RutaPdfFiscalInvalidaError):
+            self.resolver(factura, str(self.raiz / ".." / "escape"))
+
+    def test_absoluta_y_relativa_coherentes_conservan_absoluta(self):
+        for ambiente, bucket in ((AMBIENTE_H, "Homologacion"), (AMBIENTE_P, "Produccion")):
+            factura = _factura(ambiente=ambiente, ruta_pdf_absoluta=str(self.rutas[ambiente]),
+                               ruta_pdf_relativa=str(Path(bucket) / "facturas" / self.nombre))
+            for carpeta in ("", str(self.raiz / "otra_raiz")):
+                with self.subTest(ambiente=ambiente, carpeta=carpeta):
+                    self.assertEqual(self.resolver(factura, carpeta).ruta, self.rutas[ambiente])
+
+    def test_coherencia_es_case_insensitive_en_windows(self):
+        factura = _factura(ambiente=AMBIENTE_H, ruta_pdf_absoluta=str(self.rutas[AMBIENTE_H]),
+                           ruta_pdf_relativa=str(Path("HOMOLOGACION") / "FACTURAS" / self.nombre.upper()))
+        self.assertEqual(self.resolver(factura).ruta, self.rutas[AMBIENTE_H])
+
+    def test_dos_rutas_validas_con_archivos_distintos_rechazadas(self):
+        factura = _factura(ambiente=AMBIENTE_H, ruta_pdf_absoluta=str(self.rutas[AMBIENTE_H]),
+                           ruta_pdf_relativa=r"Homologacion\facturas\Otra_Factura.pdf")
+        with self.assertRaisesRegex(RutaPdfFiscalInvalidaError, "documentos distintos"):
+            self.resolver(factura)
+
+    def test_absoluta_valida_no_oculta_relativa_insegura(self):
+        for relativa in (RELATIVA_P, r"Homologacion\..\facturas\x.pdf"):
+            with self.subTest(relativa=relativa), self.assertRaises(RutaPdfFiscalInvalidaError):
+                self.resolver(_factura(ambiente=AMBIENTE_H, ruta_pdf_absoluta=str(self.rutas[AMBIENTE_H]),
+                                       ruta_pdf_relativa=relativa))
+
+    def test_sin_rutas_reconstruye_solo_en_carpeta_documental(self):
+        for ambiente, bucket, contrario in ((AMBIENTE_H, "Homologacion", "Produccion"), (AMBIENTE_P, "Produccion", "Homologacion")):
+            factura = _factura(ambiente=ambiente)
+            resultado = self.resolver(factura, str(self.raiz), self.nombre)
+            self.assertEqual(resultado.ruta, self.raiz / bucket / "facturas" / self.nombre)
+            self.assertFalse(resultado.persistida)
+            with self.assertRaises(RutaPdfFiscalInvalidaError):
+                self.resolver(factura, str(self.raiz / contrario / "facturas"), self.nombre)
+
+    def test_nombre_reconstruido_no_permite_traversal_o_escape(self):
+        for nombre in (r"..\escape.pdf", r"C:\escape.pdf", r"sub\x.pdf", "x.txt"):
+            with self.subTest(nombre=nombre), self.assertRaises(RutaPdfFiscalInvalidaError):
+                self.resolver(_factura(ambiente=AMBIENTE_H), str(self.raiz), nombre)
+
+    def test_legacy_desconocido_con_absoluta_no_inventa_ambiente(self):
+        absoluta = self.raiz / "historica_legacy.pdf"
+        absoluta.write_bytes(b"%PDF legado temporal")
+        for ambiente in (None, "", "DESCONOCIDO", "QA"):
+            factura = _factura(ruta_pdf_absoluta=str(absoluta))
+            factura["ambiente_arca"] = ambiente
+            original = factura.copy()
+            resultado = self.resolver(factura)
+            self.assertEqual(resultado.ruta, absoluta)
+            self.assertFalse(resultado.snapshot)
+            self.assertEqual(factura, original)
+
+    def test_snapshot_con_ambiente_desconocido_rechazado(self):
+        for ambiente in (None, "DESCONOCIDO", "QA"):
+            factura = _factura(ambiente=AMBIENTE_H, ruta_pdf_absoluta=str(self.rutas[AMBIENTE_H]))
+            snapshot = json.loads(factura["snapshot_fiscal_json"])
+            snapshot["ambiente"] = ambiente
+            factura["snapshot_fiscal_json"] = json.dumps(snapshot)
+            factura["snapshot_hash"] = calcular_hash_snapshot(factura["snapshot_fiscal_json"])
+            with self.subTest(ambiente=ambiente), self.assertRaises(RutaPdfFiscalInvalidaError):
+                self.resolver(factura)
+
+    def test_snapshot_corrupto_no_cae_a_absoluta_valida(self):
+        factura = _factura(ambiente=AMBIENTE_P, ruta_pdf_absoluta=str(self.rutas[AMBIENTE_P]))
+        factura["snapshot_hash"] = "0" * 64
+        with self.assertRaises(RutaPdfFiscalInvalidaError):
+            self.resolver(factura)
+
+    def test_resolver_no_consulta_filesystem_mtime_o_candidatos(self):
+        factura = _factura(ambiente=AMBIENTE_P, ruta_pdf_absoluta=str(self.rutas[AMBIENTE_P]))
+        forzar_error = AssertionError("No consultar filesystem ni elegir el archivo mas nuevo")
+        with patch.object(Path, "stat", side_effect=forzar_error) as stat, patch.object(
+            Path, "glob", side_effect=forzar_error
+        ) as glob, patch.object(Path, "is_file", side_effect=forzar_error) as is_file:
+            self.assertEqual(self.resolver(factura).ruta, self.rutas[AMBIENTE_P])
+            stat.assert_not_called()
+            glob.assert_not_called()
+            is_file.assert_not_called()
 
 
 if __name__ == "__main__":
