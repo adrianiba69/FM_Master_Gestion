@@ -282,7 +282,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
 
         self.tabview_arca = ctk.CTkTabview(
             arca_frame,
-            height=330,
+            height=500,
             fg_color="#FFFFFF",
             segmented_button_selected_color="#333333",
             segmented_button_selected_hover_color="#111111",
@@ -294,6 +294,9 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         self._actualizar_control_ambiente_activo()
 
     def _crear_pestana_arca(self, pestana, ambiente):
+        cuerpo = ctk.CTkScrollableFrame(pestana, fg_color="transparent", corner_radius=0)
+        cuerpo.pack(fill="both", expand=True)
+        pestana = cuerpo
         pestana.grid_columnconfigure(1, weight=1)
         if ambiente == "PRODUCCION":
             texto_banner, color_banner = self.ADVERTENCIA_PRODUCCION, "#8A4B00"
@@ -342,9 +345,44 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
             comando=lambda: self._seleccionar_carpeta_facturas(ambiente),
             es_carpeta=True,
         )
-        for entrada in entradas.values():
-            entrada.bind("<KeyRelease>", lambda _evento: self._refrescar_estado_arca(ambiente))
         self.arca_entries[ambiente] = entradas
+        self.arca_variables[ambiente] = {}
+        for campo, entrada in entradas.items():
+            variable = ctk.StringVar(master=self, value=entrada.get())
+            entrada.configure(textvariable=variable)
+            variable.trace_add("write", lambda *_args: self._refrescar_estado_arca(ambiente))
+            self.arca_variables[ambiente][campo] = variable
+        self.arca_validar_botones[ambiente] = ctk.CTkButton(
+            pestana,
+            text="Validar configuración",
+            fg_color="#333333",
+            hover_color="#111111",
+            command=lambda: self.validar_configuracion_local(ambiente),
+        )
+        self.arca_validar_botones[ambiente].grid(
+            row=6, column=0, columnspan=3, sticky="e", padx=14, pady=(10, 6)
+        )
+        resultado_panel = ctk.CTkFrame(pestana, fg_color="transparent", corner_radius=0)
+        resultado_panel.grid(row=7, column=0, columnspan=3, sticky="ew", padx=14, pady=(0, 10))
+        resultado_panel.grid_columnconfigure(0, weight=1)
+        etiquetas = {}
+        for fila, (bloque, color) in enumerate((
+            ("estado", "#333333"), ("alcance", "#555555"),
+            ("errores", "#A00000"), ("advertencias", "#8A4B00"),
+            ("controles", "#666666"), ("produccion", "#8A4B00"),
+        )):
+            etiqueta = ctk.CTkLabel(
+                resultado_panel, text="", text_color=color, anchor="w", justify="left",
+                font=("Arial", 11), wraplength=300,
+            )
+            etiqueta.grid(row=fila, column=0, sticky="ew", pady=(2, 2))
+            etiquetas[bloque] = etiqueta
+        resultado_panel.bind(
+            "<Configure>",
+            lambda evento: [etiqueta.configure(wraplength=max(1, evento.width - 8))
+                            for etiqueta in etiquetas.values()],
+        )
+        self.arca_validacion_labels[ambiente] = etiquetas
         self._refrescar_estado_arca(ambiente)
 
     def _crear_selector_ruta(self, master, fila, etiqueta, boton_texto, comando, es_carpeta=False):
@@ -375,7 +413,11 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
     # -- estado ARCA por ambiente (sin GUI: testeable con widgets falsos) --
     def _inicializar_estado_arca(self):
         self.arca_entries = {}
+        self.arca_variables = {}
         self.arca_estado_labels = {}
+        self.arca_validar_botones = {}
+        self.arca_validacion_labels = {}
+        self.arca_validacion_resultados = {ambiente: None for ambiente in self.AMBIENTES_ARCA}
         self.botones_ambiente_activo = {}
         self.label_ambiente_activo = None
         # None = sin configuracion hija persistida; tupla = valores persistidos.
@@ -413,6 +455,65 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         etiqueta = self.arca_estado_labels.get(ambiente)
         if etiqueta is not None and ambiente in self.arca_entries:
             etiqueta.configure(text=f"Estado: {self._texto_estado_arca(ambiente)}")
+        if self._arca_modificada(ambiente):
+            self.arca_validacion_resultados[ambiente] = None
+        habilitado = (
+            self.emisor_id_actual is not None
+            and self.arca_original[ambiente] is not None
+            and not self.arca_error_carga[ambiente]
+            and not self._arca_modificada(ambiente)
+        )
+        boton = self.arca_validar_botones.get(ambiente)
+        if boton is not None:
+            boton.configure(state="normal" if habilitado else "disabled")
+        self._mostrar_validacion_local(ambiente)
+
+    def _mostrar_validacion_local(self, ambiente):
+        etiquetas = self.arca_validacion_labels.get(ambiente, {})
+        bloques = {bloque: "" for bloque in etiquetas}
+        if self._arca_modificada(ambiente):
+            bloques["estado"] = "Hay cambios sin guardar. Guarde antes de validar."
+        elif self.arca_error_carga[ambiente]:
+            bloques["estado"] = "No se pudo leer la configuración persistida."
+        elif self.arca_original[ambiente] is None or self.emisor_id_actual is None:
+            bloques["estado"] = "Sin configurar. Configure y guarde antes de validar."
+        else:
+            bloques.update(self.arca_validacion_resultados[ambiente] or {
+                "estado": "Validación local pendiente."
+            })
+        if ambiente == "PRODUCCION":
+            bloques["produccion"] = "La emisión real permanece bloqueada."
+        for bloque, etiqueta in etiquetas.items():
+            etiqueta.configure(text=bloques[bloque])
+
+    def validar_configuracion_local(self, ambiente):
+        self._refrescar_estado_arca(ambiente)
+        if (self.emisor_id_actual is None or self.arca_original[ambiente] is None
+                or self.arca_error_carga[ambiente] or self._arca_modificada(ambiente)):
+            return False
+        try:
+            resultado = EmisorFiscalService.validar_configuracion_arca_por_ambiente(
+                self.emisor_id_actual, ambiente
+            )
+            bloques = {
+                "estado": "Validación local básica OK" if resultado.ok else "Validación local con errores",
+                "alcance": "Esta validación no acredita habilitación ni conexión con ARCA.",
+                "errores": "\n".join((f"Código: {resultado.codigo}", "Errores:", *resultado.errores))
+                    if not resultado.ok else "",
+                "advertencias": "\n".join(("Advertencias:", *resultado.advertencias))
+                    if resultado.advertencias else "",
+                "controles": "\n".join(("Controles no realizados:", *resultado.controles_no_realizados))
+                    if resultado.controles_no_realizados else "",
+            }
+        except ConfiguracionArcaError as error:
+            bloques = {"estado": "Validación local con errores",
+                       "errores": f"Código: {error.codigo}\n{error}"}
+        except Exception:
+            bloques = {"estado": "Validación local con errores",
+                       "errores": "No se pudo realizar la validación local. Intente nuevamente."}
+        self.arca_validacion_resultados[ambiente] = bloques
+        self._mostrar_validacion_local(ambiente)
+        return bloques["estado"] == "Validación local básica OK"
 
     def _actualizar_control_ambiente_activo(self):
         if self.label_ambiente_activo is not None:
@@ -424,6 +525,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
 
     def _cargar_configuraciones_arca(self, emisor_id):
         for ambiente in self.AMBIENTES_ARCA:
+            self.arca_validacion_resultados[ambiente] = None
             original, error = None, None
             try:
                 configuracion = EmisorFiscalService.obtener_configuracion_arca(emisor_id, ambiente)
@@ -528,6 +630,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
             )
             self.arca_original[ambiente] = guardada
             self.arca_error_carga[ambiente] = None
+            self.arca_validacion_resultados[ambiente] = None
             self._poner_valores_arca(ambiente, guardada)
             self._refrescar_estado_arca(ambiente)
         return errores
@@ -629,6 +732,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
         for ambiente in self.AMBIENTES_ARCA:
             self.arca_original[ambiente] = None
             self.arca_error_carga[ambiente] = None
+            self.arca_validacion_resultados[ambiente] = None
             self._poner_valores_arca(ambiente, ("", "", "", ""))
             self._refrescar_estado_arca(ambiente)
         self.ambiente_activo = "HOMOLOGACION"
@@ -762,7 +866,7 @@ class EmisoresFiscalesWindow(ctk.CTkToplevel):
                 parent=self,
             )
             return
-        self.nuevo_emisor()
+        self._actualizar_control_ambiente_activo()
         messagebox.showinfo("Emisores Fiscales", "Emisor fiscal guardado correctamente.", parent=self)
 
     def cambiar_estado_seleccionado(self):

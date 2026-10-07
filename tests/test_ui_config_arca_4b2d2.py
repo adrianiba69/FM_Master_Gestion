@@ -402,7 +402,7 @@ class UiConfiguracionArcaPorAmbienteTest(unittest.TestCase):
 
     def test_validacion_legacy_retirada(self):
         self.assertFalse(hasattr(EmisoresFiscalesWindow, "validar_configuracion_arca_actual"))
-        self.assertNotIn("Validar configuración", inspect.getsource(vista))
+        self.assertNotIn("EmisorFiscalService.validar_configuracion_arca(", inspect.getsource(vista))
 
 
 if __name__ == "__main__":
