@@ -10,7 +10,6 @@ from services.emisor_fiscal_service import EmisorFiscalService
 from services.emisor_service import EmisorService
 from services.factura_arca_service import FacturaArcaService
 from services.resumen_service import ResumenService
-from services.arca.homologacion_service import HomologacionService
 from models.factura_arca import FacturaArca
 
 
@@ -235,69 +234,12 @@ class FacturacionArcaFrame(ctk.CTkFrame):
         self.cargar_facturas()
 
     def consultar_ultimo_comprobante(self):
-        emisor_id = self.emisores.get(self.selector_emisor.get())
-        if not emisor_id:
-            messagebox.showwarning(
-                "Facturación ARCA",
-                "Seleccione un emisor para consultar el último comprobante.",
-                parent=self,
-            )
-            return
-
-        emisor = EmisorFiscalService.obtener(emisor_id)
-        if not emisor:
-            messagebox.showerror(
-                "Facturación ARCA",
-                "No se encontró el emisor seleccionado.",
-                parent=self,
-            )
-            return
-
-        nombre_emisor = EmisorFiscalService.etiqueta_visible(emisor)
-        cuit = str(emisor[3] if len(emisor) > 3 else "" or "").strip()
-        punto_venta = str(emisor[6] if len(emisor) > 6 else "" or "").strip()
-        tipo_factura = str(emisor[5] if len(emisor) > 5 else "" or "").strip()
-        ruta_certificado = str(emisor[11] if len(emisor) > 11 else "" or "").strip()
-        ruta_clave = str(emisor[12] if len(emisor) > 12 else "" or "").strip()
-        carpeta_facturas = str(emisor[13] if len(emisor) > 13 else "" or "").strip()
-
-        tipo_comprobante = self._tipo_comprobante_desde_tipo_factura(tipo_factura)
-        if tipo_comprobante is None:
-            messagebox.showerror(
-                "Facturación ARCA",
-                "No se pudo determinar el tipo de comprobante para el emisor seleccionado.",
-                parent=self,
-            )
-            return
-
-        resultado = HomologacionService.consultar_ultimo_comprobante(
-            ruta_certificado=ruta_certificado,
-            ruta_clave=ruta_clave,
-            cuit=cuit,
-            punto_venta=punto_venta,
-            tipo_comprobante=tipo_comprobante,
-            carpeta_trabajo=carpeta_facturas,
-        )
-
-        if not resultado.get("ok"):
-            errores = list(resultado.get("errores") or [])
-            detalle = "\n- ".join(errores) if errores else "Error desconocido al consultar ARCA."
-            messagebox.showerror(
-                "Facturación ARCA",
-                "No se pudo consultar el último comprobante autorizado.\n\n- " + detalle,
-                parent=self,
-            )
-            return
-
-        ultimo_numero = int(resultado.get("ultimo_numero") or 0)
         messagebox.showinfo(
-            "Facturación ARCA",
+            "Consulta temporalmente no disponible",
             (
-                "Último comprobante autorizado:\n"
-                f"{tipo_factura or 'Comprobante'}\n"
-                f"Emisor: {nombre_emisor}\n"
-                f"Punto de venta {int(punto_venta or 0):05d}\n"
-                f"Número {ultimo_numero:08d}"
+                "Esta herramienta administrativa pertenece al flujo ARCA anterior "
+                "y fue deshabilitada preventivamente mientras se adapta a la nueva "
+                "configuración separada por ambiente."
             ),
             parent=self,
         )
