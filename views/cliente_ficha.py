@@ -16,7 +16,10 @@ from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.resumen_service import ResumenService
 from services.servicio_service import ServicioService
 from services.tarea_service import TareaService
-from services.emisor_fiscal_service import EmisorFiscalService
+from services.emisor_fiscal_service import EmisorFiscalService, ConfiguracionArcaError
+from services.arca.ambiente_arca import (
+    AMBIENTE_PRODUCCION, AmbienteArcaInvalidoError, normalizar_ambiente_arca,
+)
 
 
 class FichaClienteFrame(ctk.CTkFrame):
@@ -1002,17 +1005,51 @@ class FichaClienteFrame(ctk.CTkFrame):
 
         emisor_id = self._resolver_emisor_id_desde_referencia(referencia_emisor)
         emisor_asignado_ok = bool(emisor_id)
-        checklist.append({
+        item_emisor = {
             "ok": emisor_asignado_ok,
-            "correcto": "Emisor fiscal",
+            "correcto": f"Emisor fiscal: {referencia_emisor}",
             "error": "Falta / Incorrecto: emisor fiscal",
-        })
+        }
+        checklist.append(item_emisor)
         if not emisor_asignado_ok:
             faltantes_cliente = True
 
-        emisor = EmisorFiscalService.obtener(emisor_id) if emisor_id else None
+        emisor = None
+        ambiente_activo = ""
+        punto_venta_emisor = ""
+        configuracion_arca_ok = False
+        error_arca = "Falta / Incorrecto: emisor fiscal inexistente o no seleccionado."
+        try:
+            emisor = EmisorFiscalService.obtener(emisor_id) if emisor_id else None
+            if emisor is not None:
+                ambiente_activo = normalizar_ambiente_arca(emisor[9] if len(emisor) > 9 else None)
+                configuracion = EmisorFiscalService.obtener_configuracion_arca(emisor_id, ambiente_activo)
+                punto_venta_emisor = str(configuracion.punto_venta or "").strip()
+                validacion_arca = EmisorFiscalService.validar_configuracion_arca_por_ambiente(
+                    emisor_id, ambiente_activo,
+                )
+                if validacion_arca.configuracion != configuracion:
+                    error_arca = "La configuración ARCA cambió o es inconsistente. Revise el emisor."
+                else:
+                    configuracion_arca_ok = bool(validacion_arca.ok)
+                    error_arca = (
+                        f"Configuración ARCA de {ambiente_activo}: "
+                        + "; ".join(validacion_arca.errores or ("Validación local básica fallida.",))
+                    )
+        except AmbienteArcaInvalidoError:
+            error_arca = "Ambiente ARCA activo inválido o no configurado. Revise el emisor."
+        except ConfiguracionArcaError as error:
+            if error.codigo == "CONFIGURACION_ARCA_NO_ENCONTRADA":
+                error_arca = f"No hay configuración ARCA guardada para {ambiente_activo}."
+            elif error.codigo == "EMISOR_FISCAL_NO_ENCONTRADO":
+                error_arca = "El emisor fiscal seleccionado no existe."
+            else:
+                error_arca = "No se pudo obtener una configuración ARCA consistente para el ambiente activo."
+        except Exception:
+            error_arca = "No se pudo comprobar la configuración ARCA local. Revise el emisor."
+        if emisor is not None:
+            item_emisor["correcto"] = f"Emisor fiscal: {EmisorFiscalService.etiqueta_visible(emisor)}"
         cuit_emisor = str(emisor[3] if emisor and len(emisor) > 3 else "" or "").strip()
-        punto_venta_emisor = str(emisor[6] if emisor and len(emisor) > 6 else "" or "").strip()
 
         cuit_emisor_ok = bool(cuit_emisor)
         checklist.append({
@@ -1026,7 +1063,7 @@ class FichaClienteFrame(ctk.CTkFrame):
         punto_venta_ok = bool(punto_venta_emisor)
         checklist.append({
             "ok": punto_venta_ok,
-            "correcto": "Punto de venta",
+            "correcto": f"Punto de venta de {ambiente_activo}: {punto_venta_emisor}",
             "error": "Falta / Incorrecto: punto de venta",
         })
         if not punto_venta_ok:
@@ -1053,20 +1090,22 @@ class FichaClienteFrame(ctk.CTkFrame):
             "error": "Falta / Incorrecto: el resumen ya figura como facturado",
         })
 
-        # Validar la configuración ARCA del emisor usando la validación centralizada del servicio
-        validacion_arca = {"completa": False, "faltantes": [], "errores": []}
-        configuracion_arca_ok = False
-        
-        if emisor_id:
-            validacion_arca = EmisorFiscalService.validar_configuracion_arca(emisor_id)
-            configuracion_arca_ok = bool(validacion_arca.get("completa"))
-        
-        # Agregar un solo ítem de validación ARCA que refleja el resultado completo
         checklist.append({
             "ok": configuracion_arca_ok,
-            "correcto": "Configuración ARCA del emisor",
-            "error": "Falta / Incorrecto: configuración ARCA del emisor",
+            "correcto": f"Configuración ARCA de {ambiente_activo}: validación local básica OK",
+            "error": error_arca,
         })
+        checklist.append({
+            "ok": bool(ambiente_activo),
+            "correcto": f"Ambiente ARCA activo: {ambiente_activo}",
+            "error": "Ambiente ARCA activo inválido o no configurado.",
+        })
+        if ambiente_activo == AMBIENTE_PRODUCCION:
+            checklist.append({
+                "ok": False,
+                "correcto": "",
+                "error": "PRODUCCION: la emisión real continúa bloqueada, aunque la configuración local sea válida.",
+            })
 
         if not configuracion_arca_ok:
             faltantes_emisor = True
@@ -1093,7 +1132,7 @@ class FichaClienteFrame(ctk.CTkFrame):
                 "cuit_emisor": cuit_emisor or "-",
                 "tipo_factura": tipo_factura_cliente or "-",
                 "punto_venta": punto_venta_emisor or "-",
-                "ambiente_arca": str(emisor[9] if emisor and len(emisor) > 9 else "" or "-").strip() or "-",
+                "ambiente_arca": ambiente_activo or "-",
             },
             "estado_confirmacion": {
                 "cliente_validado": cliente_validado,
