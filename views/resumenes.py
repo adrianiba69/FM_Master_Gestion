@@ -73,12 +73,22 @@ class ResumenesFrame(ctk.CTkFrame):
             return {
                 "cliente_id": cliente_id,
                 "modalidad_comprobante": "Solo Resumen",
+                "emisor_habitual": "",
+                "tipo_factura": "No factura",
+                "condicion_iva": "",
+                "emisor_id": None,
+            }
+
+        contexto = {
+            "cliente_id": cliente_id,
+            "modalidad_comprobante": fila[21] if len(fila) > 21 and fila[21] else "Solo Resumen",
+            "emisor_habitual": fila[22] if len(fila) > 22 and fila[22] else "",
             "tipo_factura": fila[12] if len(fila) > 12 and fila[12] else "No factura",
             "condicion_iva": fila[11] if len(fila) > 11 and fila[11] else "",
+            "emisor_id": fila[14] if len(fila) > 14 else None,
         }
         self.contexto_facturacion_cliente[cliente_id] = contexto
         return contexto
-
     def crear_interfaz(self):
         self.grid_rowconfigure(3, weight=1)
         self.grid_columnconfigure(0, weight=1)
