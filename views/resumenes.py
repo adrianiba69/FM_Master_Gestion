@@ -554,6 +554,41 @@ class ResumenesFrame(ctk.CTkFrame):
             return
 
         if self._modalidad_requiere_vista_previa_factura(modalidad):
+            ids_fiscales_normalizados = []
+            for id_fiscal in (emisor_fiscal_id_resuelto, resumen.emisor_fiscal_id):
+                id_normalizado = None
+                if isinstance(id_fiscal, (int, str)) and not isinstance(id_fiscal, bool):
+                    try:
+                        id_normalizado = int(id_fiscal)
+                    except (TypeError, ValueError):
+                        pass
+                ids_fiscales_normalizados.append(
+                    id_normalizado if id_normalizado is not None and id_normalizado > 0 else None
+                )
+            id_fiscal_habitual, id_fiscal_resumen = ids_fiscales_normalizados
+            if (
+                id_fiscal_habitual is None
+                or id_fiscal_resumen is None
+                or id_fiscal_habitual != id_fiscal_resumen
+            ):
+                _diag_exit(
+                    f"emisor fiscal incoherente: habitual={emisor_fiscal_id_resuelto} resumen={resumen.emisor_fiscal_id}",
+                    cliente_fila=cliente_actual,
+                    modalidad=modalidad,
+                    tipo_factura=tipo_factura,
+                    emisor_habitual=emisor_habitual,
+                    emisor_fiscal_id=emisor_fiscal_id_resuelto,
+                )
+                messagebox.showerror(
+                    "Emisor fiscal inconsistente",
+                    "No se puede abrir la vista previa ni emitir la factura porque los emisores fiscales "
+                    "no coinciden o alguno no tiene un ID válido.\n\n"
+                    f"- Emisor habitual: {emisor_habitual or '-'} (ID fiscal: {emisor_fiscal_id_resuelto})\n"
+                    f"- ID fiscal guardado en el resumen: {resumen.emisor_fiscal_id}\n\n"
+                    "El resumen ya está guardado y no se modificó. Revise la configuración fiscal del cliente.",
+                    parent=self,
+                )
+                return
             emisor_fiscal = self._buscar_emisor_fiscal_por_etiqueta(emisor_habitual)
             emisor_facturacion_id, criterio_vinculo = self._resolver_emisor_facturacion_id(cliente_actual, emisor_fiscal)
             if emisor_facturacion_id is None:
