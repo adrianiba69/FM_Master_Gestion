@@ -514,6 +514,7 @@ class ResumenesFrame(ctk.CTkFrame):
             "fecha_resumen": resumen.fecha,
             "modalidad_comprobante": modalidad,
             "emisor_habitual": emisor_habitual,
+            "emisor_fiscal_id_confirmado": emisor_fiscal_id_resuelto,
             "tipo_factura": tipo_factura,
             "condicion_iva": condicion_iva,
             "emisor_id": emisor_id,

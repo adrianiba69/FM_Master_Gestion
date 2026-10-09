@@ -165,6 +165,22 @@ class CoherenciaEmisorVistaPreviaResumenesTest(unittest.TestCase):
         resultado.frame._emitir_factura_arca_desde_resumen.assert_called_once_with(resultado.resumen, contexto)
         self.assertIs(resultado.frame._emitir_factura_arca_desde_resumen.call_args.args[1], contexto)
 
+    def test_contexto_transmite_id_fiscal_confirmado_original_hasta_callback(self):
+        for habitual, persistido in ((1, "001"), ("001", 1), (" 1 ", 1)):
+            with self.subTest(habitual=habitual, persistido=persistido):
+                resultado = self._ejecutar(habitual, persistido, accion="emitir")
+                self._verificar_continuidad(resultado)
+                contexto = resultado.frame._mostrar_vista_previa_resumen_para_factura.call_args.args[1]
+                self.assertEqual(contexto["emisor_fiscal_id_confirmado"], habitual)
+                self.assertIs(type(contexto["emisor_fiscal_id_confirmado"]), type(habitual))
+                self.assertNotEqual(contexto["emisor_fiscal_id_confirmado"], persistido)
+                resultado.frame._emitir_factura_arca_desde_resumen.assert_called_once_with(
+                    resultado.resumen, contexto,
+                )
+                contexto_callback = resultado.frame._emitir_factura_arca_desde_resumen.call_args.args[1]
+                self.assertIs(contexto_callback, contexto)
+                self.assertEqual(contexto_callback["emisor_fiscal_id_confirmado"], habitual)
+
 
 if __name__ == "__main__":
     unittest.main()
