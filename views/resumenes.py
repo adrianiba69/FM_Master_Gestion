@@ -1614,7 +1614,13 @@ class ResumenesFrame(ctk.CTkFrame):
                 text_color="#1E7A2E",
             ).pack(anchor="w", pady=(2, 0))
 
-        emision_habilitada = abs(diferencia) <= 0.01 and bool(datos_fiscales.get("ok"))
+        emision_habilitada = (
+            self._modalidad_requiere_vista_previa_factura(
+                (contexto_emision or {}).get("modalidad_comprobante")
+            )
+            and abs(diferencia) <= 0.01
+            and bool(datos_fiscales.get("ok"))
+        )
         if not emision_habilitada:
             ctk.CTkLabel(
                 resumen_totales,
