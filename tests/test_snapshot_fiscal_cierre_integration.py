@@ -741,7 +741,7 @@ class SnapshotFiscalFlujoCompletoTest(unittest.TestCase):
             self.emitir_en_arca_mock = emitir_en_arca_mock
             cierre_cls.return_value.cerrar_emision_confirmada.side_effect = cierre_mock
             resultado = FacturacionService.emitir_desde_resumen(
-                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto"}
+                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"}
             )
         return resultado, orden, cierre_cls
 
@@ -791,7 +791,7 @@ class SnapshotFiscalFlujoCompletoTest(unittest.TestCase):
             patch.object(FacturacionService, "generar_pdf_fiscal") as pdf,
         ):
             resultado = FacturacionService.emitir_desde_resumen(
-                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto"}
+                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"}
             )
         return resultado, cierre_cls, pdf, emitir_comprobante, guardar_tra, login, ultimo, solicitar, preenvio_cls
 

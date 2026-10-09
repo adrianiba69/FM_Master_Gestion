@@ -135,7 +135,10 @@ class GenerarPdfFiscalDesdeSnapshotTest(unittest.TestCase):
             snapshot=snapshot,
         )
         argumentos.update(overrides)
-        with patch.object(PDFFiscalService, "generar_factura_c", return_value={"ok": True, "ruta_pdf": "ruta.pdf"}) as mock_pdf:
+        with (
+            patch.object(PDFFiscalService, "generar_factura_c", return_value={"ok": True, "ruta_pdf": "ruta.pdf"}) as mock_pdf,
+            patch("services.facturacion_service.nombre_factura_pdf", return_value="Cliente_Ficticio_Factura.pdf"),
+        ):
             resultado = FacturacionService.generar_pdf_fiscal(**argumentos)
         return resultado, mock_pdf
 
@@ -283,7 +286,10 @@ class GenerarPdfFiscalNoReconsultaTest(unittest.TestCase):
     @patch("services.resumen_service.ResumenService.obtener")
     def test_no_reconsulta_cliente_emisor_ni_resumen(self, mock_resumen, mock_emisor, mock_cliente):
         snapshot = _snapshot_de_prueba("Factura A")
-        with patch.object(PDFFiscalService, "generar_factura_c", return_value={"ok": True, "ruta_pdf": "ruta.pdf"}):
+        with (
+            patch.object(PDFFiscalService, "generar_factura_c", return_value={"ok": True, "ruta_pdf": "ruta.pdf"}),
+            patch("services.facturacion_service.nombre_factura_pdf", return_value="Cliente_Ficticio_Factura.pdf"),
+        ):
             resultado = FacturacionService.generar_pdf_fiscal(
                 cliente_id=1,
                 tipo_factura="Factura A",
@@ -389,7 +395,7 @@ class EmitirDesdeResumenIntegraSnapshotEnPdfTest(unittest.TestCase):
         ):
             cierre_cls.return_value.cerrar_emision_confirmada.side_effect = cierre_mock
             resultado = FacturacionService.emitir_desde_resumen(
-                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto"}
+                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"}
             )
         return resultado, orden
 

@@ -197,7 +197,7 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch.object(FacturacionService, "_sumar_importes_items", return_value=100),
             patch.object(FacturacionService, "_obtener_periodo_facturado", return_value=("", "")),
         ):
-            return FacturacionService.emitir_desde_resumen(10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto"})
+            return FacturacionService.emitir_desde_resumen(10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"})
 
 
 class ContextoFiscalBaseFacturacionTest(unittest.TestCase):

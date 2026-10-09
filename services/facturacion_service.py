@@ -611,6 +611,23 @@ class FacturacionService:
             resultado["mensaje"] = "No se encontró el resumen recién generado."
             return resultado
 
+        datos_contexto = contexto if isinstance(contexto, dict) else {}
+        modalidad = str(
+            datos_contexto.get("modalidad_comprobante") or "Solo Resumen"
+        ).strip()
+        modalidad_normalizada = " ".join(modalidad.lower().split())
+        if modalidad_normalizada not in {
+            "resumen + factura",
+            "resumen+factura",
+            "solo factura",
+        }:
+            resultado["etapa"] = "modalidad_comprobante"
+            resultado["errores"] = ["modalidad_no_permite_facturar"]
+            resultado["mensaje"] = (
+                "La modalidad de comprobante no permite emitir una factura."
+            )
+            return resultado
+
         resumen = ResumenService.obtener(resumen_id)
         if not resumen:
             resultado["etapa"] = "resumen_no_encontrado"
@@ -688,8 +705,6 @@ class FacturacionService:
             return resultado
         cliente = resolucion_cliente.get("cliente")
 
-        datos_contexto = contexto if isinstance(contexto, dict) else {}
-        modalidad = str(datos_contexto.get("modalidad_comprobante") or "Solo Resumen").strip()
         emisor_habitual = str(datos_contexto.get("emisor_habitual") or "").strip()
         tipo_factura = str(datos_contexto.get("tipo_factura") or "").strip()
         condicion_iva = str(datos_contexto.get("condicion_iva") or "").strip()

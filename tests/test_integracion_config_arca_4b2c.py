@@ -75,7 +75,7 @@ class IntegracionConfigArcaTest(Base3B4C):
             enviar = pila.enter_context(patch.object(FacturacionService, "emitir_en_arca",
                                                     return_value={"ok": False, "errores": ["Frontera de prueba"]}))
             resultado = FacturacionService.emitir_desde_resumen(
-                10, {"tipo_factura": tipo, "condicion_iva": "Responsable Inscripto"}
+                10, {"tipo_factura": tipo, "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"}
             )
         return resultado, enviar, resolver
 

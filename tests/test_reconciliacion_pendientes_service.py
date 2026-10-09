@@ -86,7 +86,9 @@ class ReconciliacionPendientesServiceTest(unittest.TestCase):
                     patch("services.facturacion_service.FacturaArcaService.listar_por_resumen") as facturas,
                     patch.object(FacturacionService, "emitir_en_arca") as emitir,
                 ):
-                    resultado = FacturacionService.emitir_desde_resumen(10)
+                    resultado = FacturacionService.emitir_desde_resumen(
+                        10, {"modalidad_comprobante": "Resumen + Factura"}
+                    )
                 self.assertEqual(resultado["etapa"], "resumen_bloqueado")
                 self.assertEqual(resultado["datos_modal"]["estado_intento"], estado)
                 facturas.assert_not_called()

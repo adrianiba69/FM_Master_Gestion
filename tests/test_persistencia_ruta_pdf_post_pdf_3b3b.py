@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from services.facturacion_service import FacturacionService
-from tests._cierre_contexto_helper import resultado_snapshot_cierre_para_test
+from tests._cierre_contexto_helper import configuracion_arca_para_test, resultado_snapshot_cierre_para_test
 
 RUTA_PDF_CANONICA_HOMOLOGACION = r"C:\trabajo\Homologacion\facturas\x.pdf"
 
@@ -47,6 +47,10 @@ class PersistenciaRutaPdfPostGeneracionTest(unittest.TestCase):
             patch.object(FacturacionService, "resolver_cliente", return_value={"ok": True, "cliente": cliente}),
             patch.object(FacturacionService, "resolver_conceptos", return_value={"ok": True, "resumen": resumen, "conceptos": [object()]}),
             patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "emisor_fiscal": emisor}),
+            patch(
+                "services.facturacion_service.EmisorFiscalService.obtener_configuracion_arca",
+                return_value=configuracion_arca_para_test(),
+            ),
             patch.object(FacturacionService, "_resolver_emisor_facturacion_id", return_value=(40, "id")),
             patch.object(
                 FacturacionService,
@@ -72,7 +76,7 @@ class PersistenciaRutaPdfPostGeneracionTest(unittest.TestCase):
         ):
             cierre_cls.return_value.cerrar_emision_confirmada.return_value = cierre_obj
             resultado = FacturacionService.emitir_desde_resumen(
-                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto"}
+                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"}
             )
         return resultado, actualizar_ruta_pdf
 
