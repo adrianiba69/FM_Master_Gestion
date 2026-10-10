@@ -44,7 +44,7 @@ class IntegracionConfigArcaTest(Base3B4C):
         emisor = (30, "Emisor", "", "20206871629", "Responsable Inscripto", tipo, 999, 1, "",
                   ambiente, "", "", "", "legacy.crt", "legacy.key", "C:/legacy")
         cliente = (20, "", "Cliente", "", "", "", "", "", "", "", "30712345678", "Responsable Inscripto")
-        resumen = SimpleNamespace(id=10, estado_facturacion="Pendiente", cliente_id=20, total=100,
+        resumen = SimpleNamespace(id=10, estado_facturacion="Pendiente", cliente_id=20, emisor_fiscal_id=30, total=100,
                                   conceptos=[object()])
         fiscal = {"ok": True, "tipo_comprobante": 1 if tipo == "Factura A" else 11,
                   "neto_factura": 100, "alicuota_iva": 21 if tipo == "Factura A" else 0,
@@ -60,7 +60,7 @@ class IntegracionConfigArcaTest(Base3B4C):
                 ("validar_resumen_para_facturar", {"ok": True}),
                 ("resolver_cliente", {"ok": True, "cliente": cliente}),
                 ("resolver_conceptos", {"ok": True, "resumen": resumen, "conceptos": [object()]}),
-                ("resolver_emisor", {"ok": True, "emisor_fiscal": emisor}),
+                ("resolver_emisor", {"ok": True, "resumen": resumen, "emisor_fiscal": emisor}),
                 ("_resolver_emisor_facturacion_id", (40, "id")),
                 ("_armar_items_factura_desde_resumen", [{"importe": 100, "cantidad": 1,
                                                        "precio_unitario": 100, "descripcion": "Servicio"}]),
@@ -75,7 +75,7 @@ class IntegracionConfigArcaTest(Base3B4C):
             enviar = pila.enter_context(patch.object(FacturacionService, "emitir_en_arca",
                                                     return_value={"ok": False, "errores": ["Frontera de prueba"]}))
             resultado = FacturacionService.emitir_desde_resumen(
-                10, {"tipo_factura": tipo, "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"}
+                10, {"tipo_factura": tipo, "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura", "emisor_fiscal_id_confirmado": 30}
             )
         return resultado, enviar, resolver
 

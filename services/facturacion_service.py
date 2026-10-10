@@ -754,6 +754,42 @@ class FacturacionService:
             return resultado
         emisor_fiscal = resolucion_emisor.get("emisor_fiscal")
 
+        id_confirmado = datos_contexto.get("emisor_fiscal_id_confirmado")
+        resumen_resuelto = resolucion_emisor.get("resumen")
+        id_persistido = getattr(resumen_resuelto, "emisor_fiscal_id", None)
+        id_seleccionado = (
+            emisor_fiscal[0]
+            if isinstance(emisor_fiscal, (tuple, list)) and emisor_fiscal
+            else None
+        )
+        ids_fiscales_normalizados = []
+        for id_fiscal in (id_confirmado, id_persistido, id_seleccionado):
+            id_normalizado = None
+            if isinstance(id_fiscal, int) and not isinstance(id_fiscal, bool):
+                id_normalizado = id_fiscal
+            elif isinstance(id_fiscal, str):
+                texto_id = id_fiscal.strip()
+                if texto_id and all("0" <= digito <= "9" for digito in texto_id):
+                    try:
+                        id_normalizado = int(texto_id)
+                    except ValueError:
+                        pass
+            ids_fiscales_normalizados.append(
+                id_normalizado if id_normalizado is not None and id_normalizado > 0 else None
+            )
+        if (
+            any(id_fiscal is None for id_fiscal in ids_fiscales_normalizados)
+            or len(set(ids_fiscales_normalizados)) != 1
+        ):
+            resultado["ok"] = False
+            resultado["etapa"] = "coherencia_emisor_fiscal"
+            resultado["errores"] = ["emisor_fiscal_no_coincide_o_invalido"]
+            resultado["mensaje"] = (
+                "No se puede emitir: las identidades fiscales del emisor confirmado, "
+                "del resumen y del emisor seleccionado no coinciden o no son válidas."
+            )
+            return resultado
+
         emisor_facturacion_id, campo_vinculo = cls._resolver_emisor_facturacion_id(emisor_fiscal)
         if emisor_facturacion_id is None:
             resultado["etapa"] = "vinculo_emisor"

@@ -25,7 +25,7 @@ class PersistenciaRutaPdfPostGeneracionTest(unittest.TestCase):
 
     def _emitir_desde_resumen_minimo(self, pdf_resultado, actualizar_ruta_pdf_side_effect=None):
         resumen = type("Resumen", (), {
-            "id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20, "total": 100, "conceptos": [object()],
+            "id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20, "emisor_fiscal_id": 30, "total": 100, "conceptos": [object()],
         })()
         cliente = (20, "", "Cliente", "", "", "", "", "", "", "", "30712345678", "Responsable Inscripto")
         emisor = (
@@ -46,7 +46,7 @@ class PersistenciaRutaPdfPostGeneracionTest(unittest.TestCase):
             patch.object(FacturacionService, "validar_resumen_para_facturar", return_value={"ok": True}),
             patch.object(FacturacionService, "resolver_cliente", return_value={"ok": True, "cliente": cliente}),
             patch.object(FacturacionService, "resolver_conceptos", return_value={"ok": True, "resumen": resumen, "conceptos": [object()]}),
-            patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "emisor_fiscal": emisor}),
+            patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "resumen": resumen, "emisor_fiscal": emisor}),
             patch(
                 "services.facturacion_service.EmisorFiscalService.obtener_configuracion_arca",
                 return_value=configuracion_arca_para_test(),
@@ -76,7 +76,7 @@ class PersistenciaRutaPdfPostGeneracionTest(unittest.TestCase):
         ):
             cierre_cls.return_value.cerrar_emision_confirmada.return_value = cierre_obj
             resultado = FacturacionService.emitir_desde_resumen(
-                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"}
+                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura", "emisor_fiscal_id_confirmado": 30}
             )
         return resultado, actualizar_ruta_pdf
 

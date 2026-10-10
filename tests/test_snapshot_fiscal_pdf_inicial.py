@@ -348,6 +348,7 @@ class EmitirDesdeResumenIntegraSnapshotEnPdfTest(unittest.TestCase):
         resumen = type(
             "Resumen", (), {
                 "id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20,
+                "emisor_fiscal_id": 30,
                 "total": 1000.0, "conceptos": [object()], "fecha_vencimiento": "",
             },
         )()
@@ -373,7 +374,7 @@ class EmitirDesdeResumenIntegraSnapshotEnPdfTest(unittest.TestCase):
             patch.object(FacturacionService, "validar_resumen_para_facturar", return_value={"ok": True}),
             patch.object(FacturacionService, "resolver_cliente", return_value={"ok": True, "cliente": cliente_final}),
             patch.object(FacturacionService, "resolver_conceptos", return_value={"ok": True, "resumen": resumen, "conceptos": [object()]}),
-            patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "emisor_fiscal": emisor}),
+            patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "resumen": resumen, "emisor_fiscal": emisor}),
             patch("services.facturacion_service.EmisorFiscalService.obtener_configuracion_arca",
                 return_value=configuracion_arca_para_test()),
             patch.object(FacturacionService, "_resolver_emisor_facturacion_id", return_value=(40, "id")),
@@ -395,7 +396,7 @@ class EmitirDesdeResumenIntegraSnapshotEnPdfTest(unittest.TestCase):
         ):
             cierre_cls.return_value.cerrar_emision_confirmada.side_effect = cierre_mock
             resultado = FacturacionService.emitir_desde_resumen(
-                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"}
+                10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura", "emisor_fiscal_id_confirmado": 30}
             )
         return resultado, orden
 

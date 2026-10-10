@@ -172,7 +172,7 @@ class CierreIntentoExitosoTest(unittest.TestCase):
         }
 
     def _emitir_desde_resumen_minimo(self):
-        resumen = type("Resumen", (), {"id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20, "total": 100, "conceptos": [object()]})()
+        resumen = type("Resumen", (), {"id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20, "emisor_fiscal_id": 30, "total": 100, "conceptos": [object()]})()
         cliente = (20, "", "Cliente", "", "", "", "", "", "", "", "30712345678", "Responsable Inscripto")
         emisor = (30, "Emisor", "", "20206871629", "Responsable Inscripto", "Factura A", 5, 1, "", "Homologación", "", "", "", "cert.crt", "clave.key", "C:/trabajo")
         fiscal = {
@@ -187,7 +187,7 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch.object(FacturacionService, "validar_resumen_para_facturar", return_value={"ok": True}),
             patch.object(FacturacionService, "resolver_cliente", return_value={"ok": True, "cliente": cliente}),
             patch.object(FacturacionService, "resolver_conceptos", return_value={"ok": True, "resumen": resumen, "conceptos": [object()]}),
-            patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "emisor_fiscal": emisor}),
+            patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "resumen": resumen, "emisor_fiscal": emisor}),
             patch("services.facturacion_service.EmisorFiscalService.obtener_configuracion_arca",
                 return_value=configuracion_arca_para_test()),
             patch.object(FacturacionService, "_resolver_emisor_facturacion_id", return_value=(40, "id")),
@@ -197,7 +197,7 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch.object(FacturacionService, "_sumar_importes_items", return_value=100),
             patch.object(FacturacionService, "_obtener_periodo_facturado", return_value=("", "")),
         ):
-            return FacturacionService.emitir_desde_resumen(10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura"})
+            return FacturacionService.emitir_desde_resumen(10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura", "emisor_fiscal_id_confirmado": 30})
 
 
 class ContextoFiscalBaseFacturacionTest(unittest.TestCase):
