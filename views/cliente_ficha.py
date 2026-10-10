@@ -1426,6 +1426,7 @@ class FichaClienteFrame(ctk.CTkFrame):
             "tipo_factura": tipo_factura,
             "condicion_iva": condicion_iva,
             "emisor_habitual": emisor_habitual,
+            "emisor_fiscal_id_confirmado": emisor_id,
             "modalidad_comprobante": modalidad_comprobante,
         }
 

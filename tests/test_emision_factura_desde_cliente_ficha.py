@@ -86,6 +86,7 @@ class EmisionFacturaDesdeClienteFichaTest(unittest.TestCase):
                 "tipo_factura": "Factura A",
                 "condicion_iva": "Responsable Inscripto",
                 "emisor_habitual": "Publicidad & Servicios S.H.",
+                "emisor_fiscal_id_confirmado": 3,
                 "modalidad_comprobante": "Resumen + Factura",
             },
         )
@@ -126,6 +127,7 @@ class EmisionFacturaDesdeClienteFichaTest(unittest.TestCase):
                 "tipo_factura": "Factura C",
                 "condicion_iva": "Monotributo",
                 "emisor_habitual": "Publicidad & Servicios S.H.",
+                "emisor_fiscal_id_confirmado": 3,
                 "modalidad_comprobante": "Resumen + Factura",
             },
         )
@@ -134,6 +136,50 @@ class EmisionFacturaDesdeClienteFichaTest(unittest.TestCase):
         args_msg = mock_msg.showinfo.call_args[0]
         self.assertIn("Factura C", args_msg[1])
         self.assertIn("98765432109876", args_msg[1])
+
+    @patch("views.cliente_ficha.messagebox")
+    @patch("services.resumen_service.ResumenService.obtener")
+    @patch("services.cliente_service.ClienteService.obtener")
+    @patch("services.emisor_fiscal_service.EmisorFiscalService.obtener")
+    @patch.object(FacturacionService, "emitir_desde_resumen")
+    def test_id_fiscal_confirmado_no_se_sustituye_por_resumen_o_cliente(
+        self, mock_emitir, mock_emisor, mock_cliente, mock_resumen, mock_msg
+    ):
+        self.resumen_fake.emisor_fiscal_id = 2
+        cliente_actual = list(self.cliente_factura_a)
+        cliente_actual[13] = "EMISOR:7"
+        mock_resumen.return_value = self.resumen_fake
+        mock_cliente.return_value = tuple(cliente_actual)
+        mock_emisor.return_value = self.emisor_sh
+        mock_emitir.return_value = {
+            "ok": False,
+            "etapa": "verificacion_aislada",
+            "mensaje": "Detencion simulada del servicio.",
+        }
+
+        FichaClienteFrame._emitir_factura_desde_confirmacion(
+            self.frame, self.modal_mock, self.diagnostico_base
+        )
+
+        mock_resumen.assert_called_once_with(109)
+        mock_cliente.assert_called_once_with(50)
+        mock_emisor.assert_called_once_with(3)
+        self.frame._resolver_emisor_id_desde_referencia.assert_not_called()
+        mock_emitir.assert_called_once_with(
+            resumen_id=109,
+            contexto={
+                "tipo_factura": "Factura A",
+                "condicion_iva": "Responsable Inscripto",
+                "emisor_habitual": "Publicidad & Servicios S.H.",
+                "emisor_fiscal_id_confirmado": 3,
+                "modalidad_comprobante": "Resumen + Factura",
+            },
+        )
+        self.assertEqual(self.resumen_fake.emisor_fiscal_id, 2)
+        self.assertEqual(self.diagnostico_base["detalle"]["emisor_id"], 3)
+        self.assertEqual(mock_cliente.return_value[13], "EMISOR:7")
+        self.modal_mock.destroy.assert_not_called()
+        mock_msg.showerror.assert_called_once()
 
     @patch("views.cliente_ficha.messagebox")
     @patch("services.resumen_service.ResumenService.obtener")
