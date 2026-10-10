@@ -20,15 +20,24 @@ class EmisionFacturaDesdeClienteFichaTest(unittest.TestCase):
         self.resumen_fake.estado_facturacion = "Pendiente"
         self.resumen_fake.fecha_vencimiento = "2026-09-01"
 
-        # cliente_fila: id(0), codigo(1), razon_social(2), ..., cuit(10), iva(11), tipo_factura(12), emisor(13), modalidad(14)
+        # Contrato ClienteService.obtener: emisor_id(14), modalidad(21), emisor_habitual(22).
         self.cliente_factura_a = (
-            50, "C050", "IBARRONDO LUIS ANGEL", "", "", "", "", "", "", "", "20263858884", "Responsable Inscripto", "Factura A", "EMISOR:3", "Resumen + Factura"
+            50, "C050", "IBARRONDO LUIS ANGEL", "", "", "", "", "", "", "",
+            "20263858884", "Responsable Inscripto", "Factura A", "EMISOR:3", 40,
+            None, "10", "Activo", "", "2026-01-01", "2026-10-10",
+            "Resumen + Factura", "Publicidad & Servicios S.H.",
         )
         self.cliente_factura_c = (
-            50, "C050", "IBARRONDO LUIS ANGEL", "", "", "", "", "", "", "", "20263858884", "Monotributo", "Factura C", "EMISOR:1", "Resumen + Factura"
+            50, "C050", "IBARRONDO LUIS ANGEL", "", "", "", "", "", "", "",
+            "20263858884", "Monotributo", "Factura C", "EMISOR:1", 41,
+            None, "10", "Activo", "", "2026-01-01", "2026-10-10",
+            "Resumen + Factura", "FM Master 98.3",
         )
         self.cliente_factura_invalida = (
-            50, "C050", "IBARRONDO LUIS ANGEL", "", "", "", "", "", "", "", "20263858884", "Exento", "Factura B", "EMISOR:1", "Resumen + Factura"
+            50, "C050", "IBARRONDO LUIS ANGEL", "", "", "", "", "", "", "",
+            "20263858884", "Exento", "Factura B", "EMISOR:1", 42,
+            None, "10", "Activo", "", "2026-01-01", "2026-10-10",
+            "Resumen + Factura", "FM Master 98.3",
         )
 
         self.emisor_sh = (
@@ -247,6 +256,97 @@ class EmisionFacturaDesdeClienteFichaTest(unittest.TestCase):
         call_kwargs = mock_emitir.call_args[1]
         self.assertNotIn("importe_iva", call_kwargs)
         self.assertNotIn("tipo_comprobante", call_kwargs)
+
+    @patch("views.cliente_ficha.messagebox")
+    @patch("services.resumen_service.ResumenService.obtener")
+    @patch("services.cliente_service.ClienteService.obtener")
+    @patch("services.emisor_fiscal_service.EmisorFiscalService.obtener")
+    @patch.object(FacturacionService, "emitir_desde_resumen")
+    def test_modalidad_procede_de_columna_21_independientemente_de_emisor_id(
+        self, mock_emitir, mock_emisor, mock_cliente, mock_resumen, mock_msg
+    ):
+        for cliente_base in (self.cliente_factura_a, self.cliente_factura_c):
+            for modalidad in ("Resumen + Factura", "Resumen+Factura", "Solo Factura"):
+                for emisor_interno_id in (1, 777):
+                    with self.subTest(tipo=cliente_base[12], modalidad=modalidad, emisor_id=emisor_interno_id):
+                        for doble in (mock_emitir, mock_emisor, mock_cliente, mock_resumen, mock_msg):
+                            doble.reset_mock()
+                        cliente_fila = list(cliente_base)
+                        cliente_fila[14] = emisor_interno_id
+                        cliente_fila[21] = modalidad
+                        self.assertEqual(len(cliente_fila), 23)
+                        mock_resumen.return_value = self.resumen_fake
+                        mock_cliente.return_value = tuple(cliente_fila)
+                        mock_emisor.return_value = self.emisor_sh
+                        mock_emitir.return_value = {
+                            "ok": False, "etapa": "verificacion_aislada", "mensaje": "Detencion simulada.",
+                        }
+
+                        FichaClienteFrame._emitir_factura_desde_confirmacion(
+                            self.frame, self.modal_mock, self.diagnostico_base
+                        )
+
+                        mock_resumen.assert_called_once_with(109)
+                        mock_cliente.assert_called_once_with(50)
+                        mock_emisor.assert_called_once_with(3)
+                        mock_emitir.assert_called_once_with(
+                            resumen_id=109,
+                            contexto={
+                                "tipo_factura": cliente_base[12],
+                                "condicion_iva": cliente_base[11],
+                                "emisor_habitual": "Publicidad & Servicios S.H.",
+                                "emisor_fiscal_id_confirmado": 3,
+                                "modalidad_comprobante": modalidad,
+                            },
+                        )
+                        self.assertNotEqual(
+                            mock_emitir.call_args.kwargs["contexto"]["modalidad_comprobante"],
+                            str(emisor_interno_id),
+                        )
+
+    @patch("views.cliente_ficha.messagebox")
+    @patch("services.resumen_service.ResumenService.obtener")
+    @patch("services.cliente_service.ClienteService.obtener")
+    @patch("services.emisor_fiscal_service.EmisorFiscalService.obtener")
+    def test_solo_resumen_se_transmite_y_servicio_bloquea_antes_de_arca(
+        self, mock_emisor, mock_cliente, mock_resumen, mock_msg
+    ):
+        for cliente_base in (self.cliente_factura_a, self.cliente_factura_c):
+            with self.subTest(tipo=cliente_base[12]):
+                for doble in (mock_emisor, mock_cliente, mock_resumen, mock_msg):
+                    doble.reset_mock()
+                cliente_fila = list(cliente_base)
+                cliente_fila[14] = 777
+                cliente_fila[21] = "Solo Resumen"
+                self.assertEqual(len(cliente_fila), 23)
+                mock_resumen.return_value = self.resumen_fake
+                mock_cliente.return_value = tuple(cliente_fila)
+                mock_emisor.return_value = self.emisor_sh
+                with (
+                    patch.object(
+                        FacturacionService, "emitir_desde_resumen",
+                        side_effect=FacturacionService.emitir_desde_resumen,
+                    ) as emitir,
+                    patch.object(
+                        FacturacionService, "emitir_en_arca",
+                        side_effect=AssertionError("Emision ARCA prohibida"),
+                    ) as emitir_arca,
+                ):
+                    FichaClienteFrame._emitir_factura_desde_confirmacion(
+                        self.frame, self.modal_mock, self.diagnostico_base
+                    )
+
+                emitir.assert_called_once()
+                self.assertEqual(emitir.call_args.kwargs["contexto"]["modalidad_comprobante"], "Solo Resumen")
+                self.assertEqual(emitir.call_args.kwargs["contexto"]["emisor_fiscal_id_confirmado"], 3)
+                mock_resumen.assert_called_once_with(109)
+                emitir_arca.assert_not_called()
+                mock_msg.showerror.assert_called_once()
+                self.assertEqual(
+                    mock_msg.showerror.call_args.args[1],
+                    "La modalidad de comprobante no permite emitir una factura.",
+                )
+                self.modal_mock.destroy.assert_not_called()
 
     def test_calculo_fiscal_facturacion_service_para_resumen_109(self):
         resumen_mock = MagicMock()

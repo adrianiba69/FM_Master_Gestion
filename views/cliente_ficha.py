@@ -1420,7 +1420,7 @@ class FichaClienteFrame(ctk.CTkFrame):
         condicion_iva = str(cliente_fila[11] if len(cliente_fila) > 11 else "" or "").strip()
         referencia_emisor = str(cliente_fila[13] if len(cliente_fila) > 13 else "" or "").strip()
         emisor_habitual = EmisorFiscalService.etiqueta_visible(emisor) if emisor else referencia_emisor
-        modalidad_comprobante = str(cliente_fila[14] if len(cliente_fila) > 14 else "" or "Resumen + Factura").strip()
+        modalidad_comprobante = str(cliente_fila[21] if len(cliente_fila) > 21 else "" or "Resumen + Factura").strip()
 
         contexto = {
             "tipo_factura": tipo_factura,
