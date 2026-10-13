@@ -172,7 +172,8 @@ class CierreIntentoExitosoTest(unittest.TestCase):
         }
 
     def _emitir_desde_resumen_minimo(self):
-        resumen = type("Resumen", (), {"id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20, "emisor_fiscal_id": 30, "total": 100, "conceptos": [object()]})()
+        concepto = type("Concepto", (), {"fecha_inicio": "2026-10-01", "fecha_fin": "2026-10-31"})()
+        resumen = type("Resumen", (), {"id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20, "emisor_fiscal_id": 30, "total": 100, "conceptos": [concepto], "fecha_vencimiento": "2026-11-10"})()
         cliente = (20, "", "Cliente", "", "", "", "", "", "", "", "30712345678", "Responsable Inscripto")
         emisor = (30, "Emisor", "", "20206871629", "Responsable Inscripto", "Factura A", 5, 1, "", "Homologación", "", "", "", "cert.crt", "clave.key", "C:/trabajo")
         fiscal = {
@@ -186,7 +187,7 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch("services.facturacion_service.IntentoEmisionArcaService.listar_activos_por_resumen", return_value=[]),
             patch.object(FacturacionService, "validar_resumen_para_facturar", return_value={"ok": True}),
             patch.object(FacturacionService, "resolver_cliente", return_value={"ok": True, "cliente": cliente}),
-            patch.object(FacturacionService, "resolver_conceptos", return_value={"ok": True, "resumen": resumen, "conceptos": [object()]}),
+            patch.object(FacturacionService, "resolver_conceptos", return_value={"ok": True, "resumen": resumen, "conceptos": resumen.conceptos}),
             patch.object(FacturacionService, "resolver_emisor", return_value={"ok": True, "resumen": resumen, "emisor_fiscal": emisor}),
             patch("services.facturacion_service.EmisorFiscalService.obtener_configuracion_arca",
                 return_value=configuracion_arca_para_test()),
@@ -195,7 +196,6 @@ class CierreIntentoExitosoTest(unittest.TestCase):
             patch.object(FacturacionService, "calcular_importes_fiscales", return_value=fiscal),
             patch("services.facturacion_service.FacturaArcaService.validar_pre_guardado", return_value={"ok": True}),
             patch.object(FacturacionService, "_sumar_importes_items", return_value=100),
-            patch.object(FacturacionService, "_obtener_periodo_facturado", return_value=("", "")),
         ):
             return FacturacionService.emitir_desde_resumen(10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura", "emisor_fiscal_id_confirmado": 30})
 

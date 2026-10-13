@@ -44,8 +44,11 @@ class IntegracionConfigArcaTest(Base3B4C):
         emisor = (30, "Emisor", "", "20206871629", "Responsable Inscripto", tipo, 999, 1, "",
                   ambiente, "", "", "", "legacy.crt", "legacy.key", "C:/legacy")
         cliente = (20, "", "Cliente", "", "", "", "", "", "", "", "30712345678", "Responsable Inscripto")
-        resumen = SimpleNamespace(id=10, estado_facturacion="Pendiente", cliente_id=20, emisor_fiscal_id=30, total=100,
-                                  conceptos=[object()])
+        resumen = SimpleNamespace(
+            id=10, estado_facturacion="Pendiente", cliente_id=20, emisor_fiscal_id=30, total=100,
+            fecha_vencimiento="2026-11-10",
+            conceptos=[SimpleNamespace(fecha_inicio="2026-10-01", fecha_fin="2026-10-31")],
+        )
         fiscal = {"ok": True, "tipo_comprobante": 1 if tipo == "Factura A" else 11,
                   "neto_factura": 100, "alicuota_iva": 21 if tipo == "Factura A" else 0,
                   "importe_iva_factura": 21 if tipo == "Factura A" else 0,
@@ -66,7 +69,6 @@ class IntegracionConfigArcaTest(Base3B4C):
                                                        "precio_unitario": 100, "descripcion": "Servicio"}]),
                 ("calcular_importes_fiscales", fiscal),
                 ("_sumar_importes_items", 100),
-                ("_obtener_periodo_facturado", ("", "")),
             ):
                 pila.enter_context(patch.object(FacturacionService, nombre, return_value=valor))
             pila.enter_context(patch("services.facturacion_service.FacturaArcaService.validar_pre_guardado", return_value={"ok": True}))
@@ -106,6 +108,9 @@ class IntegracionConfigArcaTest(Base3B4C):
                 self.assertEqual(ctx["version"], 1)
                 self.assertEqual(ctx["emisor"]["punto_venta_num"], 5)
                 self.assertEqual(ctx["comprobante"]["punto_venta_num"], 5)
+                self.assertEqual(ctx["comprobante"]["periodo_servicio_desde"], "2026-10-01")
+                self.assertEqual(ctx["comprobante"]["periodo_servicio_hasta"], "2026-10-31")
+                self.assertEqual(ctx["comprobante"]["vencimiento_pago"], "2026-11-10")
                 self.red.assert_not_called()
 
     def test_emision_sin_hija_exacta_no_usa_otro_ambiente_ni_legacy(self):

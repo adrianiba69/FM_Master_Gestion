@@ -529,24 +529,43 @@ class FacturacionService:
             )
         return items
 
+    @staticmethod
+    def _normalizar_fecha_periodo_fiscal(valor, campo):
+        if not isinstance(valor, str) or not valor:
+            raise ValueError(f"{campo}: fecha obligatoria en formato YYYY-MM-DD o YYYYMMDD.")
+        if len(valor) == 10 and valor[4] == "-" and valor[7] == "-":
+            digitos = valor[:4] + valor[5:7] + valor[8:]
+        elif len(valor) == 8:
+            digitos = valor
+        else:
+            raise ValueError(f"{campo}: formato no admitido; use YYYY-MM-DD o YYYYMMDD.")
+        if not all("0" <= digito <= "9" for digito in digitos):
+            raise ValueError(f"{campo}: formato no admitido; use YYYY-MM-DD o YYYYMMDD.")
+        try:
+            datetime.strptime(digitos, "%Y%m%d")
+        except ValueError:
+            raise ValueError(f"{campo}: fecha calendariamente inválida.") from None
+        return digitos
+
     @classmethod
     def _obtener_periodo_facturado(cls, resumen):
-        fechas_inicio = []
-        fechas_fin = []
-        for concepto in list(getattr(resumen, "conceptos", []) or []):
-            inicio = cls._a_fecha_arca_yyyymmdd(getattr(concepto, "fecha_inicio", ""))
-            fin = cls._a_fecha_arca_yyyymmdd(getattr(concepto, "fecha_fin", ""))
-            if len(inicio) == 8 and inicio.isdigit():
-                fechas_inicio.append(inicio)
-            if len(fin) == 8 and fin.isdigit():
-                fechas_fin.append(fin)
-
-        if not fechas_inicio and not fechas_fin:
-            return "", ""
-
-        periodo_desde = min(fechas_inicio) if fechas_inicio else ""
-        periodo_hasta = max(fechas_fin) if fechas_fin else ""
-        return periodo_desde, periodo_hasta
+        conceptos = list(getattr(resumen, "conceptos", []) or [])
+        if not conceptos:
+            raise ValueError("El resumen no contiene conceptos con un período fiscal verificable.")
+        periodo = None
+        for indice, concepto in enumerate(conceptos, start=1):
+            inicio = cls._normalizar_fecha_periodo_fiscal(
+                getattr(concepto, "fecha_inicio", None), f"Concepto {indice}, inicio"
+            )
+            fin = cls._normalizar_fecha_periodo_fiscal(
+                getattr(concepto, "fecha_fin", None), f"Concepto {indice}, fin"
+            )
+            if fin < inicio:
+                raise ValueError(f"Concepto {indice}: la fecha de fin es anterior al inicio.")
+            if periodo is not None and periodo != (inicio, fin):
+                raise ValueError("Los conceptos tienen períodos diferentes; deben facturarse en resúmenes separados.")
+            periodo = (inicio, fin)
+        return periodo
 
     @classmethod
     def _resolver_emisor_facturacion_id(cls, emisor_fiscal):
@@ -948,8 +967,16 @@ class FacturacionService:
             return resultado
 
         fecha_comprobante_arca = datetime.now().strftime("%Y%m%d")
-        periodo_desde, periodo_hasta = cls._obtener_periodo_facturado(resumen_actual)
-        vencimiento_pago_arca = cls._a_fecha_arca_yyyymmdd(getattr(resumen_actual, "fecha_vencimiento", ""))
+        try:
+            periodo_desde, periodo_hasta = cls._obtener_periodo_facturado(resumen_actual)
+            vencimiento_pago_arca = cls._normalizar_fecha_periodo_fiscal(
+                getattr(resumen_actual, "fecha_vencimiento", None), "Vencimiento de pago"
+            )
+        except ValueError as error:
+            resultado["etapa"] = "periodo_fiscal"
+            resultado["errores"] = [str(error)]
+            resultado["mensaje"] = f"No se puede emitir por un período fiscal inválido: {error}"
+            return resultado
 
         contexto_base_resultado = cls._construir_contexto_fiscal_base(
             ambiente_normalizado=ambiente_normalizado,

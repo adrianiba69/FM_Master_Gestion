@@ -692,7 +692,11 @@ class SnapshotFiscalFlujoCompletoTest(unittest.TestCase):
             "Resumen", (), {
                 "id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20,
                 "emisor_fiscal_id": 30,
-                "total": 1000.0, "conceptos": [object()], "fecha_vencimiento": "",
+                "total": 1000.0,
+                "conceptos": [type("Concepto", (), {
+                    "fecha_inicio": "2026-10-01", "fecha_fin": "2026-10-31",
+                })()],
+                "fecha_vencimiento": "2026-11-10",
             },
         )()
 

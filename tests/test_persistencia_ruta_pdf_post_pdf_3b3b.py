@@ -25,7 +25,9 @@ class PersistenciaRutaPdfPostGeneracionTest(unittest.TestCase):
 
     def _emitir_desde_resumen_minimo(self, pdf_resultado, actualizar_ruta_pdf_side_effect=None):
         resumen = type("Resumen", (), {
-            "id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20, "emisor_fiscal_id": 30, "total": 100, "conceptos": [object()],
+            "id": 10, "estado_facturacion": "Pendiente", "cliente_id": 20, "emisor_fiscal_id": 30, "total": 100,
+            "fecha_vencimiento": "2026-11-10",
+            "conceptos": [type("Concepto", (), {"fecha_inicio": "2026-10-01", "fecha_fin": "2026-10-31"})()],
         })()
         cliente = (20, "", "Cliente", "", "", "", "", "", "", "", "30712345678", "Responsable Inscripto")
         emisor = (
@@ -60,7 +62,6 @@ class PersistenciaRutaPdfPostGeneracionTest(unittest.TestCase):
             patch.object(FacturacionService, "calcular_importes_fiscales", return_value=fiscal),
             patch("services.facturacion_service.FacturaArcaService.validar_pre_guardado", return_value={"ok": True}),
             patch.object(FacturacionService, "_sumar_importes_items", return_value=100),
-            patch.object(FacturacionService, "_obtener_periodo_facturado", return_value=("", "")),
             patch.object(FacturacionService, "emitir_en_arca", return_value=self._resultado_arca()),
             patch("services.facturacion_service.CierreLocalArcaService") as cierre_cls,
             patch.object(
@@ -97,6 +98,8 @@ class PersistenciaRutaPdfPostGeneracionTest(unittest.TestCase):
 
         self.assertFalse(resultado["ok"])
         self.assertEqual(resultado["etapa"], "pdf")
+        self.assertEqual(resultado["factura_id"], 99)
+        self.assertEqual(resultado["cae"], "71345678901234")
         actualizar_ruta_pdf.assert_not_called()
 
     # 13) PDF exitoso + fallo UPDATE ruta -> factura/PDF siguen validos + advertencia
