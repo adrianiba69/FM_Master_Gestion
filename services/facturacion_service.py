@@ -87,6 +87,8 @@ class FacturacionService:
         documento_receptor,
         tipo_comprobante,
         tipo_factura_normalizado,
+        concepto_fiscal,
+        descripcion_concepto_fiscal,
         fecha_comprobante,
         periodo_desde,
         periodo_hasta,
@@ -146,8 +148,8 @@ class FacturacionService:
         comprobante_contexto = {
             "fecha": cls._a_fecha_iso_snapshot(fecha_comprobante),
             "fecha_arca": str(fecha_comprobante or ""),
-            "concepto": 1,
-            "concepto_descripcion": "Productos",
+            "concepto": concepto_fiscal,
+            "concepto_descripcion": descripcion_concepto_fiscal,
             "punto_venta_num": int(punto_venta_num),
             "tipo_comprobante_num": int(tipo_comprobante),
             "tipo_comprobante_texto": str(tipo_factura_normalizado or ""),
@@ -978,6 +980,8 @@ class FacturacionService:
             resultado["mensaje"] = f"No se puede emitir por un período fiscal inválido: {error}"
             return resultado
 
+        concepto_fiscal = 2
+        descripcion_concepto_fiscal = "Servicios"
         contexto_base_resultado = cls._construir_contexto_fiscal_base(
             ambiente_normalizado=ambiente_normalizado,
             emisor_fiscal=emisor_fiscal,
@@ -991,6 +995,8 @@ class FacturacionService:
             documento_receptor=documento_receptor,
             tipo_comprobante=tipo_comprobante,
             tipo_factura_normalizado=tipo_factura_normalizado,
+            concepto_fiscal=concepto_fiscal,
+            descripcion_concepto_fiscal=descripcion_concepto_fiscal,
             fecha_comprobante=fecha_comprobante_arca,
             periodo_desde=periodo_desde,
             periodo_hasta=periodo_hasta,
@@ -1033,7 +1039,7 @@ class FacturacionService:
                 importe_tot_conc=importe_tot_conc,
                 importe_tributos=importe_tributos,
                 alicuotas_iva=alicuotas_iva,
-                concepto=1,
+                concepto=concepto_fiscal,
                 datos_intento={
                     "resumen_id": resumen.id,
                     "cliente_id": cliente[0],
@@ -1487,6 +1493,63 @@ class FacturacionService:
             resultado["errores"] = ["Contexto fiscal base obligatorio antes de emitir en ARCA."]
             return resultado
 
+        fecha_servicio_desde_arca = None
+        fecha_servicio_hasta_arca = None
+        fecha_vencimiento_pago_arca = None
+        try:
+            concepto_numerico = int(concepto)
+        except (TypeError, ValueError):
+            concepto_numerico = 0
+        comprobante_contexto = (
+            contexto_fiscal_base.get("comprobante")
+            if isinstance(contexto_fiscal_base, dict)
+            else None
+        )
+        if concepto_numerico == 2 and (
+            not isinstance(comprobante_contexto, dict) or "concepto" not in comprobante_contexto
+        ):
+            resultado["etapa"] = "emision_bloqueada_fechas_servicio"
+            resultado["errores"] = [
+                "contexto_fiscal_invalido: falta comprobante con concepto y fechas de servicio."
+            ]
+            return resultado
+        if isinstance(comprobante_contexto, dict) and "concepto" in comprobante_contexto:
+            try:
+                concepto_contexto = int(comprobante_contexto["concepto"])
+            except (TypeError, ValueError):
+                concepto_contexto = 0
+            if concepto_contexto != concepto_numerico:
+                resultado["etapa"] = "emision_bloqueada_fechas_servicio"
+                resultado["errores"] = [
+                    "concepto_fiscal_incoherente: el concepto del contexto no coincide con el de emision."
+                ]
+                return resultado
+        if concepto_numerico == 2:
+            try:
+                fecha_servicio_desde_arca = cls._normalizar_fecha_periodo_fiscal(
+                    comprobante_contexto.get("periodo_servicio_desde"), "Inicio del servicio"
+                )
+                fecha_servicio_hasta_arca = cls._normalizar_fecha_periodo_fiscal(
+                    comprobante_contexto.get("periodo_servicio_hasta"), "Fin del servicio"
+                )
+                fecha_vencimiento_pago_arca = cls._normalizar_fecha_periodo_fiscal(
+                    comprobante_contexto.get("vencimiento_pago"), "Vencimiento de pago"
+                )
+                if fecha_servicio_hasta_arca < fecha_servicio_desde_arca:
+                    raise ValueError("El fin del servicio es anterior al inicio.")
+            except ValueError as error:
+                resultado["etapa"] = "emision_bloqueada_fechas_servicio"
+                resultado["errores"] = [f"fechas_servicio_invalidas: {error}"]
+                return resultado
+
+        argumentos_fechas_servicio = {}
+        if concepto_numerico == 2:
+            argumentos_fechas_servicio = {
+                "fecha_servicio_desde": fecha_servicio_desde_arca,
+                "fecha_servicio_hasta": fecha_servicio_hasta_arca,
+                "fecha_vencimiento_pago": fecha_vencimiento_pago_arca,
+            }
+
         emision = HomologacionService.emitir_comprobante_prueba(
             ruta_certificado=ruta_certificado,
             ruta_clave=ruta_clave,
@@ -1510,6 +1573,7 @@ class FacturacionService:
             contexto_fiscal_base=contexto_fiscal_base,
             exigir_contexto_fiscal=True,
             ambiente=ambiente_normalizado,
+            **argumentos_fechas_servicio,
         )
         resultado["emision"] = emision
         resultado["intento_id"] = emision.get("intento_id")

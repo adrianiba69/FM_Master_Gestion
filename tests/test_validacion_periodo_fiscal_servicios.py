@@ -80,6 +80,27 @@ class ValidacionPeriodoFiscalServiciosTest(unittest.TestCase):
         self.assertFalse(resultado["ok"])
         self.assertTrue(resultado["errores"])
 
+    def _argumentos_emision_validos(self):
+        _resultado, enviar, _resumen = self._ejecutar([("2026-10-01", "2026-10-31")])
+        enviar.assert_called_once()
+        return deepcopy(enviar.call_args.kwargs)
+
+    def _invocar_emitir_en_arca(self, argumentos):
+        with patch(
+            "services.facturacion_service.HomologacionService.emitir_comprobante_prueba",
+            return_value={"ok": False, "errores": ["Emision simulada"]},
+        ) as homologacion:
+            resultado = FacturacionService.emitir_en_arca(**argumentos)
+        return resultado, homologacion
+
+    def _verificar_bloqueo_contexto(self, mutar_comprobante):
+        argumentos = self._argumentos_emision_validos()
+        mutar_comprobante(argumentos["contexto_fiscal_base"]["comprobante"])
+        resultado, homologacion = self._invocar_emitir_en_arca(argumentos)
+        self.assertEqual(resultado["etapa"], "emision_bloqueada_fechas_servicio")
+        self.assertTrue(resultado["errores"])
+        homologacion.assert_not_called()
+
     def test_un_servicio_con_fechas_validas(self):
         for inicio, fin in (("2026-10-01", "2026-10-31"), ("20261001", "20261031")):
             with self.subTest(inicio=inicio, fin=fin):
@@ -118,6 +139,74 @@ class ValidacionPeriodoFiscalServiciosTest(unittest.TestCase):
         for periodo in (("01/10/2026", "31/10/2026"), ("2026/10/01", "2026/10/31"), ("2026-10-01T00:00:00", "2026-10-31T00:00:00")):
             with self.subTest(periodo=periodo):
                 self._verificar_bloqueo([periodo])
+
+    def test_emitir_en_arca_transmite_concepto_servicios_y_fechas_del_contexto(self):
+        argumentos = self._argumentos_emision_validos()
+        contexto_original = deepcopy(argumentos["contexto_fiscal_base"])
+        comprobante = contexto_original["comprobante"]
+
+        self.assertEqual(argumentos["concepto"], 2)
+        self.assertEqual(comprobante["concepto"], 2)
+        self.assertEqual(comprobante["concepto_descripcion"], "Servicios")
+        self.assertEqual(comprobante["periodo_servicio_desde"], "2026-10-01")
+        self.assertEqual(comprobante["periodo_servicio_hasta"], "2026-10-31")
+        self.assertEqual(comprobante["vencimiento_pago"], "2026-11-10")
+
+        _resultado, homologacion = self._invocar_emitir_en_arca(argumentos)
+        homologacion.assert_called_once()
+        enviados = homologacion.call_args.kwargs
+        self.assertEqual(enviados["concepto"], 2)
+        self.assertEqual(enviados["fecha_servicio_desde"], "20261001")
+        self.assertEqual(enviados["fecha_servicio_hasta"], "20261031")
+        self.assertEqual(enviados["fecha_vencimiento_pago"], "20261110")
+        self.assertEqual(argumentos["contexto_fiscal_base"], contexto_original)
+
+    def test_inicio_faltante_en_contexto_bloquea_antes_de_homologacion(self):
+        self._verificar_bloqueo_contexto(lambda comprobante: comprobante.update(periodo_servicio_desde=None))
+
+    def test_fin_faltante_en_contexto_bloquea_antes_de_homologacion(self):
+        self._verificar_bloqueo_contexto(lambda comprobante: comprobante.update(periodo_servicio_hasta=None))
+
+    def test_vencimiento_faltante_en_contexto_bloquea_antes_de_homologacion(self):
+        self._verificar_bloqueo_contexto(lambda comprobante: comprobante.update(vencimiento_pago=None))
+
+    def test_fechas_calendariamente_invalidas_en_contexto_bloquean_antes_de_homologacion(self):
+        for campo, valor in (
+            ("periodo_servicio_desde", "2026-02-30"),
+            ("periodo_servicio_hasta", "2026-13-31"),
+            ("vencimiento_pago", "2026-02-30"),
+        ):
+            with self.subTest(campo=campo, valor=valor):
+                self._verificar_bloqueo_contexto(lambda comprobante: comprobante.update({campo: valor}))
+
+    def test_inicio_posterior_a_fin_en_contexto_bloquea_antes_de_homologacion(self):
+        def mutar(comprobante):
+            comprobante["periodo_servicio_desde"] = "2026-10-31"
+            comprobante["periodo_servicio_hasta"] = "2026-10-01"
+
+        self._verificar_bloqueo_contexto(mutar)
+
+    def test_concepto_contexto_discrepante_bloquea_antes_de_homologacion(self):
+        self._verificar_bloqueo_contexto(lambda comprobante: comprobante.update(concepto=1))
+
+    def test_concepto_uno_no_transmite_fechas_de_servicio(self):
+        argumentos = self._argumentos_emision_validos()
+        argumentos["concepto"] = 1
+        comprobante = argumentos["contexto_fiscal_base"]["comprobante"]
+        comprobante["concepto"] = 1
+        comprobante["concepto_descripcion"] = "Productos"
+        comprobante["periodo_servicio_desde"] = None
+        comprobante["periodo_servicio_hasta"] = None
+        comprobante["vencimiento_pago"] = None
+
+        _resultado, homologacion = self._invocar_emitir_en_arca(argumentos)
+
+        homologacion.assert_called_once()
+        enviados = homologacion.call_args.kwargs
+        self.assertEqual(enviados["concepto"], 1)
+        self.assertNotIn("fecha_servicio_desde", enviados)
+        self.assertNotIn("fecha_servicio_hasta", enviados)
+        self.assertNotIn("fecha_vencimiento_pago", enviados)
 
 
 if __name__ == "__main__":

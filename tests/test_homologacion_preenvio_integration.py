@@ -1,10 +1,12 @@
 import unittest
+from copy import deepcopy
 from decimal import Decimal
 from unittest.mock import patch
 
 from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.homologacion_service import HomologacionService
 from services.arca.preenvio_arca_service import ResultadoPreenvioArca
+from services.arca.wsfe_service import WSFEService
 
 
 class PreenvioCapturador:
@@ -183,6 +185,59 @@ class HomologacionPreenvioIntegrationTest(unittest.TestCase):
             )
         return resultado, preenvio, solicitar
 
+    def _emitir_servicios(self):
+        preenvio = PreenvioCapturadorConContexto()
+        solicitar = unittest.mock.Mock(return_value={
+            "ok": True,
+            "resultado": "A",
+            "cae": "71345678901234",
+            "vencimiento_cae": "20261110",
+            "numero_comprobante": 123,
+            "fecha_comprobante": "20261014",
+        })
+        contexto = self._contexto_fiscal_base(11)
+        contexto["comprobante"].update({
+            "concepto": 2,
+            "concepto_descripcion": "Servicios",
+            "periodo_servicio_desde": "2026-10-01",
+            "periodo_servicio_hasta": "2026-10-31",
+            "vencimiento_pago": "2026-11-10",
+        })
+        contexto_original = deepcopy(contexto)
+        with (
+            patch("services.arca.homologacion_service.WSAAService.guardar_tra", return_value="tra.xml"),
+            patch("services.arca.homologacion_service.WSAALoginService.login_homologacion", return_value={"ok": True, "token": "t", "sign": "s"}),
+            patch("services.arca.homologacion_service.WSFEService.fe_comp_ultimo_autorizado", return_value={"ok": True, "ultimo_numero": 122}),
+            patch.object(WSFEService, "construir_solicitud_cae", wraps=WSFEService.construir_solicitud_cae) as construir,
+        ):
+            resultado = HomologacionService.emitir_comprobante_prueba(
+                ruta_certificado="cert.crt",
+                ruta_clave="clave.key",
+                cuit_emisor="20206871629",
+                punto_venta=5,
+                tipo_comprobante=11,
+                condicion_iva_receptor_id=5,
+                concepto=2,
+                tipo_documento=80,
+                documento_receptor=30712345678,
+                importe_total=12100.0,
+                importe_neto=12100.0,
+                importe_iva=0.0,
+                importe_exento=0.0,
+                fecha_comprobante="20261014",
+                carpeta_trabajo="C:/trabajo",
+                alicuotas_iva=[],
+                fecha_servicio_desde="20261001",
+                fecha_servicio_hasta="20261031",
+                fecha_vencimiento_pago="20261110",
+                datos_intento={"resumen_id": 10, "cliente_id": 20, "emisor_fiscal_id": 30, "emisor_id": 40},
+                contexto_fiscal_base=contexto,
+                exigir_contexto_fiscal=True,
+                preenvio_service=preenvio,
+                solicitar_cae=solicitar,
+            )
+        return resultado, preenvio, solicitar, construir, contexto, contexto_original
+
     def test_factura_a_y_c_pasan_por_preenvio_con_numero_planificado(self):
         for tipo_comprobante in (1, 11):
             with self.subTest(tipo_comprobante=tipo_comprobante):
@@ -253,6 +308,87 @@ class HomologacionPreenvioIntegrationTest(unittest.TestCase):
         ultimo.assert_not_called()
         solicitar.assert_not_called()
         self.assertEqual(preenvio.contextos, [])
+
+    def test_servicios_transmite_fechas_hasta_solicitud_wsfe_sin_alterar_otros_datos(self):
+        resultado, preenvio, solicitar, construir, contexto, contexto_original = self._emitir_servicios()
+
+        self.assertTrue(resultado["ok"], resultado["errores"])
+        construir.assert_called_once()
+        argumentos_construccion = construir.call_args.kwargs
+        self.assertEqual(argumentos_construccion["concepto"], 2)
+        self.assertEqual(argumentos_construccion["fecha_servicio_desde"], "20261001")
+        self.assertEqual(argumentos_construccion["fecha_servicio_hasta"], "20261031")
+        self.assertEqual(argumentos_construccion["fecha_vencimiento_pago"], "20261110")
+
+        solicitar.assert_called_once()
+        detalle = solicitar.call_args.kwargs["solicitud"]["FeCAEReq"]["FeDetReq"]["FECAEDetRequest"][0]
+        self.assertEqual(detalle, {
+            "Concepto": 2,
+            "DocTipo": 80,
+            "DocNro": 30712345678,
+            "CbteDesde": 123,
+            "CbteHasta": 123,
+            "CbteFch": "20261014",
+            "FchServDesde": "20261001",
+            "FchServHasta": "20261031",
+            "FchVtoPago": "20261110",
+            "CondicionIVAReceptorId": 5,
+            "ImpTotal": 12100.0,
+            "ImpTotConc": 0.0,
+            "ImpNeto": 12100.0,
+            "ImpOpEx": 0.0,
+            "ImpTrib": 0.0,
+            "ImpIVA": 0.0,
+            "MonId": "PES",
+            "MonCotiz": 1.0,
+        })
+        self.assertEqual(contexto, contexto_original)
+        contexto_con_numero = deepcopy(contexto_original)
+        contexto_con_numero["comprobante"]["numero_comprobante_planificado"] = 123
+        contexto_con_numero["comprobante"]["numero_textual_planificado"] = "00005-00000123"
+        self.assertEqual(preenvio.contextos, [contexto_con_numero])
+
+    def test_constructor_wsfe_concepto_uno_no_agrega_fechas_de_servicio(self):
+        resultado = WSFEService.construir_solicitud_cae(
+            cuit="20206871629",
+            punto_venta=5,
+            tipo_comprobante=11,
+            numero_comprobante=123,
+            condicion_iva_receptor_id=5,
+            concepto=1,
+            documento_receptor=30712345678,
+            tipo_documento=80,
+            importe=12100.0,
+            importe_neto=12100.0,
+            importe_iva=0.0,
+            importe_exento=0.0,
+            fecha_comprobante="20261014",
+            moneda="PES",
+            cotizacion=1.0,
+            importe_tot_conc=0.0,
+            importe_tributos=0.0,
+            alicuotas_iva=[],
+        )
+
+        self.assertTrue(resultado["ok"])
+        detalle = resultado["solicitud"]["FeCAEReq"]["FeDetReq"]["FECAEDetRequest"][0]
+        self.assertEqual(detalle, {
+            "Concepto": 1,
+            "DocTipo": 80,
+            "DocNro": 30712345678,
+            "CbteDesde": 123,
+            "CbteHasta": 123,
+            "CbteFch": "20261014",
+            "CondicionIVAReceptorId": 5,
+            "ImpTotal": 12100.0,
+            "ImpTotConc": 0.0,
+            "ImpNeto": 12100.0,
+            "ImpOpEx": 0.0,
+            "ImpTrib": 0.0,
+            "ImpIVA": 0.0,
+            "MonId": "PES",
+            "MonCotiz": 1.0,
+        })
 
 
 if __name__ == "__main__":

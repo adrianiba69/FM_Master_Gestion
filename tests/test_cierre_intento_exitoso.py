@@ -228,6 +228,8 @@ class ContextoFiscalBaseFacturacionTest(unittest.TestCase):
             documento_receptor=30712345678,
             tipo_comprobante=1,
             tipo_factura_normalizado="Factura A",
+            concepto_fiscal=1,
+            descripcion_concepto_fiscal="Productos",
             fecha_comprobante="20260828",
             periodo_desde="20260801",
             periodo_hasta="20260831",

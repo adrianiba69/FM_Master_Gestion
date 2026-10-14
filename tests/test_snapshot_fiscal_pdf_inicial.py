@@ -4,11 +4,15 @@ construido y persistido en el cierre, sin reconsultar cliente/emisor/resumen.
 CERO red, CERO ARCA real. Todo con fakes/mocks.
 """
 
+import json
 import unittest
+from copy import deepcopy
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from services.arca import ambiente_arca
+from services.arca.contexto_fiscal_service import ContextoFiscalService
 from services.arca.pdf_fiscal_service import PDFFiscalService
 from services.arca.snapshot_fiscal_pdf_adapter import (
     construir_datos_pdf_desde_snapshot,
@@ -326,8 +330,11 @@ class GenerarPdfFiscalNoReconsultaTest(unittest.TestCase):
 class EmitirDesdeResumenIntegraSnapshotEnPdfTest(unittest.TestCase):
     """Integracion: emitir_desde_resumen pasa el snapshot recien construido al PDF inicial."""
 
-    def _emitir(self, pdf_ok=True, cierre_ok=True):
+    def _emitir(self, pdf_ok=True, cierre_ok=True, snapshot_persistido_real=False, pdf_adaptador_real=False):
         orden = []
+        self.contexto_fiscal_base_emitido = None
+        self.intento_fiscal_persistido = None
+        self.pdf_fiscal_mock = None
         resultado_arca = {
             "ok": True, "intento_id": 77, "consulta": {"moneda": "PES", "cotizacion": 1.0},
             "fecha_comprobante": "20260823", "numero_comprobante": 123, "punto_venta_num": 5,
@@ -366,10 +373,73 @@ class EmitirDesdeResumenIntegraSnapshotEnPdfTest(unittest.TestCase):
 
         cierre_mock = MagicMock(side_effect=cierre_side_effect)
 
+        generar_pdf_fiscal_real = FacturacionService.generar_pdf_fiscal
+
         def pdf_side_effect(**kwargs):
             orden.append("pdf")
             self.snapshot_recibido_en_pdf = kwargs.get("snapshot")
+            if pdf_adaptador_real:
+                return generar_pdf_fiscal_real(**kwargs)
             return {"ok": pdf_ok, "ruta_pdf": "ruta.pdf" if pdf_ok else "", "errores": [] if pdf_ok else ["pdf"]}
+
+        def emitir_en_arca_side_effect(**kwargs):
+            self.contexto_fiscal_base_emitido = deepcopy(kwargs["contexto_fiscal_base"])
+            if not snapshot_persistido_real:
+                return resultado_arca
+
+            contexto_persistido = deepcopy(self.contexto_fiscal_base_emitido)
+            comprobante = contexto_persistido["comprobante"]
+            comprobante["numero_comprobante_planificado"] = 123
+            comprobante["numero_textual_planificado"] = "00005-00000123"
+            integridad = ContextoFiscalService.validar(contexto_persistido)
+            self.assertTrue(integridad.valido, integridad.errores)
+            self.intento_fiscal_persistido = SimpleNamespace(
+                contexto_fiscal_json=integridad.json_canonico,
+                contexto_fiscal_version=integridad.version,
+                contexto_fiscal_hash=integridad.hash_calculado,
+            )
+
+            emisor_contexto = contexto_persistido["emisor"]
+            receptor_contexto = contexto_persistido["receptor"]
+            importes_contexto = contexto_persistido["importes"]
+            consulta = {
+                "ok": True,
+                "resultado": "A",
+                "cae": resultado_arca["cae"],
+                "vencimiento_cae": resultado_arca["vencimiento_cae"],
+                "numero_comprobante": 123,
+                "fecha_comprobante": comprobante["fecha_arca"],
+                "punto_venta": comprobante["punto_venta_num"],
+                "tipo_comprobante": comprobante["tipo_comprobante_num"],
+                "cuit_emisor": emisor_contexto["cuit"],
+                "doc_tipo": receptor_contexto["tipo_documento_receptor"],
+                "doc_nro": receptor_contexto["documento_receptor"],
+                "importe_total": importes_contexto["total"],
+                "importe_neto": importes_contexto["neto"],
+                "importe_iva": importes_contexto["iva"],
+                "moneda": comprobante["moneda"],
+                "cotizacion": comprobante["cotizacion"],
+                "condicion_iva_receptor_id": fiscal["condicion_iva_receptor_id"],
+            }
+            resultado = dict(resultado_arca)
+            resultado["consulta"] = consulta
+            resultado["fecha_comprobante"] = comprobante["fecha_arca"]
+            return resultado
+
+        def obtener_intento_persistido(_intento_id):
+            return self.intento_fiscal_persistido
+
+        if snapshot_persistido_real:
+            constructor_snapshot_patch = patch(
+                "services.facturacion_service.IntentoEmisionArcaService.obtener",
+                side_effect=obtener_intento_persistido,
+            )
+        else:
+            constructor_snapshot_patch = patch.object(
+                FacturacionService,
+                "_construir_snapshot_desde_contexto_persistido",
+                return_value=resultado_snapshot_cierre_para_test(),
+            )
 
         with (
             patch("services.facturacion_service.ResumenService.obtener", return_value=resumen),
@@ -389,15 +459,18 @@ class EmitirDesdeResumenIntegraSnapshotEnPdfTest(unittest.TestCase):
             patch.object(FacturacionService, "calcular_importes_fiscales", return_value=fiscal),
             patch("services.facturacion_service.FacturaArcaService.validar_pre_guardado", return_value={"ok": True}),
             patch.object(FacturacionService, "_sumar_importes_items", return_value=1000.0),
-            patch.object(FacturacionService, "emitir_en_arca", return_value=resultado_arca),
+            patch.object(FacturacionService, "emitir_en_arca", side_effect=emitir_en_arca_side_effect),
             patch("services.facturacion_service.CierreLocalArcaService") as cierre_cls,
             patch.object(FacturacionService, "generar_pdf_fiscal", side_effect=pdf_side_effect),
+            constructor_snapshot_patch,
             patch.object(
-                FacturacionService,
-                "_construir_snapshot_desde_contexto_persistido",
-                return_value=resultado_snapshot_cierre_para_test(),
-            ),
+                PDFFiscalService,
+                "generar_factura_c",
+                return_value={"ok": pdf_ok, "ruta_pdf": "C:/trabajo/factura.pdf" if pdf_ok else "", "errores": [] if pdf_ok else ["pdf"]},
+            ) as pdf_fiscal_mock,
+            patch("services.facturacion_service.nombre_factura_pdf", return_value="factura_servicios.pdf"),
         ):
+            self.pdf_fiscal_mock = pdf_fiscal_mock
             cierre_cls.return_value.cerrar_emision_confirmada.side_effect = cierre_mock
             resultado = FacturacionService.emitir_desde_resumen(
                 10, {"tipo_factura": "Factura A", "condicion_iva": "Responsable Inscripto", "modalidad_comprobante": "Resumen + Factura", "emisor_fiscal_id_confirmado": 30}
@@ -420,19 +493,67 @@ class EmitirDesdeResumenIntegraSnapshotEnPdfTest(unittest.TestCase):
 
     def test_si_cierre_falla_no_se_genera_pdf(self):
         self.snapshot_recibido_en_pdf = None
-        resultado, orden = self._emitir(cierre_ok=False)
+        resultado, orden = self._emitir(cierre_ok=False, snapshot_persistido_real=True)
         self.assertEqual(resultado["etapa"], "cierre_local")
         self.assertEqual(orden, ["cierre"])
         self.assertIsNone(self.snapshot_recibido_en_pdf)
 
     def test_si_pdf_falla_snapshot_y_factura_permanecen(self):
         self.snapshot_json_recibido = None
-        resultado, orden = self._emitir(pdf_ok=False)
+        resultado, orden = self._emitir(
+            pdf_ok=False, snapshot_persistido_real=True, pdf_adaptador_real=True
+        )
         self.assertEqual(resultado["etapa"], "pdf")
         self.assertEqual(resultado["factura_id"], 99)
+        self.assertEqual(resultado["cae"], "12345678901234")
         self.assertEqual(orden, ["cierre", "pdf"])
         # El cierre (con snapshot) ya se habia confirmado antes del fallo del PDF.
         self.assertIsNotNone(self.snapshot_json_recibido)
+        snapshot_persistido = json.loads(self.snapshot_json_recibido)
+        self.assertEqual(snapshot_persistido["autorizacion"]["cae"], "12345678901234")
+        self.assertEqual(snapshot_persistido["autorizacion"]["resultado"], "AUTORIZADO")
+        self.assertEqual(snapshot_persistido["comprobante"]["concepto"], 2)
+        self.assertEqual(snapshot_persistido["comprobante"]["concepto_descripcion"], "Servicios")
+        self.assertEqual(self.snapshot_recibido_en_pdf, snapshot_persistido)
+        self.pdf_fiscal_mock.assert_called_once()
+
+    def test_servicios_conserva_contexto_snapshot_y_datos_del_pdf_inicial(self):
+        with (
+            patch("services.facturacion_service.ClienteService.obtener") as obtener_cliente,
+            patch("services.facturacion_service.EmisorFiscalService.obtener") as obtener_emisor,
+            patch("services.facturacion_service.ResumenService.obtener") as obtener_resumen,
+        ):
+            resultado, orden = self._emitir(
+                snapshot_persistido_real=True, pdf_adaptador_real=True
+            )
+
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(orden, ["cierre", "pdf"])
+        contexto_comprobante = self.contexto_fiscal_base_emitido["comprobante"]
+        self.assertEqual(contexto_comprobante["concepto"], 2)
+        self.assertEqual(contexto_comprobante["concepto_descripcion"], "Servicios")
+        self.assertEqual(contexto_comprobante["periodo_servicio_desde"], "2026-10-01")
+        self.assertEqual(contexto_comprobante["periodo_servicio_hasta"], "2026-10-31")
+        self.assertEqual(contexto_comprobante["vencimiento_pago"], "2026-11-10")
+
+        snapshot = self.snapshot_recibido_en_pdf
+        comprobante_snapshot = snapshot["comprobante"]
+        self.assertEqual(comprobante_snapshot["concepto"], 2)
+        self.assertEqual(comprobante_snapshot["concepto_descripcion"], "Servicios")
+        self.assertEqual(comprobante_snapshot["periodo_servicio_desde"], "2026-10-01")
+        self.assertEqual(comprobante_snapshot["periodo_servicio_hasta"], "2026-10-31")
+        self.assertEqual(comprobante_snapshot["vencimiento_pago"], "2026-11-10")
+        self.assertEqual(json.loads(self.snapshot_json_recibido), snapshot)
+
+        self.pdf_fiscal_mock.assert_called_once()
+        datos_pdf = self.pdf_fiscal_mock.call_args.kwargs["datos_comprobante"]
+        self.assertEqual(datos_pdf["concepto"], "2 - Servicios")
+        self.assertEqual(datos_pdf["periodo_servicio_desde"], "20261001")
+        self.assertEqual(datos_pdf["periodo_servicio_hasta"], "20261031")
+        self.assertEqual(datos_pdf["vencimiento_pago"], "20261110")
+        obtener_cliente.assert_not_called()
+        obtener_emisor.assert_not_called()
+        obtener_resumen.assert_not_called()
 
 
 if __name__ == "__main__":
