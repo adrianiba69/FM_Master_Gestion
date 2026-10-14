@@ -1,5 +1,6 @@
 import sqlite3
 import calendar
+from dataclasses import dataclass
 from datetime import date, datetime
 
 from runtime_paths import DATABASE_PATH
@@ -20,6 +21,322 @@ def agregar_columna_si_falta(cur, tabla, columna, definicion):
 
     if columna not in columnas:
         cur.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
+
+
+@dataclass(frozen=True)
+class ResultadoInspeccionBaseSQLite:
+    estado: str
+    version_registrada: object = None
+    motivos: tuple = ()
+    estructuras_pendientes: tuple = ()
+    condiciones_pendientes: tuple = ()
+    advertencias: tuple = ()
+
+
+_ESTRUCTURAS_INSPECCION_ESPERADAS = {
+    "clientes": ("id", "emisor_id", "emisor_recomendado_id", "modalidad_comprobante", "emisor_habitual"),
+    "servicios": ("id", "fecha_inicio", "fecha_fin", "renovable", "estado_periodo"),
+    "catalogo_servicios": ("id", "nombre", "descripcion", "precio", "activo"),
+    "emisores_facturacion": ("id", "alias", "cuit", "activo", "emisor_fiscal_id"),
+    "emisores_fiscales": (
+        "id", "cuit", "condicion_iva", "tipo_factura", "ambiente_arca", "punto_venta",
+        "ruta_certificado", "ruta_clave_privada", "carpeta_facturas",
+    ),
+    "emisor_fiscal_arca_config": (
+        "id", "emisor_fiscal_id", "ambiente_arca", "punto_venta", "ruta_certificado",
+        "ruta_clave_privada", "carpeta_facturas",
+    ),
+    "arca_config": ("id", "modo_trabajo"),
+    "servicio_renovaciones": ("id", "servicio_id", "cliente_id", "fecha_renovacion", "resumen_id"),
+    "resumenes": (
+        "id", "numero", "cliente_id", "emisor_fiscal_id", "fecha", "fecha_vencimiento",
+        "estado_facturacion", "fecha_facturacion", "cae", "vencimiento_cae", "numero_factura",
+    ),
+    "resumen_conceptos": ("id", "resumen_id", "servicio_id", "concepto", "fecha_inicio", "fecha_fin"),
+    "cobros": ("id", "cliente_id", "fecha", "importe", "factura_arca_id"),
+    "tareas": ("id", "cliente_id", "fecha", "hora", "tipo", "estado"),
+    "contactos": ("id", "cliente_id", "fecha", "hora", "tipo", "resultado"),
+    "factura_arca": (
+        "id", "cliente_id", "emisor_id", "resumen_id", "fecha", "punto_venta", "tipo_comprobante",
+        "importe_total", "estado", "numero_factura", "cae", "vencimiento_cae", "punto_venta_num",
+        "tipo_comprobante_num", "numero_comprobante_num", "tipo_documento_receptor", "documento_receptor",
+        "snapshot_fiscal_json", "snapshot_version", "snapshot_hash", "ambiente_arca",
+        "ruta_pdf_relativa", "ruta_pdf_absoluta",
+    ),
+    "intentos_emision_arca": (
+        "id", "resumen_id", "cliente_id", "emisor_fiscal_id", "emisor_id", "cuit_emisor",
+        "punto_venta", "tipo_comprobante", "numero_planificado", "concepto", "estado", "cae",
+        "ambiente_arca", "contexto_fiscal_json", "contexto_fiscal_version", "contexto_fiscal_hash",
+    ),
+    "oportunidades": ("id", "cliente_id", "nombre_potencial", "fecha", "estado"),
+    "notificaciones": ("id", "tipo", "titulo", "estado", "fecha", "clave"),
+    "usuarios": ("id", "usuario", "clave", "rol", "activo"),
+}
+
+_INDICES_UNICOS_INSPECCION_ESPERADOS = (
+    (
+        "idx_factura_arca_identidad_unica", "factura_arca",
+        "emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num",
+        "ambiente_arca IS NOT NULL AND numero_comprobante_num IS NOT NULL AND emisor_id > 0 "
+        "AND punto_venta_num > 0 AND tipo_comprobante_num > 0 AND numero_comprobante_num > 0",
+    ),
+    (
+        "idx_factura_arca_identidad_historica_unica", "factura_arca",
+        "emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num",
+        "ambiente_arca IS NULL AND numero_comprobante_num IS NOT NULL AND emisor_id > 0 "
+        "AND punto_venta_num > 0 AND tipo_comprobante_num > 0 AND numero_comprobante_num > 0",
+    ),
+    (
+        "idx_factura_arca_cae_unico", "factura_arca", "ambiente_arca, TRIM(cae)",
+        "ambiente_arca IS NOT NULL AND TRIM(COALESCE(cae, '')) <> ''",
+    ),
+    (
+        "idx_factura_arca_cae_historico_unico", "factura_arca", "TRIM(cae)",
+        "ambiente_arca IS NULL AND TRIM(COALESCE(cae, '')) <> ''",
+    ),
+    (
+        "idx_intentos_emision_arca_clave_activa_ambiente", "intentos_emision_arca",
+        "ambiente_arca, cuit_emisor, punto_venta, tipo_comprobante, numero_planificado",
+        "ambiente_arca IS NOT NULL AND TRIM(COALESCE(cuit_emisor, '')) <> '' AND punto_venta > 0 "
+        "AND tipo_comprobante > 0 AND numero_planificado > 0 AND estado IN "
+        "('PENDIENTE_RECONCILIAR', 'ENVIANDO', 'CONFLICTO_MANUAL')",
+    ),
+    (
+        "idx_intentos_emision_arca_clave_activa_historica", "intentos_emision_arca",
+        "cuit_emisor, punto_venta, tipo_comprobante, numero_planificado",
+        "ambiente_arca IS NULL AND TRIM(COALESCE(cuit_emisor, '')) <> '' AND punto_venta > 0 "
+        "AND tipo_comprobante > 0 AND numero_planificado > 0 AND estado IN "
+        "('PENDIENTE_RECONCILIAR', 'ENVIANDO', 'CONFLICTO_MANUAL')",
+    ),
+)
+
+
+def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=False):
+    """Inspecciona una conexión SQLite existente usando solo metadatos y SELECT.
+
+    No abre rutas, no ejecuta crear_base ni altera el esquema. Como todavía no
+    hay una versión oficial del esquema, ninguna base histórica puede resultar
+    ACTUAL en esta fase.
+    """
+    try:
+        cursor = conexion.cursor()
+        cursor.execute("PRAGMA user_version")
+        fila_version = cursor.fetchone()
+        if not fila_version or isinstance(fila_version[0], bool):
+            return ResultadoInspeccionBaseSQLite(
+                "BLOQUEADA", motivos=("No se pudo leer PRAGMA user_version de forma confiable.",)
+            )
+        version_sqlite = int(fila_version[0])
+        version_registrada = version_sqlite if version_sqlite != 0 else None
+
+        cursor.execute(
+            "SELECT type, name FROM sqlite_master "
+            "WHERE type IN ('table', 'view', 'trigger') AND name NOT LIKE 'sqlite_%' ORDER BY type, name"
+        )
+        objetos = cursor.fetchall()
+        tablas = {nombre for tipo, nombre in objetos if tipo == "table"}
+        marcadores_no_reconocidos = tablas.intersection(
+            {"schema_migrations", "database_migrations", "migraciones_esquema"}
+        )
+
+        if not objetos and version_sqlite == 0:
+            if instalacion_nueva_confirmada is True:
+                return ResultadoInspeccionBaseSQLite(
+                    "NUEVA", motivos=("Base vacía; instalación nueva confirmada explícitamente por el llamador.",)
+                )
+            return ResultadoInspeccionBaseSQLite(
+                "HISTORICA_SIN_VERSION",
+                motivos=("Base vacía, pero el llamador no confirmó que sea una instalación nueva.",),
+            )
+
+        motivos = []
+        estructuras_pendientes = []
+        condiciones_pendientes = []
+        advertencias = []
+        columnas_por_tabla = {}
+
+        for tabla, columnas_esperadas in _ESTRUCTURAS_INSPECCION_ESPERADAS.items():
+            if tabla not in tablas:
+                estructuras_pendientes.append(f"tabla:{tabla}")
+                continue
+            cursor.execute(f"PRAGMA table_info({tabla})")
+            columnas = {columna[1] for columna in cursor.fetchall()}
+            columnas_por_tabla[tabla] = columnas
+            estructuras_pendientes.extend(
+                f"columna:{tabla}.{columna}"
+                for columna in columnas_esperadas
+                if columna not in columnas
+            )
+
+        for nombre, tabla, clave, condicion in _INDICES_UNICOS_INSPECCION_ESPERADOS:
+            cursor.execute(
+                "SELECT tbl_name, sql FROM sqlite_master WHERE type='index' AND name=?", (nombre,)
+            )
+            indice = cursor.fetchone()
+            esperado_sql = " ".join(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {nombre} ON {tabla}({clave}) WHERE {condicion}"
+                .lower().split()
+            ).replace(" if not exists", "")
+            if indice is None:
+                estructuras_pendientes.append(f"indice:{nombre}")
+            else:
+                sql_actual = " ".join(str(indice[1] or "").lower().split()).replace(" if not exists", "")
+                if indice[0] != tabla or sql_actual != esperado_sql:
+                    estructuras_pendientes.append(f"indice_incompatible:{nombre}")
+
+        duplicados = []
+
+        def contar_grupo_duplicado(tabla, clave, condicion):
+            cursor.execute(
+                f"SELECT 1 FROM {tabla} WHERE {condicion} GROUP BY {clave} HAVING COUNT(*) > 1 LIMIT 1"
+            )
+            return cursor.fetchone() is not None
+
+        consultas_duplicados = (
+            ("emisor_fiscal_arca_config", "emisor_fiscal_id, ambiente_arca", "1=1"),
+            ("resumenes", "numero", "numero IS NOT NULL"),
+            ("notificaciones", "clave", "clave IS NOT NULL"),
+            ("usuarios", "usuario", "usuario IS NOT NULL"),
+        )
+        for tabla, clave, condicion in consultas_duplicados:
+            columnas_clave = {parte.strip() for parte in clave.split(",")}
+            if tabla in columnas_por_tabla and columnas_clave.issubset(columnas_por_tabla[tabla]):
+                if contar_grupo_duplicado(tabla, clave, condicion):
+                    duplicados.append(f"duplicados:{tabla}({clave})")
+
+        columnas_factura = columnas_por_tabla.get("factura_arca", set())
+        identidad_factura = {
+            "ambiente_arca", "emisor_id", "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num",
+        }
+        if identidad_factura.issubset(columnas_factura):
+            utilizables = (
+                "numero_comprobante_num IS NOT NULL AND emisor_id > 0 AND punto_venta_num > 0 "
+                "AND tipo_comprobante_num > 0 AND numero_comprobante_num > 0"
+            )
+            if contar_grupo_duplicado(
+                "factura_arca", "ambiente_arca, emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num",
+                f"ambiente_arca IS NOT NULL AND {utilizables}",
+            ) or contar_grupo_duplicado(
+                "factura_arca", "emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num",
+                f"ambiente_arca IS NULL AND {utilizables}",
+            ):
+                duplicados.append("duplicados:factura_arca.identidad_fiscal")
+
+        columnas_intento = columnas_por_tabla.get("intentos_emision_arca", set())
+        identidad_intento = {
+            "ambiente_arca", "cuit_emisor", "punto_venta", "tipo_comprobante", "numero_planificado", "estado",
+        }
+        if identidad_intento.issubset(columnas_intento):
+            clave_intento = "cuit_emisor, punto_venta, tipo_comprobante, numero_planificado"
+            activos = (
+                "TRIM(COALESCE(cuit_emisor, '')) <> '' AND punto_venta > 0 AND tipo_comprobante > 0 "
+                "AND numero_planificado > 0 AND estado IN ('PENDIENTE_RECONCILIAR', 'ENVIANDO', 'CONFLICTO_MANUAL')"
+            )
+            if contar_grupo_duplicado(
+                "intentos_emision_arca", f"ambiente_arca, {clave_intento}",
+                f"ambiente_arca IS NOT NULL AND {activos}",
+            ) or contar_grupo_duplicado(
+                "intentos_emision_arca", clave_intento, f"ambiente_arca IS NULL AND {activos}",
+            ):
+                duplicados.append("duplicados:intentos_emision_arca.clave_activa")
+
+        def contar_filas(tabla, condicion):
+            cursor.execute(f"SELECT COUNT(*) FROM {tabla} WHERE {condicion}")
+            return int(cursor.fetchone()[0] or 0)
+
+        columnas_resumenes = columnas_por_tabla.get("resumenes", set())
+        if {"estado_facturacion"}.issubset(columnas_resumenes):
+            cantidad = contar_filas(
+                "resumenes", "estado_facturacion IS NULL OR TRIM(estado_facturacion)=''"
+            )
+            if cantidad:
+                condiciones_pendientes.append(f"resumenes.estado_facturacion_sin_valor:{cantidad}")
+
+        columnas_conceptos = columnas_por_tabla.get("resumen_conceptos", set())
+        columnas_servicios = columnas_por_tabla.get("servicios", set())
+        if (
+            {"servicio_id", "fecha_inicio"}.issubset(columnas_conceptos)
+            and {"id", "fecha_inicio"}.issubset(columnas_servicios)
+        ):
+            cantidad = contar_filas(
+                "resumen_conceptos rc JOIN servicios s ON s.id=rc.servicio_id",
+                "rc.fecha_inicio IS NULL AND s.fecha_inicio IS NOT NULL",
+            )
+            if cantidad:
+                condiciones_pendientes.append(f"resumen_conceptos.fecha_inicio_backfill:{cantidad}")
+        if (
+            {"servicio_id", "fecha_fin"}.issubset(columnas_conceptos)
+            and {"id", "fecha_fin"}.issubset(columnas_servicios)
+        ):
+            cantidad = contar_filas(
+                "resumen_conceptos rc JOIN servicios s ON s.id=rc.servicio_id",
+                "rc.fecha_fin IS NULL AND s.fecha_fin IS NOT NULL",
+            )
+            if cantidad:
+                condiciones_pendientes.append(f"resumen_conceptos.fecha_fin_backfill:{cantidad}")
+
+        if identidad_factura.issubset(columnas_factura) and {
+            "numero_factura", "punto_venta", "tipo_comprobante",
+        }.issubset(columnas_factura):
+            cantidad = contar_filas(
+                "factura_arca",
+                "TRIM(COALESCE(numero_factura,''))<>'' AND "
+                "(punto_venta_num IS NULL OR tipo_comprobante_num IS NULL OR numero_comprobante_num IS NULL)",
+            )
+            if cantidad:
+                condiciones_pendientes.append(f"factura_arca.identidad_normalizada_backfill:{cantidad}")
+
+        for tabla in ("factura_arca", "intentos_emision_arca"):
+            columnas = columnas_por_tabla.get(tabla, set())
+            if "ambiente_arca" in columnas:
+                cantidad = contar_filas(tabla, "ambiente_arca IS NULL")
+                if cantidad:
+                    advertencias.append(
+                        f"{tabla}.ambiente_historico_desconocido:{cantidad}; "
+                        "requiere revisión manual y no se inferirá"
+                    )
+
+        if marcadores_no_reconocidos or version_registrada is not None:
+            if version_registrada is not None:
+                motivos.append(
+                    f"PRAGMA user_version={version_registrada} no pertenece a una versión reconocida por este detector."
+                )
+            if marcadores_no_reconocidos:
+                motivos.append(
+                    "Se encontraron tablas de versión no reconocidas: "
+                    + ", ".join(sorted(marcadores_no_reconocidos))
+                    + "."
+                )
+            estado = "VERSION_INCOMPATIBLE"
+        elif duplicados:
+            motivos.append("Hay duplicados que impedirían crear restricciones únicas con seguridad.")
+            estado = "BLOQUEADA"
+        elif estructuras_pendientes or condiciones_pendientes:
+            motivos.append("Faltan estructuras o backfills conocidos del esquema inspeccionado.")
+            estado = "INCOMPLETA"
+        else:
+            motivos.append(
+                "No hay marcador de versión reconocido; la base no se considera ACTUAL aunque su estructura coincida."
+            )
+            estado = "HISTORICA_SIN_VERSION"
+
+        if not objetos and version_sqlite == 0 and instalacion_nueva_confirmada is not True:
+            motivos.append("Base vacía sin confirmación explícita de instalación nueva.")
+
+        motivos.extend(duplicados)
+        return ResultadoInspeccionBaseSQLite(
+            estado=estado,
+            version_registrada=version_registrada,
+            motivos=tuple(motivos),
+            estructuras_pendientes=tuple(estructuras_pendientes),
+            condiciones_pendientes=tuple(condiciones_pendientes),
+            advertencias=tuple(advertencias),
+        )
+    except Exception as error:
+        return ResultadoInspeccionBaseSQLite(
+            "BLOQUEADA",
+            motivos=(f"No se pudo inspeccionar la conexión SQLite de forma confiable ({type(error).__name__}).",),
+        )
 
 def migrar_factura_arca_columnas_normalizadas(cur):
     for columna in ("punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num"):
