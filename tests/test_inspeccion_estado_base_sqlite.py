@@ -28,7 +28,9 @@ def _cargar_database_aislado():
 database = _cargar_database_aislado()
 
 
-def _crear_esquema_completo(conexion, tabla_omitida=None, columna_omitida=None, indice_omitido=None):
+def _crear_esquema_completo(
+    conexion, tabla_omitida=None, columna_omitida=None, indice_omitido=None, crear_indices=True
+):
     cursor = conexion.cursor()
     for tabla, columnas in database._ESTRUCTURAS_INSPECCION_ESPERADAS.items():
         if tabla == tabla_omitida:
@@ -36,6 +38,9 @@ def _crear_esquema_completo(conexion, tabla_omitida=None, columna_omitida=None, 
         columnas_tabla = [columna for columna in columnas if (tabla, columna) != columna_omitida]
         columnas_sql = ", ".join(f'"{columna}"' for columna in columnas_tabla)
         cursor.execute(f'CREATE TABLE "{tabla}" ({columnas_sql})')
+
+    if not crear_indices:
+        return
 
     for nombre, tabla, clave, condicion in database._INDICES_UNICOS_INSPECCION_ESPERADOS:
         if nombre == indice_omitido:
@@ -234,6 +239,54 @@ class InspeccionEstadoBaseSQLiteTest(unittest.TestCase):
         self.assertTrue(
             all(consulta.lstrip().upper().startswith(("SELECT", "PRAGMA")) for consulta in consultas),
             consultas,
+        )
+
+
+class IndicesMigradosFrenteAlDetectorTest(unittest.TestCase):
+    """Crea los índices con las migraciones reales, no con las constantes del detector."""
+
+    def setUp(self):
+        self.conexion = sqlite3.connect(":memory:")
+        self.addCleanup(self.conexion.close)
+        _crear_esquema_completo(self.conexion, crear_indices=False)
+        cursor = self.conexion.cursor()
+        database.migrar_indices_unicos_factura_arca(cursor)
+        database.migrar_indices_activos_intentos_emision_arca(cursor)
+        self.conexion.commit()
+
+    def test_detector_reconoce_indices_creados_por_migraciones_reales(self):
+        indices_creados = {
+            fila[0]
+            for fila in self.conexion.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
+            )
+        }
+        for nombre, *_ in database._INDICES_UNICOS_INSPECCION_ESPERADOS:
+            self.assertIn(nombre, indices_creados)
+
+        resultado = database.inspeccionar_estado_base_sqlite(self.conexion)
+
+        pendientes_indices = [
+            item for item in resultado.estructuras_pendientes if item.startswith("indice")
+        ]
+        self.assertEqual(pendientes_indices, [])
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+
+    def test_identidad_fiscal_es_unica_por_ambiente(self):
+        insertar = (
+            "INSERT INTO factura_arca(emisor_id, punto_venta_num, tipo_comprobante_num, "
+            "numero_comprobante_num, ambiente_arca) VALUES(1, 2, 11, 5, ?)"
+        )
+        self.conexion.execute(insertar, ("HOMOLOGACION",))
+        self.conexion.execute(insertar, ("PRODUCCION",))
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conexion.execute(insertar, ("HOMOLOGACION",))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conexion.execute(insertar, ("PRODUCCION",))
+
+        self.assertEqual(
+            self.conexion.execute("SELECT COUNT(*) FROM factura_arca").fetchone()[0], 2
         )
 
 

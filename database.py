@@ -76,7 +76,7 @@ _ESTRUCTURAS_INSPECCION_ESPERADAS = {
 _INDICES_UNICOS_INSPECCION_ESPERADOS = (
     (
         "idx_factura_arca_identidad_unica", "factura_arca",
-        "emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num",
+        "ambiente_arca, emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num",
         "ambiente_arca IS NOT NULL AND numero_comprobante_num IS NOT NULL AND emisor_id > 0 "
         "AND punto_venta_num > 0 AND tipo_comprobante_num > 0 AND numero_comprobante_num > 0",
     ),
