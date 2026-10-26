@@ -1,5 +1,5 @@
-import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -37,15 +37,50 @@ DIRECTORIOS_ESCRITURA = (
 )
 
 
+ESTADO_BASE_EXISTENTE = "BASE_EXISTENTE"
+ESTADO_BASE_AUSENTE_CON_RASTROS = "BASE_AUSENTE_CON_RASTROS"
+ESTADO_BASE_AUSENTE_SIN_RASTROS = "BASE_AUSENTE_SIN_RASTROS"
+SUFIJOS_ARCHIVOS_AUXILIARES_SQLITE = ("-wal", "-shm", "-journal")
+
+
+@dataclass(frozen=True)
+class EstadoArchivoBase:
+    estado: str
+    ruta_base: Path
+    rastros: tuple = ()
+
+    @property
+    def existe(self):
+        return self.estado == ESTADO_BASE_EXISTENTE
+
+
 def preparar_directorios():
+    """Crea solo directorios de escritura; nunca crea ni copia la base SQLite."""
     for carpeta in DIRECTORIOS_ESCRITURA:
         carpeta.mkdir(parents=True, exist_ok=True)
     (PDF_DIR / "resumenes").mkdir(parents=True, exist_ok=True)
-    MANUALES_DIR.mkdir(parents=True, exist_ok=True)
-
-    base_empaquetada = BUNDLE_DIR / "database" / "fm_master.db"
-    if not DATABASE_PATH.exists() and base_empaquetada.is_file():
-        shutil.copy2(base_empaquetada, DATABASE_PATH)
 
 
-preparar_directorios()
+def inspeccionar_archivo_base(*, database_path=None, directorios_escritura=None):
+    """Clasifica la base sin abrirla ni modificar el sistema de archivos."""
+    ruta_base = Path(database_path or DATABASE_PATH)
+    if ruta_base.is_file():
+        return EstadoArchivoBase(ESTADO_BASE_EXISTENTE, ruta_base)
+
+    rastros = []
+    if ruta_base.exists():
+        rastros.append(ruta_base)
+    for sufijo in SUFIJOS_ARCHIVOS_AUXILIARES_SQLITE:
+        auxiliar = ruta_base.with_name(ruta_base.name + sufijo)
+        if auxiliar.exists():
+            rastros.append(auxiliar)
+
+    directorios = DIRECTORIOS_ESCRITURA if directorios_escritura is None else directorios_escritura
+    for carpeta in (ruta_base.parent, *directorios):
+        carpeta = Path(carpeta)
+        if carpeta.is_dir() and any(True for _ in carpeta.iterdir()):
+            rastros.append(carpeta)
+
+    rastros = tuple(dict.fromkeys(rastros))
+    estado = ESTADO_BASE_AUSENTE_CON_RASTROS if rastros else ESTADO_BASE_AUSENTE_SIN_RASTROS
+    return EstadoArchivoBase(estado, ruta_base, rastros)

@@ -2,6 +2,7 @@ import sqlite3
 import calendar
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 
 from runtime_paths import DATABASE_PATH
 from services.arca.ambiente_arca import AmbienteArcaInvalidoError, normalizar_ambiente_arca
@@ -12,7 +13,8 @@ DB_NAME = str(DATABASE_PATH)
 
 
 def conectar():
-    return sqlite3.connect(DB_NAME)
+    """Abre una base existente sin crearla si falta el archivo."""
+    return sqlite3.connect(Path(DB_NAME).resolve().as_uri() + "?mode=rw", uri=True)
 
 
 def agregar_columna_si_falta(cur, tabla, columna, definicion):

@@ -206,6 +206,7 @@ class MigracionEmisorArcaConfigTest(unittest.TestCase):
     def test_crear_base_nueva_y_reabrir_preserva_legacy_y_configuracion(self):
         with tempfile.TemporaryDirectory() as carpeta:
             ruta = Path(carpeta) / "nueva.db"
+            sqlite3.connect(ruta).close()
             with patch.object(database, "DB_NAME", str(ruta)):
                 database.crear_base()
                 conexion = sqlite3.connect(ruta)

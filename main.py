@@ -1,8 +1,18 @@
+import sqlite3
+import sys
+import tkinter as tk
+
 import customtkinter as ctk
 from tkinter import messagebox, ttk
 
 from config import COLOR_NEGRO, COLOR_PRINCIPAL
 from database import crear_base
+from runtime_paths import (
+    ESTADO_BASE_AUSENTE_CON_RASTROS,
+    ESTADO_BASE_EXISTENTE,
+    inspeccionar_archivo_base,
+    preparar_directorios,
+)
 from services.backup_service import BackupService
 from services.notificacion_service import NotificacionService
 from services.intento_emision_arca_service import IntentoEmisionArcaService
@@ -574,8 +584,84 @@ def iniciar_servicios_post_login(app):
     programar_aviso_pendientes_inicio(app)
 
 
+def mostrar_error_arranque(titulo, mensaje):
+    """Muestra el error sin construir la aplicacion; si Tk falla, usa stderr."""
+    try:
+        raiz = tk.Tk()
+        raiz.withdraw()
+        try:
+            messagebox.showerror(titulo, mensaje, parent=raiz)
+        finally:
+            raiz.destroy()
+    except Exception:
+        if sys.stderr is not None:
+            print(f"{titulo}\n{mensaje}", file=sys.stderr)
+
+
+def _mensaje_base_ausente(estado_base):
+    mensaje = (
+        "No se encontró la base de datos de FM Master Gestión:\n"
+        f"{estado_base.ruta_base}\n\n"
+    )
+    if estado_base.estado == ESTADO_BASE_AUSENTE_CON_RASTROS:
+        rastros = "\n".join(f"- {ruta}" for ruta in estado_base.rastros[:5])
+        mensaje += (
+            "Se detectaron rastros de una instalación anterior:\n"
+            f"{rastros}\n\n"
+            "Es posible que la base se haya movido, renombrado o eliminado.\n"
+            "Restaure la base o un backup antes de volver a iniciar el programa."
+        )
+    else:
+        mensaje += (
+            "No hay rastros suficientes de una instalación anterior.\n"
+            "La creación de una instalación nueva requiere una confirmación\n"
+            "explícita que todavía no está disponible."
+        )
+    return mensaje + "\n\nEl programa se cerrará sin crear ni modificar ninguna base."
+
+
+def verificar_base_antes_de_arrancar(
+    *,
+    inspeccionar=inspeccionar_archivo_base,
+    preparar=preparar_directorios,
+    notificar=mostrar_error_arranque,
+):
+    """Barrera previa a crear_base(): sin base existente, el arranque se detiene."""
+    try:
+        estado_base = inspeccionar()
+    except OSError as error:
+        notificar(
+            "No se pudo iniciar FM Master Gestión",
+            f"No se pudo inspeccionar la ubicación de la base de datos.\n{error}",
+        )
+        return False
+
+    if estado_base.estado != ESTADO_BASE_EXISTENTE:
+        notificar("Base de datos no encontrada", _mensaje_base_ausente(estado_base))
+        return False
+
+    try:
+        preparar()
+    except OSError as error:
+        notificar(
+            "No se pudo iniciar FM Master Gestión",
+            f"No se pudieron preparar las carpetas de trabajo.\n{error}",
+        )
+        return False
+    return True
+
+
 if __name__ == "__main__":
-    crear_base()
+    if not verificar_base_antes_de_arrancar():
+        sys.exit(1)
+    try:
+        crear_base()
+    except sqlite3.OperationalError:
+        estado_base = inspeccionar_archivo_base()
+        if estado_base.estado == ESTADO_BASE_EXISTENTE:
+            raise
+        mostrar_error_arranque("Base de datos no encontrada", _mensaje_base_ausente(estado_base))
+        sys.exit(1)
     UsuarioService.init_admin_if_missing()
 
     app = FMMasterApp()
