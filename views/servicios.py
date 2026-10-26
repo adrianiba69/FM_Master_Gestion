@@ -5,7 +5,7 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 
 from models.servicio import Servicio
-from runtime_paths import DATABASE_PATH
+from database import conectar
 from services.servicio_service import ServicioService
 
 try:
@@ -38,8 +38,15 @@ class ServiciosWindow(ctk.CTkToplevel):
         self.crear_interfaz()
         try:
             self.cargar_catalogo_values()
-        except Exception:
-            pass
+        except sqlite3.Error as error:
+            self.aviso_label.configure(
+                text=f"No se pudo cargar el catalogo de servicios: {error}",
+                text_color="#C00000",
+            )
+            self.catalogo_cb.configure(state="disabled")
+            self.boton_usar_catalogo.configure(state="disabled")
+            self.boton_admin_catalogo.configure(state="disabled")
+            return
         self.cargar_servicios()
         self.limpiar_formulario()
 
@@ -66,12 +73,14 @@ class ServiciosWindow(ctk.CTkToplevel):
         )
         self.total_label.grid(row=0, column=1, sticky="e")
 
-        ctk.CTkLabel(
+        self.aviso_label = ctk.CTkLabel(
             self,
             text="Seleccione una fila para editarla o complete los datos para crear un servicio.",
             font=("Arial", 12),
             text_color="#555555",
-        ).grid(row=1, column=0, sticky="w", padx=20, pady=(0, 8))
+            wraplength=1000,
+        )
+        self.aviso_label.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 8))
 
         contenido = ctk.CTkFrame(self, fg_color="white", corner_radius=0)
         contenido.grid(row=2, column=0, sticky="nsew", padx=20)
@@ -450,7 +459,7 @@ class ServiciosWindow(ctk.CTkToplevel):
         self.campos_formulario["concepto"].focus_set()
 
     def _crear_tabla_catalogo_si_falta(self):
-        conn = sqlite3.connect(str(DATABASE_PATH))
+        conn = conectar()
         cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS catalogo_servicios(
@@ -465,7 +474,7 @@ class ServiciosWindow(ctk.CTkToplevel):
         conn.close()
 
     def _seed_catalogo_inicial(self):
-        conn = sqlite3.connect(str(DATABASE_PATH))
+        conn = conectar()
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM catalogo_servicios")
         if cur.fetchone()[0] > 0:
@@ -496,7 +505,7 @@ class ServiciosWindow(ctk.CTkToplevel):
         self._crear_tabla_catalogo_si_falta()
         self._seed_catalogo_inicial()
 
-        conn = sqlite3.connect(str(DATABASE_PATH))
+        conn = conectar()
         cur = conn.cursor()
         cur.execute(
             "SELECT id, nombre, descripcion, precio, activo FROM catalogo_servicios WHERE activo=1 ORDER BY nombre"
