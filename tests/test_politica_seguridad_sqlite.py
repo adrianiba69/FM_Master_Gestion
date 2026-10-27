@@ -452,17 +452,18 @@ class BaseHistoricaSinVersionTest(_PoliticaBase):
         self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
         self.assertTrue(any("ACTUAL" in motivo for motivo in resultado.motivos))
 
-    @unittest.expectedFailure
-    def test_requisito_futuro_trigger_desconocido_debe_bloquear(self):
-        # El detector solo usa los triggers para saber si la base está vacía; un
-        # trigger ajeno puede alterar datos durante una migración y debe bloquear.
+    def test_trigger_desconocido_debe_bloquear(self):
+        # Un trigger ajeno puede alterar datos durante una migración y debe bloquear.
         _crear_esquema_historico(self.conexion)
         self.conexion.execute(
             "CREATE TRIGGER trg_desconocido AFTER INSERT ON factura_arca "
             "BEGIN UPDATE factura_arca SET cae = NULL WHERE id = NEW.id; END"
         )
 
-        self.assertIn(self.inspeccionar().estado, BLOQUEANTES)
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("trigger_no_reconocido:trg_desconocido(factura_arca)", resultado.motivos)
 
     def test_tabla_esencial_sin_clave_primaria_debe_bloquear(self):
         _crear_esquema_historico(
@@ -648,6 +649,267 @@ class ClavesPrimariasEsencialesTest(_PoliticaBase):
         self.assertFalse(self.conexion.in_transaction)
         self.assertTrue(consultas)
         self.assertTrue(all(consulta.lstrip().upper().startswith(("SELECT", "PRAGMA")) for consulta in consultas))
+
+
+class TriggersNoReconocidosTest(_PoliticaBase):
+
+    @staticmethod
+    def _motivos_trigger(resultado):
+        return [motivo for motivo in resultado.motivos if motivo.startswith("trigger_")]
+
+    def _inspeccionar_en_base_nueva(self, *sentencias):
+        conexion = sqlite3.connect(":memory:")
+        try:
+            _crear_esquema_historico(conexion)
+            for sentencia in sentencias:
+                conexion.execute(sentencia)
+            return database.inspeccionar_estado_base_sqlite(conexion)
+        finally:
+            conexion.close()
+
+    def test_before_y_after_sobre_insert_update_delete_bloquean(self):
+        for momento in ("BEFORE", "AFTER"):
+            for evento in ("INSERT", "UPDATE", "DELETE"):
+                with self.subTest(momento=momento, evento=evento):
+                    resultado = self._inspeccionar_en_base_nueva(
+                        f"CREATE TRIGGER trg_prueba {momento} {evento} ON clientes BEGIN SELECT 1; END"
+                    )
+
+                    self.assertEqual(resultado.estado, "BLOQUEADA")
+                    self.assertEqual(self._motivos_trigger(resultado), ["trigger_no_reconocido:trg_prueba(clientes)"])
+
+    def test_trigger_sobre_tablas_esenciales_y_extensiones_historicas_bloquea(self):
+        for tabla in _TABLAS_ESENCIALES_NEGOCIO + _TABLAS_ESENCIALES_OPERATIVAS + _TABLAS_EXTENSION_HISTORICA:
+            with self.subTest(tabla=tabla):
+                resultado = self._inspeccionar_en_base_nueva(
+                    f"CREATE TRIGGER trg_{tabla} AFTER INSERT ON {tabla} BEGIN SELECT 1; END"
+                )
+
+                self.assertEqual(resultado.estado, "BLOQUEADA")
+                self.assertEqual(self._motivos_trigger(resultado), [f"trigger_no_reconocido:trg_{tabla}({tabla})"])
+
+    def test_trigger_sobre_tabla_desconocida_bloquea(self):
+        resultado = self._inspeccionar_en_base_nueva(
+            "CREATE TABLE auditoria_ajena (detalle TEXT)",
+            "CREATE TRIGGER trg_auditoria BEFORE DELETE ON auditoria_ajena BEGIN SELECT 1; END",
+        )
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(self._motivos_trigger(resultado), ["trigger_no_reconocido:trg_auditoria(auditoria_ajena)"])
+
+    def test_trigger_instead_of_sobre_vista_bloquea(self):
+        resultado = self._inspeccionar_en_base_nueva(
+            "CREATE VIEW vista_clientes AS SELECT id, nombre FROM clientes",
+            "CREATE TRIGGER trg_vista INSTEAD OF INSERT ON vista_clientes "
+            "BEGIN INSERT INTO clientes (nombre) VALUES (NEW.nombre); END",
+        )
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(self._motivos_trigger(resultado), ["trigger_no_reconocido:trg_vista(vista_clientes)"])
+
+    def test_trigger_temporal_sobre_tabla_principal_bloquea(self):
+        _crear_esquema_historico(self.conexion)
+        self.conexion.execute("CREATE TEMP TRIGGER trg_temporal AFTER UPDATE ON clientes BEGIN SELECT 1; END")
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(
+            self._motivos_trigger(resultado), ["trigger_temporal_no_reconocido:trg_temporal(clientes)"]
+        )
+
+    def test_trigger_temporal_sobre_tabla_temporal_bloquea(self):
+        _crear_esquema_historico(self.conexion)
+        self.conexion.execute("CREATE TEMP TABLE auxiliar (valor TEXT)")
+        self.conexion.execute("CREATE TEMP TRIGGER trg_auxiliar AFTER INSERT ON auxiliar BEGIN SELECT 1; END")
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(
+            self._motivos_trigger(resultado), ["trigger_temporal_no_reconocido:trg_auxiliar(auxiliar)"]
+        )
+
+    def test_base_vacia_con_trigger_temporal_no_es_nueva(self):
+        self.conexion.execute("CREATE TEMP TABLE auxiliar (valor TEXT)")
+        self.conexion.execute("CREATE TEMP TRIGGER trg_auxiliar AFTER INSERT ON auxiliar BEGIN SELECT 1; END")
+
+        for confirmada in (True, False):
+            with self.subTest(instalacion_nueva_confirmada=confirmada):
+                resultado = self.inspeccionar(instalacion_nueva_confirmada=confirmada)
+
+                self.assertEqual(resultado.estado, "BLOQUEADA")
+                self.assertEqual(
+                    self._motivos_trigger(resultado), ["trigger_temporal_no_reconocido:trg_auxiliar(auxiliar)"]
+                )
+
+    def test_varios_triggers_generan_motivos_completos_y_ordenados(self):
+        _crear_esquema_historico(self.conexion)
+        for sentencia in (
+            "CREATE TRIGGER trg_zeta AFTER INSERT ON tareas BEGIN SELECT 1; END",
+            "CREATE TRIGGER trg_alfa BEFORE UPDATE ON cobros BEGIN SELECT 1; END",
+            "CREATE TRIGGER trg_medio AFTER DELETE ON factura_arca BEGIN SELECT 1; END",
+            "CREATE TEMP TRIGGER trg_temp_b AFTER INSERT ON clientes BEGIN SELECT 1; END",
+            "CREATE TEMP TRIGGER trg_temp_a AFTER INSERT ON servicios BEGIN SELECT 1; END",
+        ):
+            self.conexion.execute(sentencia)
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(
+            self._motivos_trigger(resultado),
+            [
+                "trigger_no_reconocido:trg_alfa(cobros)",
+                "trigger_no_reconocido:trg_medio(factura_arca)",
+                "trigger_no_reconocido:trg_zeta(tareas)",
+                "trigger_temporal_no_reconocido:trg_temp_a(servicios)",
+                "trigger_temporal_no_reconocido:trg_temp_b(clientes)",
+            ],
+        )
+
+    def test_nombres_especiales_con_espacios_y_comillas(self):
+        _crear_esquema_historico(self.conexion)
+        self.conexion.execute('CREATE TABLE "tabla rara ""x""" (valor TEXT)')
+        for sentencia in (
+            'CREATE TRIGGER "trg con espacios" AFTER INSERT ON "tabla rara ""x""" BEGIN SELECT 1; END',
+            'CREATE TRIGGER "trg ""comillas""" AFTER INSERT ON clientes BEGIN SELECT 1; END',
+            "CREATE TRIGGER [Trg-Mayúsculas] AFTER INSERT ON clientes BEGIN SELECT 1; END",
+            "CREATE TRIGGER 'trg ''simple''' AFTER INSERT ON clientes BEGIN SELECT 1; END",
+        ):
+            self.conexion.execute(sentencia)
+
+        resultado = self.inspeccionar()
+
+        esperados = sorted([
+            ("trg con espacios", 'tabla rara "x"'),
+            ('trg "comillas"', "clientes"),
+            ("Trg-Mayúsculas", "clientes"),
+            ("trg 'simple'", "clientes"),
+        ])
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(
+            self._motivos_trigger(resultado),
+            [f"trigger_no_reconocido:{nombre}({tabla})" for nombre, tabla in esperados],
+        )
+
+    def test_version_incompatible_prevalece_y_conserva_motivos_de_trigger(self):
+        casos = {
+            "user_version": "PRAGMA user_version = 4",
+            "marcador": "CREATE TABLE schema_migrations (version TEXT)",
+        }
+        for caso, sentencia in casos.items():
+            with self.subTest(caso=caso):
+                conexion = sqlite3.connect(":memory:")
+                try:
+                    _crear_esquema_historico(conexion)
+                    conexion.execute("CREATE TRIGGER trg_permanente AFTER INSERT ON clientes BEGIN SELECT 1; END")
+                    conexion.execute("CREATE TEMP TRIGGER trg_temporal AFTER INSERT ON clientes BEGIN SELECT 1; END")
+                    conexion.execute(sentencia)
+
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+
+                    self.assertEqual(resultado.estado, "VERSION_INCOMPATIBLE")
+                    self.assertEqual(
+                        self._motivos_trigger(resultado),
+                        [
+                            "trigger_no_reconocido:trg_permanente(clientes)",
+                            "trigger_temporal_no_reconocido:trg_temporal(clientes)",
+                        ],
+                    )
+                finally:
+                    conexion.close()
+
+    def test_triggers_combinados_con_otras_causas_conservan_todos_los_motivos(self):
+        _crear_esquema_historico(
+            self.conexion,
+            omitir_tablas=("cobros",),
+            reemplazar_tablas={
+                "clientes": f"CREATE TABLE clientes ({', '.join(['id INTEGER', *_TABLAS_BASE['clientes'][1:]])})"
+            },
+        )
+        self.conexion.executemany(
+            "INSERT INTO usuarios (usuario, clave) VALUES (?, ?)", (("admin", "a"), ("admin", "b"))
+        )
+        self.conexion.execute("CREATE TRIGGER trg_tareas AFTER INSERT ON tareas BEGIN SELECT 1; END")
+        self.conexion.execute("CREATE TEMP TRIGGER trg_temporal AFTER INSERT ON servicios BEGIN SELECT 1; END")
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        for motivo in (
+            "tabla_esencial_ausente:cobros; no se recreará automáticamente",
+            "clave_primaria_incompatible:clientes",
+            "trigger_no_reconocido:trg_tareas(tareas)",
+            "trigger_temporal_no_reconocido:trg_temporal(servicios)",
+            "duplicados:usuarios(usuario)",
+        ):
+            self.assertIn(motivo, resultado.motivos)
+        self.assertIn("tabla:cobros", resultado.estructuras_pendientes)
+
+    def test_inspeccion_no_ejecuta_triggers_ni_modifica_datos(self):
+        _crear_esquema_historico(self.conexion)
+        self.conexion.execute("CREATE TABLE registro_disparos (detalle TEXT)")
+        self.conexion.execute("INSERT INTO clientes (id, nombre) VALUES (1, 'Cliente ficticio')")
+        for sentencia in (
+            "CREATE TRIGGER trg_insert AFTER INSERT ON clientes "
+            "BEGIN INSERT INTO registro_disparos VALUES ('insert'); END",
+            "CREATE TRIGGER trg_update BEFORE UPDATE ON clientes "
+            "BEGIN INSERT INTO registro_disparos VALUES ('update'); END",
+            "CREATE TRIGGER trg_delete AFTER DELETE ON clientes "
+            "BEGIN INSERT INTO registro_disparos VALUES ('delete'); END",
+            "CREATE TEMP TRIGGER trg_temp AFTER UPDATE ON clientes "
+            "BEGIN DELETE FROM clientes; END",
+        ):
+            self.conexion.execute(sentencia)
+        self.conexion.commit()
+        antes = tuple(self.conexion.iterdump())
+        cambios = self.conexion.total_changes
+        consultas = []
+        self.conexion.set_trace_callback(consultas.append)
+        try:
+            resultado = self.inspeccionar()
+        finally:
+            self.conexion.set_trace_callback(None)
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(tuple(self.conexion.iterdump()), antes)
+        self.assertEqual(self.conexion.total_changes, cambios)
+        self.assertEqual(self.conexion.execute("SELECT COUNT(*) FROM registro_disparos").fetchone()[0], 0)
+        self.assertEqual(self.conexion.execute("SELECT COUNT(*) FROM clientes").fetchone()[0], 1)
+        self.assertEqual(
+            self.conexion.execute("SELECT COUNT(*) FROM sqlite_temp_master WHERE type='trigger'").fetchone()[0], 1
+        )
+        self.assertFalse(self.conexion.in_transaction)
+        self.assertTrue(consultas)
+        # Un trigger ejecutado aparecería en el trace como "-- TRIGGER nombre".
+        self.assertTrue(all(consulta.lstrip().upper().startswith(("SELECT", "PRAGMA")) for consulta in consultas))
+
+    def test_bases_sin_triggers_mantienen_su_clasificacion(self):
+        casos = (
+            ("vacia_sin_confirmar", None, {}, "BLOQUEADA"),
+            ("vacia_confirmada", None, {"instalacion_nueva_confirmada": True}, "NUEVA"),
+            ("historica", {}, {}, "HISTORICA_SIN_VERSION"),
+            ("historica_con_vista", {"vista": True}, {}, "HISTORICA_SIN_VERSION"),
+            ("incompleta", {"omitir_tablas": ("intentos_emision_arca",)}, {}, "INCOMPLETA"),
+        )
+        for caso, esquema, opciones, esperado in casos:
+            with self.subTest(caso=caso):
+                conexion = sqlite3.connect(":memory:")
+                try:
+                    if esquema is not None:
+                        esquema = dict(esquema)
+                        crear_vista = esquema.pop("vista", False)
+                        _crear_esquema_historico(conexion, **esquema)
+                        if crear_vista:
+                            conexion.execute("CREATE VIEW vista_clientes AS SELECT id, nombre FROM clientes")
+
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion, **opciones)
+
+                    self.assertEqual(resultado.estado, esperado)
+                    self.assertEqual(self._motivos_trigger(resultado), [])
+                finally:
+                    conexion.close()
 
 
 class BaseIncompletaTest(_PoliticaBase):

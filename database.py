@@ -146,7 +146,26 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
             {"schema_migrations", "database_migrations", "migraciones_esquema"}
         )
 
+        # FM Master Gestión no define triggers legítimos: solo se leen sus metadatos, sin ejecutar su SQL.
+        triggers_no_reconocidos = []
+        for esquema, prefijo in (
+            ("sqlite_master", "trigger_no_reconocido"),
+            ("sqlite_temp_master", "trigger_temporal_no_reconocido"),
+        ):
+            cursor.execute(f"SELECT name, tbl_name FROM {esquema} WHERE type='trigger' ORDER BY name, tbl_name")
+            triggers_no_reconocidos.extend(
+                f"{prefijo}:{nombre}({tabla_trigger})" for nombre, tabla_trigger in cursor.fetchall()
+            )
+
         if not objetos and version_sqlite == 0:
+            if triggers_no_reconocidos:
+                return ResultadoInspeccionBaseSQLite(
+                    "BLOQUEADA",
+                    motivos=(
+                        "Base vacía bloqueada: la conexión tiene triggers no reconocidos.",
+                        *triggers_no_reconocidos,
+                    ),
+                )
             if instalacion_nueva_confirmada is True:
                 return ResultadoInspeccionBaseSQLite(
                     "NUEVA", motivos=("Base vacía; instalación nueva confirmada explícitamente por el llamador.",)
@@ -329,7 +348,7 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
                     + "."
                 )
             estado = "VERSION_INCOMPATIBLE"
-        elif duplicados or tablas_esenciales_ausentes or claves_primarias_incompatibles:
+        elif duplicados or tablas_esenciales_ausentes or claves_primarias_incompatibles or triggers_no_reconocidos:
             motivos.extend(
                 f"tabla_esencial_ausente:{tabla}; no se recreará automáticamente"
                 for tabla in tablas_esenciales_ausentes
@@ -350,6 +369,7 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
             motivos.append("Base vacía sin confirmación explícita de instalación nueva.")
 
         motivos.extend(f"clave_primaria_incompatible:{tabla}" for tabla in claves_primarias_incompatibles)
+        motivos.extend(triggers_no_reconocidos)
         motivos.extend(duplicados)
         return ResultadoInspeccionBaseSQLite(
             estado=estado,
