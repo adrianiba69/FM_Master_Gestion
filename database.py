@@ -75,6 +75,11 @@ _ESTRUCTURAS_INSPECCION_ESPERADAS = {
     "usuarios": ("id", "usuario", "clave", "rol", "activo"),
 }
 
+# Lista cerrada: tablas incorporadas en versiones posteriores cuya ausencia puede
+# ser histórica. Toda otra tabla esperada es esencial y su ausencia bloquea.
+# Clasificarlas como INCOMPLETA no autoriza recrearlas ni migrar.
+_TABLAS_EXTENSION_HISTORICA = frozenset({"intentos_emision_arca", "emisor_fiscal_arca_config"})
+
 _INDICES_UNICOS_INSPECCION_ESPERADOS = (
     (
         "idx_factura_arca_identidad_unica", "factura_arca",
@@ -156,10 +161,13 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
         condiciones_pendientes = []
         advertencias = []
         columnas_por_tabla = {}
+        tablas_esenciales_ausentes = []
 
         for tabla, columnas_esperadas in _ESTRUCTURAS_INSPECCION_ESPERADAS.items():
             if tabla not in tablas:
                 estructuras_pendientes.append(f"tabla:{tabla}")
+                if tabla not in _TABLAS_EXTENSION_HISTORICA:
+                    tablas_esenciales_ausentes.append(tabla)
                 continue
             cursor.execute(f"PRAGMA table_info({tabla})")
             columnas = {columna[1] for columna in cursor.fetchall()}
@@ -310,8 +318,13 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
                     + "."
                 )
             estado = "VERSION_INCOMPATIBLE"
-        elif duplicados:
-            motivos.append("Hay duplicados que impedirían crear restricciones únicas con seguridad.")
+        elif duplicados or tablas_esenciales_ausentes:
+            motivos.extend(
+                f"tabla_esencial_ausente:{tabla}; no se recreará automáticamente"
+                for tabla in tablas_esenciales_ausentes
+            )
+            if duplicados:
+                motivos.append("Hay duplicados que impedirían crear restricciones únicas con seguridad.")
             estado = "BLOQUEADA"
         elif estructuras_pendientes or condiciones_pendientes:
             motivos.append("Faltan estructuras o backfills conocidos del esquema inspeccionado.")

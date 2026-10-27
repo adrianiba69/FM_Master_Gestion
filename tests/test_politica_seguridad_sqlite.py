@@ -288,6 +288,19 @@ _INDICES_UNICOS = {
 }
 
 _INDICES_FACTURA = tuple(nombre for nombre in _INDICES_UNICOS if nombre.startswith("idx_factura_arca_"))
+_INDICES_INTENTOS = tuple(nombre for nombre in _INDICES_UNICOS if nombre.startswith("idx_intentos_emision_arca_"))
+_INDICES_POR_TABLA = {"factura_arca": _INDICES_FACTURA, "intentos_emision_arca": _INDICES_INTENTOS}
+
+# Clasificación de tablas escrita a mano, independiente de las constantes del detector.
+_TABLAS_ESENCIALES_NEGOCIO = (
+    "clientes", "servicios", "resumenes", "resumen_conceptos", "cobros", "factura_arca",
+    "emisores_facturacion", "emisores_fiscales", "usuarios",
+)
+_TABLAS_ESENCIALES_OPERATIVAS = (
+    "servicio_renovaciones", "tareas", "contactos", "oportunidades", "notificaciones",
+    "catalogo_servicios", "arca_config",
+)
+_TABLAS_EXTENSION_HISTORICA = ("intentos_emision_arca", "emisor_fiscal_arca_config")
 
 
 def _crear_esquema_historico(
@@ -302,6 +315,9 @@ def _crear_esquema_historico(
     """Construye una base histórica sin versión a partir del esquema escrito a mano."""
     reemplazar_tablas = reemplazar_tablas or {}
     reemplazar_indices = reemplazar_indices or {}
+    omitir_indices = set(omitir_indices)
+    for tabla in omitir_tablas:
+        omitir_indices.update(_INDICES_POR_TABLA.get(tabla, ()))
     cursor = conexion.cursor()
     for tabla, columnas in _TABLAS_BASE.items():
         if tabla in omitir_tablas:
@@ -311,10 +327,11 @@ def _crear_esquema_historico(
             continue
         cursor.execute(f"CREATE TABLE {tabla} ({', '.join(columnas)})")
 
-    columnas_factura = [
-        f"{nombre} {tipo}" for nombre, tipo in _COLUMNAS_FACTURA_ARCA if nombre not in omitir_columnas_factura
-    ]
-    cursor.execute(f"CREATE TABLE factura_arca ({', '.join(columnas_factura)})")
+    if "factura_arca" not in omitir_tablas:
+        columnas_factura = [
+            f"{nombre} {tipo}" for nombre, tipo in _COLUMNAS_FACTURA_ARCA if nombre not in omitir_columnas_factura
+        ]
+        cursor.execute(f"CREATE TABLE factura_arca ({', '.join(columnas_factura)})")
 
     for nombre, sql in _INDICES_UNICOS.items():
         if nombre in omitir_indices:
@@ -463,6 +480,23 @@ class BaseHistoricaSinVersionTest(_PoliticaBase):
 
 class BaseIncompletaTest(_PoliticaBase):
 
+    def _inspeccionar_sin_tabla(self, tabla):
+        conexion = sqlite3.connect(":memory:")
+        self.addCleanup(conexion.close)
+        _crear_esquema_historico(conexion, omitir_tablas=(tabla,))
+        return database.inspeccionar_estado_base_sqlite(conexion)
+
+    def _verificar_tabla_esencial_bloquea(self, tablas):
+        for tabla in tablas:
+            with self.subTest(tabla=tabla):
+                resultado = self._inspeccionar_sin_tabla(tabla)
+
+                self.assertEqual(resultado.estado, "BLOQUEADA")
+                self.assertIn(f"tabla:{tabla}", resultado.estructuras_pendientes)
+                self.assertIn(
+                    f"tabla_esencial_ausente:{tabla}; no se recreará automáticamente", resultado.motivos
+                )
+
     def test_falta_tabla_esencial_no_es_historica(self):
         _crear_esquema_historico(self.conexion, omitir_tablas=("clientes",))
 
@@ -481,23 +515,118 @@ class BaseIncompletaTest(_PoliticaBase):
         self.assertEqual(resultado.estado, "INCOMPLETA")
         self.assertIn("columna:factura_arca.ruta_pdf_relativa", resultado.estructuras_pendientes)
 
-    @unittest.expectedFailure
-    def test_requisito_futuro_falta_tabla_esencial_debe_bloquear(self):
-        # Hoy una tabla esencial ausente se informa como INCOMPLETA, igual que una
-        # columna de extensión faltante. Recrear clientes no es una migración
-        # histórica conocida: debe bloquear.
+    def test_falta_tabla_esencial_debe_bloquear(self):
         _crear_esquema_historico(self.conexion, omitir_tablas=("clientes",))
 
         self.assertIn(self.inspeccionar().estado, BLOQUEANTES)
 
-    @unittest.expectedFailure
-    def test_requisito_futuro_vista_en_lugar_de_tabla_esencial_debe_bloquear(self):
-        # Una vista con el nombre de una tabla esencial se informa como tabla
-        # faltante (INCOMPLETA); una migración intentaría crearla sobre la vista.
+    def test_vista_en_lugar_de_tabla_esencial_debe_bloquear(self):
+        # El detector solo reconoce objetos de tipo tabla: la vista cuenta como
+        # tabla esencial ausente y no se intentará crear una tabla encima.
         _crear_esquema_historico(
             self.conexion,
             reemplazar_tablas={"clientes": "CREATE VIEW clientes AS SELECT 1 AS id, 'x' AS nombre"},
         )
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("tabla_esencial_ausente:clientes; no se recreará automáticamente", resultado.motivos)
+
+    def test_grupo_a_tabla_esencial_de_negocio_ausente_bloquea(self):
+        self._verificar_tabla_esencial_bloquea(_TABLAS_ESENCIALES_NEGOCIO)
+
+    def test_grupo_b_tabla_esencial_operativa_ausente_bloquea(self):
+        self._verificar_tabla_esencial_bloquea(_TABLAS_ESENCIALES_OPERATIVAS)
+
+    def test_grupo_c_extension_historica_ausente_es_incompleta_no_bloqueada(self):
+        # INCOMPLETA no autoriza recrear la tabla ni migrar; solo indica que
+        # su ausencia no basta por sí sola para bloquear.
+        for tabla in _TABLAS_EXTENSION_HISTORICA:
+            with self.subTest(tabla=tabla):
+                resultado = self._inspeccionar_sin_tabla(tabla)
+
+                self.assertEqual(resultado.estado, "INCOMPLETA")
+                self.assertIn(f"tabla:{tabla}", resultado.estructuras_pendientes)
+                self.assertFalse(any("tabla_esencial_ausente" in motivo for motivo in resultado.motivos))
+
+    def test_grupos_cubren_exactamente_las_tablas_del_detector(self):
+        grupos = (
+            set(_TABLAS_ESENCIALES_NEGOCIO) | set(_TABLAS_ESENCIALES_OPERATIVAS) | set(_TABLAS_EXTENSION_HISTORICA)
+        )
+
+        self.assertEqual(grupos, set(database._ESTRUCTURAS_INSPECCION_ESPERADAS))
+        self.assertEqual(set(_TABLAS_EXTENSION_HISTORICA), set(database._TABLAS_EXTENSION_HISTORICA))
+        self.assertIsInstance(database._TABLAS_EXTENSION_HISTORICA, frozenset)
+
+    def test_tabla_desconocida_agregada_al_detector_se_bloquea_por_defecto(self):
+        estructuras = dict(database._ESTRUCTURAS_INSPECCION_ESPERADAS)
+        estructuras["tabla_futura"] = ("id",)
+        _crear_esquema_historico(self.conexion)
+
+        with patch.object(database, "_ESTRUCTURAS_INSPECCION_ESPERADAS", estructuras):
+            resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("tabla_esencial_ausente:tabla_futura; no se recreará automáticamente", resultado.motivos)
+
+    def test_varias_tablas_esenciales_ausentes_se_informan_todas(self):
+        _crear_esquema_historico(self.conexion, omitir_tablas=("clientes", "tareas", "intentos_emision_arca"))
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        ausentes = [motivo for motivo in resultado.motivos if motivo.startswith("tabla_esencial_ausente:")]
+        self.assertEqual(
+            ausentes,
+            [
+                "tabla_esencial_ausente:clientes; no se recreará automáticamente",
+                "tabla_esencial_ausente:tareas; no se recreará automáticamente",
+            ],
+        )
+        self.assertIn("tabla:intentos_emision_arca", resultado.estructuras_pendientes)
+
+    def test_version_incompatible_prevalece_sobre_tabla_esencial_ausente(self):
+        _crear_esquema_historico(self.conexion, omitir_tablas=("clientes",))
+        self.conexion.execute("PRAGMA user_version = 4")
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "VERSION_INCOMPATIBLE")
+        self.assertIn("tabla:clientes", resultado.estructuras_pendientes)
+
+    def test_tabla_esencial_ausente_y_duplicados_informan_ambos_motivos(self):
+        _crear_esquema_historico(self.conexion, omitir_tablas=("clientes",))
+        self.conexion.executemany(
+            "INSERT INTO usuarios (usuario, clave) VALUES (?, ?)", (("admin", "a"), ("admin", "b"))
+        )
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("tabla_esencial_ausente:clientes; no se recreará automáticamente", resultado.motivos)
+        self.assertIn("duplicados:usuarios(usuario)", resultado.motivos)
+
+    def test_inspeccion_con_tabla_esencial_ausente_no_modifica_la_base(self):
+        _crear_esquema_historico(self.conexion, omitir_tablas=("clientes",))
+        esquema_antes = self.conexion.execute("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").fetchall()
+        cambios_antes = self.conexion.total_changes
+
+        self.inspeccionar()
+
+        self.assertEqual(self.conexion.total_changes, cambios_antes)
+        self.assertEqual(
+            self.conexion.execute("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").fetchall(),
+            esquema_antes,
+        )
+
+    @unittest.expectedFailure
+    def test_requisito_futuro_identidad_normalizada_sin_tabla_de_intentos_debe_bloquear(self):
+        # Pendiente: combinación histórica contradictoria. Las columnas normalizadas
+        # de factura_arca (22/08) son posteriores a intentos_emision_arca (16/08);
+        # tenerlas sin esa tabla no corresponde a ninguna versión legítima. Hoy la
+        # ausencia de la extensión se clasifica como INCOMPLETA.
+        _crear_esquema_historico(self.conexion, omitir_tablas=("intentos_emision_arca",))
 
         self.assertIn(self.inspeccionar().estado, BLOQUEANTES)
 

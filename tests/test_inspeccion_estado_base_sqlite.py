@@ -83,21 +83,31 @@ class InspeccionEstadoBaseSQLiteTest(unittest.TestCase):
         self.assertEqual(resultado.condiciones_pendientes, ())
         self.assertNotEqual(resultado.estado, "ACTUAL")
 
-    def test_tabla_o_columna_obligatoria_faltante_es_incompleta(self):
-        escenarios = (
-            {"tabla_omitida": "clientes"},
-            {"columna_omitida": ("clientes", "modalidad_comprobante")},
-        )
-        for escenario in escenarios:
-            with self.subTest(escenario=escenario):
-                conexion = sqlite3.connect(":memory:")
-                self.addCleanup(conexion.close)
-                _crear_esquema_completo(conexion, **escenario)
+    def test_columna_obligatoria_faltante_es_incompleta(self):
+        _crear_esquema_completo(self.conexion, columna_omitida=("clientes", "modalidad_comprobante"))
 
-                resultado = self.inspeccionar(conexion)
+        resultado = self.inspeccionar()
 
-                self.assertEqual(resultado.estado, "INCOMPLETA")
-                self.assertTrue(resultado.estructuras_pendientes)
+        self.assertEqual(resultado.estado, "INCOMPLETA")
+        self.assertIn("columna:clientes.modalidad_comprobante", resultado.estructuras_pendientes)
+
+    def test_tabla_esencial_faltante_es_bloqueada(self):
+        _crear_esquema_completo(self.conexion, tabla_omitida="clientes")
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("tabla:clientes", resultado.estructuras_pendientes)
+        self.assertIn("tabla_esencial_ausente:clientes; no se recreará automáticamente", resultado.motivos)
+
+    def test_tabla_de_extension_historica_faltante_es_incompleta(self):
+        _crear_esquema_completo(self.conexion, tabla_omitida="emisor_fiscal_arca_config")
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "INCOMPLETA")
+        self.assertIn("tabla:emisor_fiscal_arca_config", resultado.estructuras_pendientes)
+        self.assertFalse(any("tabla_esencial_ausente" in motivo for motivo in resultado.motivos))
 
     def test_indice_unico_obligatorio_faltante_es_incompleta(self):
         _crear_esquema_completo(
