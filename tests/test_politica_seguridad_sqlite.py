@@ -407,19 +407,19 @@ class BaseVaciaSinAutorizacionTest(_PoliticaBase):
     def test_base_vacia_sin_confirmacion_no_es_nueva(self):
         resultado = self.inspeccionar()
 
-        self.assertNotEqual(resultado.estado, "NUEVA")
+        self.assertEqual(resultado.estado, "BLOQUEADA")
 
     def test_confirmacion_no_booleana_no_autoriza_instalacion_nueva(self):
-        for valor in ("true", 1, "1", "NUEVA"):
+        for valor in (False, None, 0, "true", 1, "1", "NUEVA"):
             with self.subTest(valor=valor):
-                self.assertNotEqual(self.inspeccionar(instalacion_nueva_confirmada=valor).estado, "NUEVA")
+                self.assertEqual(self.inspeccionar(instalacion_nueva_confirmada=valor).estado, "BLOQUEADA")
 
-    @unittest.expectedFailure
-    def test_requisito_futuro_base_vacia_sin_confirmacion_debe_bloquear(self):
-        # Hoy devuelve HISTORICA_SIN_VERSION, el mismo estado que una base histórica
-        # completa; una base vacía sin confirmación no aporta información suficiente
-        # para migrar y debe quedar bloqueada.
-        self.assertIn(self.inspeccionar().estado, BLOQUEANTES)
+    def test_base_vacia_sin_confirmacion_debe_bloquear_con_motivo_claro(self):
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("Base vacía bloqueada", " ".join(resultado.motivos))
+        self.assertIn("falta confirmación explícita de instalación nueva", " ".join(resultado.motivos))
 
 
 class BaseHistoricaSinVersionTest(_PoliticaBase):

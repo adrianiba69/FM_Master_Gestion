@@ -147,8 +147,8 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
                     "NUEVA", motivos=("Base vacía; instalación nueva confirmada explícitamente por el llamador.",)
                 )
             return ResultadoInspeccionBaseSQLite(
-                "HISTORICA_SIN_VERSION",
-                motivos=("Base vacía, pero el llamador no confirmó que sea una instalación nueva.",),
+                "BLOQUEADA",
+                motivos=("Base vacía bloqueada: falta confirmación explícita de instalación nueva.",),
             )
 
         motivos = []

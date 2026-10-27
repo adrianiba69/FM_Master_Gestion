@@ -65,11 +65,12 @@ class InspeccionEstadoBaseSQLiteTest(unittest.TestCase):
         self.assertEqual(resultado.estado, "NUEVA")
         self.assertIsNone(resultado.version_registrada)
 
-    def test_base_vacia_sin_confirmacion_no_es_nueva(self):
+    def test_base_vacia_sin_confirmacion_es_bloqueada(self):
         resultado = self.inspeccionar()
 
-        self.assertNotEqual(resultado.estado, "NUEVA")
-        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIsNone(resultado.version_registrada)
+        self.assertIn("falta confirmación explícita de instalación nueva", " ".join(resultado.motivos))
 
     def test_base_historica_completa_sin_version_permanece_historica(self):
         _crear_esquema_completo(self.conexion)
