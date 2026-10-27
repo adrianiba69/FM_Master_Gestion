@@ -36,7 +36,10 @@ def _crear_esquema_completo(
         if tabla == tabla_omitida:
             continue
         columnas_tabla = [columna for columna in columnas if (tabla, columna) != columna_omitida]
-        columnas_sql = ", ".join(f'"{columna}"' for columna in columnas_tabla)
+        columnas_sql = ", ".join(
+            '"id" INTEGER PRIMARY KEY' if columna == "id" else f'"{columna}"'
+            for columna in columnas_tabla
+        )
         cursor.execute(f'CREATE TABLE "{tabla}" ({columnas_sql})')
 
     if not crear_indices:

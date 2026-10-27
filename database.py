@@ -162,6 +162,7 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
         advertencias = []
         columnas_por_tabla = {}
         tablas_esenciales_ausentes = []
+        claves_primarias_incompatibles = []
 
         for tabla, columnas_esperadas in _ESTRUCTURAS_INSPECCION_ESPERADAS.items():
             if tabla not in tablas:
@@ -170,7 +171,17 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
                     tablas_esenciales_ausentes.append(tabla)
                 continue
             cursor.execute(f"PRAGMA table_info({tabla})")
-            columnas = {columna[1] for columna in cursor.fetchall()}
+            informacion_columnas = cursor.fetchall()
+            columnas = {columna[1] for columna in informacion_columnas}
+            if tabla not in _TABLAS_EXTENSION_HISTORICA:
+                clave_primaria = [columna for columna in informacion_columnas if columna[5] != 0]
+                if not (
+                    len(clave_primaria) == 1
+                    and clave_primaria[0][1] == "id"
+                    and clave_primaria[0][2].strip().upper() == "INTEGER"
+                    and clave_primaria[0][5] == 1
+                ):
+                    claves_primarias_incompatibles.append(tabla)
             columnas_por_tabla[tabla] = columnas
             estructuras_pendientes.extend(
                 f"columna:{tabla}.{columna}"
@@ -318,7 +329,7 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
                     + "."
                 )
             estado = "VERSION_INCOMPATIBLE"
-        elif duplicados or tablas_esenciales_ausentes:
+        elif duplicados or tablas_esenciales_ausentes or claves_primarias_incompatibles:
             motivos.extend(
                 f"tabla_esencial_ausente:{tabla}; no se recreará automáticamente"
                 for tabla in tablas_esenciales_ausentes
@@ -338,6 +349,7 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
         if not objetos and version_sqlite == 0 and instalacion_nueva_confirmada is not True:
             motivos.append("Base vacía sin confirmación explícita de instalación nueva.")
 
+        motivos.extend(f"clave_primaria_incompatible:{tabla}" for tabla in claves_primarias_incompatibles)
         motivos.extend(duplicados)
         return ResultadoInspeccionBaseSQLite(
             estado=estado,

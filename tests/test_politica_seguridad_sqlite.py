@@ -328,10 +328,13 @@ def _crear_esquema_historico(
         cursor.execute(f"CREATE TABLE {tabla} ({', '.join(columnas)})")
 
     if "factura_arca" not in omitir_tablas:
-        columnas_factura = [
-            f"{nombre} {tipo}" for nombre, tipo in _COLUMNAS_FACTURA_ARCA if nombre not in omitir_columnas_factura
-        ]
-        cursor.execute(f"CREATE TABLE factura_arca ({', '.join(columnas_factura)})")
+        if "factura_arca" in reemplazar_tablas:
+            cursor.execute(reemplazar_tablas["factura_arca"])
+        else:
+            columnas_factura = [
+                f"{nombre} {tipo}" for nombre, tipo in _COLUMNAS_FACTURA_ARCA if nombre not in omitir_columnas_factura
+            ]
+            cursor.execute(f"CREATE TABLE factura_arca ({', '.join(columnas_factura)})")
 
     for nombre, sql in _INDICES_UNICOS.items():
         if nombre in omitir_indices:
@@ -461,10 +464,7 @@ class BaseHistoricaSinVersionTest(_PoliticaBase):
 
         self.assertIn(self.inspeccionar().estado, BLOQUEANTES)
 
-    @unittest.expectedFailure
-    def test_requisito_futuro_tabla_esencial_sin_clave_primaria_debe_bloquear(self):
-        # PRAGMA table_info solo se usa para nombres de columnas; una tabla esencial
-        # con id TEXT sin PRIMARY KEY no es una estructura histórica reconocible.
+    def test_tabla_esencial_sin_clave_primaria_debe_bloquear(self):
         _crear_esquema_historico(
             self.conexion,
             reemplazar_tablas={
@@ -475,7 +475,179 @@ class BaseHistoricaSinVersionTest(_PoliticaBase):
             },
         )
 
-        self.assertIn(self.inspeccionar().estado, BLOQUEANTES)
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("clave_primaria_incompatible:clientes", resultado.motivos)
+
+
+class ClavesPrimariasEsencialesTest(_PoliticaBase):
+
+    def _crear_con_claves(self, definiciones, **opciones):
+        reemplazos = {}
+        for tabla, (definicion_id, restriccion) in definiciones.items():
+            originales = (
+                tuple(f"{nombre} {tipo}" for nombre, tipo in _COLUMNAS_FACTURA_ARCA)
+                if tabla == "factura_arca" else _TABLAS_BASE[tabla]
+            )
+            columnas = [columna for columna in originales if columna.split()[0] != "id"]
+            if definicion_id is not None:
+                columnas.insert(0, f"id {definicion_id}")
+            if restriccion is not None:
+                columnas.append(restriccion)
+            reemplazos[tabla] = f"CREATE TABLE {tabla} ({', '.join(columnas)})"
+        _crear_esquema_historico(self.conexion, reemplazar_tablas=reemplazos, **opciones)
+
+    def test_cada_tabla_esencial_con_id_integer_sin_pk_bloquea(self):
+        for tabla in _TABLAS_ESENCIALES_NEGOCIO + _TABLAS_ESENCIALES_OPERATIVAS:
+            with self.subTest(tabla=tabla):
+                conexion = sqlite3.connect(":memory:")
+                try:
+                    originales = (
+                        tuple(f"{nombre} {tipo}" for nombre, tipo in _COLUMNAS_FACTURA_ARCA)
+                        if tabla == "factura_arca" else _TABLAS_BASE[tabla]
+                    )
+                    columnas = [
+                        "id INTEGER" if columna.split()[0] == "id" else columna for columna in originales
+                    ]
+                    _crear_esquema_historico(
+                        conexion, reemplazar_tablas={tabla: f"CREATE TABLE {tabla} ({', '.join(columnas)})"}
+                    )
+
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+
+                    self.assertEqual(resultado.estado, "BLOQUEADA")
+                    self.assertIn(f"clave_primaria_incompatible:{tabla}", resultado.motivos)
+                finally:
+                    conexion.close()
+
+    def test_id_ausente_bloquea_y_conserva_columna_pendiente(self):
+        self._crear_con_claves({"clientes": (None, None)})
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("clave_primaria_incompatible:clientes", resultado.motivos)
+        self.assertIn("columna:clientes.id", resultado.estructuras_pendientes)
+
+    def test_pk_con_tipo_text_int_o_bigint_bloquea(self):
+        for tipo in ("TEXT", "INT", "BIGINT"):
+            with self.subTest(tipo=tipo):
+                # Cada variante usa una base independiente para conservar todo el esquema.
+                conexion = sqlite3.connect(":memory:")
+                try:
+                    columnas = [f"id {tipo} PRIMARY KEY", *_TABLAS_BASE["clientes"][1:]]
+                    _crear_esquema_historico(
+                        conexion, reemplazar_tablas={"clientes": f"CREATE TABLE clientes ({', '.join(columnas)})"}
+                    )
+
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+
+                    self.assertEqual(resultado.estado, "BLOQUEADA")
+                    self.assertIn("clave_primaria_incompatible:clientes", resultado.motivos)
+                finally:
+                    conexion.close()
+
+    def test_pk_en_otra_columna_bloquea(self):
+        self._crear_con_claves({"clientes": ("INTEGER", "PRIMARY KEY(nombre)")})
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("clave_primaria_incompatible:clientes", resultado.motivos)
+
+    def test_pk_compuesta_con_id_primero_bloquea(self):
+        self._crear_con_claves({"clientes": ("INTEGER", "PRIMARY KEY(id, nombre)")})
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("clave_primaria_incompatible:clientes", resultado.motivos)
+
+    def test_pk_compuesta_con_id_segundo_bloquea(self):
+        self._crear_con_claves({"clientes": ("INTEGER", "PRIMARY KEY(nombre, id)")})
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("clave_primaria_incompatible:clientes", resultado.motivos)
+
+    def test_pk_valida_con_y_sin_autoincrement_y_a_nivel_de_tabla(self):
+        self._crear_con_claves({
+            "clientes": ("INTEGER PRIMARY KEY", None),
+            "servicios": ("INTEGER PRIMARY KEY AUTOINCREMENT", None),
+            "cobros": ("INTEGER", "PRIMARY KEY(id)"),
+            "tareas": ("integer PRIMARY KEY", None),
+            "contactos": ('" integer " PRIMARY KEY', None),
+        })
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+        self.assertFalse(any(motivo.startswith("clave_primaria_incompatible:") for motivo in resultado.motivos))
+        # INTEGER PRIMARY KEY puede tener notnull=0 en los metadatos de SQLite.
+        info = self.conexion.execute("PRAGMA table_info(clientes)").fetchall()
+        self.assertEqual(info[0][3], 0)
+
+    def test_varias_incompatibilidades_y_duplicados_conservan_motivos(self):
+        self._crear_con_claves(
+            {"clientes": ("INTEGER", None), "tareas": ("TEXT PRIMARY KEY", None)},
+            omitir_tablas=("cobros",),
+        )
+        self.conexion.executemany(
+            "INSERT INTO usuarios (usuario, clave) VALUES (?, ?)", (("admin", "a"), ("admin", "b"))
+        )
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("clave_primaria_incompatible:clientes", resultado.motivos)
+        self.assertIn("clave_primaria_incompatible:tareas", resultado.motivos)
+        self.assertIn("tabla_esencial_ausente:cobros; no se recreará automáticamente", resultado.motivos)
+        self.assertIn("duplicados:usuarios(usuario)", resultado.motivos)
+
+    def test_version_incompatible_prevalece_y_conserva_motivo_pk(self):
+        self._crear_con_claves({"clientes": ("INTEGER", None)})
+        self.conexion.execute("PRAGMA user_version = 3")
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "VERSION_INCOMPATIBLE")
+        self.assertIn("clave_primaria_incompatible:clientes", resultado.motivos)
+
+    def test_marcador_de_version_prevalece_sobre_pk_incompatible(self):
+        self._crear_con_claves({"clientes": ("INTEGER", None)})
+        self.conexion.execute("CREATE TABLE schema_migrations (version TEXT)")
+
+        self.assertEqual(self.inspeccionar().estado, "VERSION_INCOMPATIBLE")
+
+    def test_extensiones_presentes_sin_pk_no_se_validan_en_esta_etapa(self):
+        self._crear_con_claves({
+            "intentos_emision_arca": ("TEXT", None),
+            "emisor_fiscal_arca_config": ("TEXT", None),
+        })
+
+        self.assertEqual(self.inspeccionar().estado, "HISTORICA_SIN_VERSION")
+
+    def test_inspeccion_de_pk_incompatible_no_modifica_esquema_ni_datos(self):
+        self._crear_con_claves({"clientes": ("INTEGER", None)})
+        self.conexion.execute("INSERT INTO clientes (id, nombre) VALUES (7, 'Cliente ficticio')")
+        self.conexion.commit()
+        antes = tuple(self.conexion.iterdump())
+        cambios = self.conexion.total_changes
+        consultas = []
+        self.conexion.set_trace_callback(consultas.append)
+        try:
+            resultado = self.inspeccionar()
+        finally:
+            self.conexion.set_trace_callback(None)
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(tuple(self.conexion.iterdump()), antes)
+        self.assertEqual(self.conexion.total_changes, cambios)
+        self.assertFalse(self.conexion.in_transaction)
+        self.assertTrue(consultas)
+        self.assertTrue(all(consulta.lstrip().upper().startswith(("SELECT", "PRAGMA")) for consulta in consultas))
 
 
 class BaseIncompletaTest(_PoliticaBase):
