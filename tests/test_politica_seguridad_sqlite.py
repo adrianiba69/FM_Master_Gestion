@@ -1159,10 +1159,10 @@ class DuplicadosFiscalesTest(_PoliticaBase):
             normalizar_identidad_factura("00002", "Factura C", "2-1"),
         )
 
-    @unittest.expectedFailure
-    def test_requisito_futuro_cae_duplicado_tras_trim_debe_bloquear(self):
-        # El detector no busca duplicados de CAE; hoy solo informa el índice
-        # faltante (INCOMPLETA) y la migración fallaría al crearlo.
+    def test_cae_duplicado_tras_trim_debe_bloquear(self):
+        # Sin el índice único de CAE, la migración actual (_migrar_indice_factura_arca)
+        # advierte los duplicados y omite crear el índice, sin necesariamente lanzar
+        # una excepción; el detector debe bloquear antes de llegar a ese punto.
         _crear_esquema_historico(self.conexion, omitir_indices=("idx_factura_arca_cae_unico",))
         _insertar_factura(self.conexion, **_factura_normalizada(cae="12345678901234"))
         _insertar_factura(
@@ -1172,7 +1172,11 @@ class DuplicadosFiscalesTest(_PoliticaBase):
             ),
         )
 
-        self.assertEqual(self.inspeccionar().estado, "BLOQUEADA")
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("duplicados:factura_arca.cae", resultado.motivos)
+        self.assertNotIn("duplicados:factura_arca.identidad_fiscal", resultado.motivos)
 
     @unittest.expectedFailure
     def test_requisito_futuro_colision_tras_normalizar_debe_bloquear(self):
@@ -1207,6 +1211,336 @@ class DuplicadosFiscalesTest(_PoliticaBase):
             _insertar_factura(self.conexion, **datos)
 
         self.assertEqual(self.inspeccionar().estado, "BLOQUEADA")
+
+
+_INDICES_CAE = ("idx_factura_arca_cae_unico", "idx_factura_arca_cae_historico_unico")
+_MOTIVO_CAE = "duplicados:factura_arca.cae"
+_CAE = "12345678901234"
+
+
+def _factura_cae(numero, cae, **extra):
+    """Factura con identidad fiscal propia (número distinto) y el CAE indicado."""
+    return _factura_normalizada(
+        numero_factura=f"00002-{numero:08d}", numero_comprobante_num=numero, cae=cae, **extra
+    )
+
+
+class CaeDuplicadosTest(_PoliticaBase):
+
+    def _insertar(self, *facturas, conexion=None):
+        for factura in facturas:
+            _insertar_factura(conexion or self.conexion, **factura)
+
+    def test_cae_identico_en_facturas_distintas_bloquea(self):
+        _crear_esquema_historico(self.conexion, omitir_indices=_INDICES_CAE)
+        self._insertar(_factura_cae(1, _CAE), _factura_cae(2, _CAE))
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn(_MOTIVO_CAE, resultado.motivos)
+        self.assertNotIn("duplicados:factura_arca.identidad_fiscal", resultado.motivos)
+
+    def test_cae_iguales_tras_trim_de_espacios_ordinarios_bloquea(self):
+        for variante in (f"  {_CAE}", f"{_CAE}   ", f" {_CAE} "):
+            with self.subTest(variante=repr(variante)):
+                conexion = sqlite3.connect(":memory:")
+                try:
+                    _crear_esquema_historico(conexion, omitir_indices=_INDICES_CAE)
+                    self._insertar(_factura_cae(1, _CAE), _factura_cae(2, variante), conexion=conexion)
+
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+
+                    self.assertEqual(resultado.estado, "BLOQUEADA")
+                    self.assertIn(_MOTIVO_CAE, resultado.motivos)
+                finally:
+                    conexion.close()
+
+    def test_cae_duplicado_con_ambiente_nulo_bloquea(self):
+        _crear_esquema_historico(self.conexion, omitir_indices=_INDICES_CAE)
+        self._insertar(
+            _factura_cae(1, _CAE, ambiente_arca=None), _factura_cae(2, f" {_CAE}", ambiente_arca=None)
+        )
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn(_MOTIVO_CAE, resultado.motivos)
+
+    def test_cae_duplicado_sin_columna_ambiente_se_trata_como_grupo_historico(self):
+        _crear_esquema_historico(
+            self.conexion, omitir_columnas_factura=("ambiente_arca",), omitir_indices=_INDICES_FACTURA
+        )
+        for factura in (_factura_cae(1, _CAE), _factura_cae(2, f"{_CAE} ")):
+            factura.pop("ambiente_arca")
+            _insertar_factura(self.conexion, **factura)
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn(_MOTIVO_CAE, resultado.motivos)
+        self.assertIn("columna:factura_arca.ambiente_arca", resultado.estructuras_pendientes)
+
+    def test_mismo_cae_en_homologacion_y_produccion_no_bloquea(self):
+        _crear_esquema_historico(self.conexion)
+        self._insertar(
+            _factura_cae(1, _CAE, ambiente_arca="HOMOLOGACION"),
+            _factura_cae(2, _CAE, ambiente_arca="PRODUCCION"),
+        )
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+        self.assertNotIn(_MOTIVO_CAE, resultado.motivos)
+
+    def test_mismo_cae_en_ambiente_conocido_y_desconocido_no_mezcla_grupos(self):
+        _crear_esquema_historico(self.conexion)
+        self._insertar(
+            _factura_cae(1, _CAE, ambiente_arca="HOMOLOGACION"),
+            _factura_cae(2, _CAE, ambiente_arca=None),
+        )
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+        self.assertNotIn(_MOTIVO_CAE, resultado.motivos)
+        self.assertTrue(
+            any(a.startswith("factura_arca.ambiente_historico_desconocido:1") for a in resultado.advertencias)
+        )
+
+    def test_mismo_cae_entre_emisores_distintos_del_mismo_ambiente_bloquea(self):
+        _crear_esquema_historico(self.conexion, omitir_indices=_INDICES_CAE)
+        self._insertar(_factura_cae(1, _CAE, emisor_id=1), _factura_cae(1, _CAE, emisor_id=2))
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn(_MOTIVO_CAE, resultado.motivos)
+        self.assertNotIn("duplicados:factura_arca.identidad_fiscal", resultado.motivos)
+
+    def test_cae_nulos_vacios_o_solo_espacios_no_son_duplicados(self):
+        _crear_esquema_historico(self.conexion)
+        valores = (None, None, "", "", " ", "    ")
+        self._insertar(*(_factura_cae(numero, cae) for numero, cae in enumerate(valores, start=1)))
+        self._insertar(*(
+            _factura_cae(numero, cae, ambiente_arca=None) for numero, cae in enumerate(valores, start=11)
+        ))
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+        self.assertNotIn(_MOTIVO_CAE, resultado.motivos)
+
+    def test_ceros_iniciales_se_conservan_en_columna_text(self):
+        _crear_esquema_historico(self.conexion)
+        self._insertar(_factura_cae(1, "01234567890123"), _factura_cae(2, "1234567890123"))
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+        self.assertNotIn(_MOTIVO_CAE, resultado.motivos)
+
+    def test_cae_numerico_y_textual_iguales_se_detectan_como_duplicados(self):
+        tipos = {"TEXT": "text", "sin_tipo": "integer"}
+        for tipo, tipo_almacenado in tipos.items():
+            with self.subTest(tipo=tipo):
+                conexion = sqlite3.connect(":memory:")
+                try:
+                    definicion = "cae TEXT" if tipo == "TEXT" else "cae"
+                    columnas = [
+                        definicion if nombre == "cae" else f"{nombre} {tipo_sql}"
+                        for nombre, tipo_sql in _COLUMNAS_FACTURA_ARCA
+                    ]
+                    _crear_esquema_historico(
+                        conexion,
+                        omitir_indices=_INDICES_CAE,
+                        reemplazar_tablas={"factura_arca": f"CREATE TABLE factura_arca ({', '.join(columnas)})"},
+                    )
+                    self._insertar(
+                        _factura_cae(1, int(_CAE)), _factura_cae(2, f" {_CAE} "), conexion=conexion
+                    )
+                    self.assertEqual(
+                        conexion.execute("SELECT typeof(cae) FROM factura_arca WHERE id=1").fetchone()[0],
+                        tipo_almacenado,
+                    )
+
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+
+                    self.assertEqual(resultado.estado, "BLOQUEADA")
+                    self.assertIn(_MOTIVO_CAE, resultado.motivos)
+                finally:
+                    conexion.close()
+
+    def test_afinidad_numerica_pierde_ceros_iniciales_antes_de_la_inspeccion(self):
+        # Limitación documentada: con afinidad NUMERIC SQLite guarda '0123...' como
+        # entero y el detector ya no puede distinguirlo del CAE sin ceros.
+        columnas = [
+            "cae NUMERIC" if nombre == "cae" else f"{nombre} {tipo_sql}"
+            for nombre, tipo_sql in _COLUMNAS_FACTURA_ARCA
+        ]
+        _crear_esquema_historico(
+            self.conexion,
+            omitir_indices=_INDICES_CAE,
+            reemplazar_tablas={"factura_arca": f"CREATE TABLE factura_arca ({', '.join(columnas)})"},
+        )
+        self._insertar(_factura_cae(1, "01234567890123"), _factura_cae(2, "1234567890123"))
+
+        self.assertIn(_MOTIVO_CAE, self.inspeccionar().motivos)
+
+    def test_trim_de_sqlite_no_equivale_a_strip_de_python(self):
+        # TRIM(x) de SQLite solo quita espacios ordinarios; str.strip() también quita
+        # tabulaciones, saltos de línea y espacios Unicode. El detector reproduce el
+        # contrato de los índices (TRIM), por lo que estas variantes no se detectan.
+        for variante in (f"\t{_CAE}", f"{_CAE}\n", f"{_CAE}\r\n", f"\u00a0{_CAE}", f"{_CAE}\u2003"):
+            with self.subTest(variante=repr(variante)):
+                self.assertEqual(variante.strip(), _CAE)
+                conexion = sqlite3.connect(":memory:")
+                try:
+                    _crear_esquema_historico(conexion)
+                    self._insertar(_factura_cae(1, _CAE), _factura_cae(2, variante), conexion=conexion)
+                    self.assertEqual(
+                        conexion.execute("SELECT COUNT(DISTINCT TRIM(cae)) FROM factura_arca").fetchone()[0], 2
+                    )
+
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+
+                    self.assertNotIn(_MOTIVO_CAE, resultado.motivos)
+                    self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+                finally:
+                    conexion.close()
+
+    def test_deteccion_sin_ningun_indice_unico_de_factura(self):
+        _crear_esquema_historico(self.conexion, omitir_indices=_INDICES_FACTURA)
+        self._insertar(_factura_cae(1, _CAE), _factura_cae(2, f" {_CAE}"))
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn(_MOTIVO_CAE, resultado.motivos)
+        for nombre in _INDICES_FACTURA:
+            self.assertIn(f"indice:{nombre}", resultado.estructuras_pendientes)
+
+    def test_deteccion_sin_columnas_de_identidad_normalizada(self):
+        normalizadas = ("punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num")
+        _crear_esquema_historico(
+            self.conexion,
+            omitir_columnas_factura=normalizadas,
+            omitir_indices=("idx_factura_arca_identidad_unica", "idx_factura_arca_identidad_historica_unica")
+            + _INDICES_CAE,
+        )
+        for factura in (_factura_cae(1, _CAE), _factura_cae(2, f"{_CAE} ")):
+            for columna in normalizadas:
+                factura.pop(columna)
+            _insertar_factura(self.conexion, **factura)
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn(_MOTIVO_CAE, resultado.motivos)
+
+    def test_cae_duplicado_acumula_motivos_con_otros_problemas(self):
+        _crear_esquema_historico(
+            self.conexion,
+            omitir_tablas=("cobros",),
+            omitir_indices=_INDICES_CAE + ("idx_factura_arca_identidad_unica",),
+            reemplazar_tablas={
+                "clientes": f"CREATE TABLE clientes ({', '.join(['id INTEGER', *_TABLAS_BASE['clientes'][1:]])})"
+            },
+        )
+        self._insertar(_factura_cae(1, _CAE), _factura_cae(1, f" {_CAE}"))
+        self.conexion.execute("CREATE TRIGGER trg_cae AFTER INSERT ON factura_arca BEGIN SELECT 1; END")
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        for motivo in (
+            "tabla_esencial_ausente:cobros; no se recreará automáticamente",
+            "clave_primaria_incompatible:clientes",
+            "trigger_no_reconocido:trg_cae(factura_arca)",
+            "duplicados:factura_arca.identidad_fiscal",
+            _MOTIVO_CAE,
+        ):
+            self.assertIn(motivo, resultado.motivos)
+
+    def test_version_incompatible_prevalece_y_conserva_motivo_cae(self):
+        for caso, sentencia in (
+            ("user_version", "PRAGMA user_version = 5"),
+            ("marcador", "CREATE TABLE schema_migrations (version TEXT)"),
+        ):
+            with self.subTest(caso=caso):
+                conexion = sqlite3.connect(":memory:")
+                try:
+                    _crear_esquema_historico(conexion, omitir_indices=_INDICES_CAE)
+                    self._insertar(_factura_cae(1, _CAE), _factura_cae(2, _CAE), conexion=conexion)
+                    conexion.execute(sentencia)
+
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+
+                    self.assertEqual(resultado.estado, "VERSION_INCOMPATIBLE")
+                    self.assertIn(_MOTIVO_CAE, resultado.motivos)
+                finally:
+                    conexion.close()
+
+    def test_inspeccion_no_modifica_datos_ni_esquema(self):
+        _crear_esquema_historico(self.conexion, omitir_indices=_INDICES_CAE)
+        self._insertar(_factura_cae(1, f" {_CAE} "), _factura_cae(2, _CAE), _factura_cae(3, None))
+        self.conexion.commit()
+        antes = tuple(self.conexion.iterdump())
+        cambios = self.conexion.total_changes
+        consultas = []
+        self.conexion.set_trace_callback(consultas.append)
+        try:
+            resultado = self.inspeccionar()
+        finally:
+            self.conexion.set_trace_callback(None)
+
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(tuple(self.conexion.iterdump()), antes)
+        self.assertEqual(self.conexion.total_changes, cambios)
+        self.assertFalse(self.conexion.in_transaction)
+        self.assertEqual(
+            [fila[0] for fila in self.conexion.execute("SELECT cae FROM factura_arca ORDER BY id")],
+            [f" {_CAE} ", _CAE, None],
+        )
+        self.assertTrue(consultas)
+        self.assertTrue(all(consulta.lstrip().upper().startswith(("SELECT", "PRAGMA")) for consulta in consultas))
+
+
+class IndiceUnicoCaeEquivalenteTest(_PoliticaBase):
+    """Índices de CAE creados a mano en memoria (SQL de _INDICES_UNICOS), sin migraciones."""
+
+    def setUp(self):
+        super().setUp()
+        _crear_esquema_historico(self.conexion)
+        _insertar_factura(self.conexion, **_factura_cae(1, _CAE))
+        _insertar_factura(self.conexion, **_factura_cae(2, _CAE, ambiente_arca=None))
+
+    def test_indice_rechaza_lo_que_el_detector_bloquea(self):
+        for numero, ambiente, cae in (
+            (3, "HOMOLOGACION", f" {_CAE} "),
+            (4, "HOMOLOGACION", int(_CAE)),
+            (5, None, f"{_CAE}  "),
+        ):
+            with self.subTest(ambiente=ambiente, cae=repr(cae)):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    _insertar_factura(self.conexion, **_factura_cae(numero, cae, ambiente_arca=ambiente))
+
+    def test_indice_acepta_lo_que_el_detector_no_bloquea(self):
+        for numero, ambiente, cae in (
+            (3, "PRODUCCION", _CAE),
+            (4, "HOMOLOGACION", f"\t{_CAE}"),
+            (5, "HOMOLOGACION", f"\u00a0{_CAE}"),
+            (6, "HOMOLOGACION", None),
+            (7, "HOMOLOGACION", None),
+            (8, "HOMOLOGACION", "   "),
+            (9, None, ""),
+        ):
+            _insertar_factura(self.conexion, **_factura_cae(numero, cae, ambiente_arca=ambiente))
+
+        resultado = self.inspeccionar()
+
+        self.assertNotIn(_MOTIVO_CAE, resultado.motivos)
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
 
 
 class IndicesDesconocidosTest(_PoliticaBase):

@@ -262,6 +262,20 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
             ):
                 duplicados.append("duplicados:factura_arca.identidad_fiscal")
 
+        # Reproduce idx_factura_arca_cae_unico / _historico_unico: TRIM de SQLite, separado por ambiente.
+        if "cae" in columnas_factura:
+            cae_utilizable = "TRIM(COALESCE(cae, '')) <> ''"
+            if "ambiente_arca" in columnas_factura:
+                cae_duplicado = contar_grupo_duplicado(
+                    "factura_arca", "ambiente_arca, TRIM(cae)", f"ambiente_arca IS NOT NULL AND {cae_utilizable}"
+                ) or contar_grupo_duplicado(
+                    "factura_arca", "TRIM(cae)", f"ambiente_arca IS NULL AND {cae_utilizable}"
+                )
+            else:
+                cae_duplicado = contar_grupo_duplicado("factura_arca", "TRIM(cae)", cae_utilizable)
+            if cae_duplicado:
+                duplicados.append("duplicados:factura_arca.cae")
+
         columnas_intento = columnas_por_tabla.get("intentos_emision_arca", set())
         identidad_intento = {
             "ambiente_arca", "cuit_emisor", "punto_venta", "tipo_comprobante", "numero_planificado", "estado",
