@@ -6,7 +6,12 @@ from pathlib import Path
 
 from runtime_paths import DATABASE_PATH
 from services.arca.ambiente_arca import AmbienteArcaInvalidoError, normalizar_ambiente_arca
-from services.arca.fiscal_normalization import normalizar_identidad_factura
+from services.arca.fiscal_normalization import (
+    normalizar_identidad_factura,
+    normalizar_punto_venta,
+    normalizar_tipo_comprobante,
+    separar_numero_factura,
+)
 from services.arca.snapshot_fiscal_service import CODIGO_VALIDO, validar_integridad_snapshot
 
 DB_NAME = str(DATABASE_PATH)
@@ -299,6 +304,41 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
             if colision_proyectada:
                 duplicados.append("duplicados:factura_arca.identidad_fiscal_proyectada")
 
+        contradicciones_fiscales = []
+        columnas_normalizadas = {"punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num"}
+        textos_fiscales = {"punto_venta", "tipo_comprobante", "numero_factura"}
+        if columnas_normalizadas.issubset(columnas_factura) and textos_fiscales.intersection(columnas_factura):
+            columnas_comparacion = (
+                "punto_venta", "tipo_comprobante", "numero_factura",
+                "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num",
+            )
+            seleccion_comparacion = ", ".join(
+                columna if columna in columnas_factura else f"NULL AS {columna}"
+                for columna in columnas_comparacion
+            )
+            cursor.execute(f"SELECT {seleccion_comparacion} FROM factura_arca")
+            for punto_venta, tipo, numero, punto_num, tipo_num, numero_num in cursor:
+                try:
+                    punto_textual = normalizar_punto_venta(punto_venta)
+                except ValueError:
+                    # Un texto no interpretable no demuestra una contradicción.
+                    punto_textual = None
+                tipo_textual = normalizar_tipo_comprobante(tipo)
+                separado = separar_numero_factura(numero)
+                comparaciones = (
+                    (punto_num, punto_textual),
+                    (punto_num, separado[0] if separado is not None else None),
+                    (numero_num, separado[1] if separado is not None else None),
+                    (tipo_num, tipo_textual),
+                )
+                if any(
+                    isinstance(guardado, int) and not isinstance(guardado, bool) and guardado > 0
+                    and textual is not None and guardado != textual
+                    for guardado, textual in comparaciones
+                ):
+                    contradicciones_fiscales.append("contradiccion:factura_arca.identidad_fiscal")
+                    break
+
         # Reproduce idx_factura_arca_cae_unico / _historico_unico: TRIM de SQLite, separado por ambiente.
         if "cae" in columnas_factura:
             cae_utilizable = "TRIM(COALESCE(cae, '')) <> ''"
@@ -399,7 +439,10 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
                     + "."
                 )
             estado = "VERSION_INCOMPATIBLE"
-        elif duplicados or tablas_esenciales_ausentes or claves_primarias_incompatibles or triggers_no_reconocidos:
+        elif (
+            duplicados or tablas_esenciales_ausentes or claves_primarias_incompatibles
+            or triggers_no_reconocidos or contradicciones_fiscales
+        ):
             motivos.extend(
                 f"tabla_esencial_ausente:{tabla}; no se recreará automáticamente"
                 for tabla in tablas_esenciales_ausentes
@@ -422,6 +465,7 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
         motivos.extend(f"clave_primaria_incompatible:{tabla}" for tabla in claves_primarias_incompatibles)
         motivos.extend(triggers_no_reconocidos)
         motivos.extend(duplicados)
+        motivos.extend(contradicciones_fiscales)
         return ResultadoInspeccionBaseSQLite(
             estado=estado,
             version_registrada=version_registrada,
