@@ -1178,11 +1178,9 @@ class DuplicadosFiscalesTest(_PoliticaBase):
         self.assertIn("duplicados:factura_arca.cae", resultado.motivos)
         self.assertNotIn("duplicados:factura_arca.identidad_fiscal", resultado.motivos)
 
-    @unittest.expectedFailure
     def test_requisito_futuro_colision_tras_normalizar_debe_bloquear(self):
-        # Con columnas normalizadas en NULL el detector informa un backfill
-        # pendiente (INCOMPLETA), pero no proyecta la normalización: ambas
-        # facturas producirían la misma identidad y el índice único fallaría.
+        # Con el índice presente, el segundo UPDATE de normalización fallaría.
+        # Sin él, la migración de índices advertiría y omitiría crearlo.
         _crear_esquema_historico(self.conexion)
         for numero, cae in (("00002-00000001", "111"), ("2-1", "222")):
             _insertar_factura(
@@ -1196,12 +1194,13 @@ class DuplicadosFiscalesTest(_PoliticaBase):
                 ),
             )
 
-        self.assertEqual(self.inspeccionar().estado, "BLOQUEADA")
+        resultado = self.inspeccionar()
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("duplicados:factura_arca.identidad_fiscal_proyectada", resultado.motivos)
 
-    @unittest.expectedFailure
     def test_requisito_futuro_duplicados_en_factura_sin_ambiente_debe_bloquear(self):
-        # Sin la columna ambiente_arca el detector omite por completo la revisión
-        # de identidad fiscal; los duplicados quedan ocultos tras INCOMPLETA.
+        # La migración agrega ambiente_arca sin backfill: ambas filas quedan en
+        # el grupo histórico NULL, cuyo índice no podría crearse por duplicados.
         _crear_esquema_historico(
             self.conexion, omitir_columnas_factura=("ambiente_arca",), omitir_indices=_INDICES_FACTURA
         )
@@ -1210,7 +1209,311 @@ class DuplicadosFiscalesTest(_PoliticaBase):
             datos.pop("ambiente_arca")
             _insertar_factura(self.conexion, **datos)
 
-        self.assertEqual(self.inspeccionar().estado, "BLOQUEADA")
+        resultado = self.inspeccionar()
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("duplicados:factura_arca.identidad_fiscal_proyectada", resultado.motivos)
+
+
+_MOTIVO_PROYECCION = "duplicados:factura_arca.identidad_fiscal_proyectada"
+_COLUMNAS_NORMALIZADAS = ("punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num")
+
+
+def _factura_pendiente(**extra):
+    valores = dict.fromkeys(_COLUMNAS_NORMALIZADAS)
+    valores.update(extra)
+    return _factura_normalizada(**valores)
+
+
+class IdentidadFiscalProyectadaTest(_PoliticaBase):
+
+    def _preparar(self, *facturas, **esquema):
+        conexion = sqlite3.connect(":memory:")
+        self.addCleanup(conexion.close)
+        _crear_esquema_historico(conexion, **esquema)
+        omitidas = esquema.get("omitir_columnas_factura", ())
+        for factura in facturas:
+            _insertar_factura(conexion, **{k: v for k, v in factura.items() if k not in omitidas})
+        return conexion
+
+    def _comprobar_colision(self, conexion):
+        resultado = database.inspeccionar_estado_base_sqlite(conexion)
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertEqual(resultado.motivos.count(_MOTIVO_PROYECCION), 1)
+        return resultado
+
+    def test_variantes_textuales_colisionan(self):
+        for punto, tipo, numero in (
+            ("2", "11", "2-1"),
+            (" 0002 ", " factura c ", " 0002-001 "),
+            ("\t2\n", "\tFACTURA C\n", "\t2-1\n"),
+            ("\u00a02\u00a0", "11", "\u00a02-1\u00a0"),
+        ):
+            with self.subTest(punto=punto, tipo=tipo, numero=numero):
+                conexion = self._preparar(
+                    _factura_pendiente(cae="111"),
+                    _factura_pendiente(punto_venta=punto, tipo_comprobante=tipo, numero_factura=numero, cae="222"),
+                )
+                resultado = self._comprobar_colision(conexion)
+                self.assertNotIn("duplicados:factura_arca.identidad_fiscal", resultado.motivos)
+
+    def test_alias_factura_a_colisionan(self):
+        conexion = self._preparar(
+            _factura_pendiente(tipo_comprobante="Factura A"),
+            _factura_pendiente(tipo_comprobante=" 1 ", numero_factura="2-1"),
+        )
+        self._comprobar_colision(conexion)
+
+    def test_fila_normalizada_y_pendiente_colisionan(self):
+        conexion = self._preparar(
+            _factura_normalizada(cae="111"), _factura_pendiente(numero_factura="2-1", cae="222")
+        )
+        self._comprobar_colision(conexion)
+
+    def test_cada_combinacion_parcial_se_recalcula_completa(self):
+        for mascara in range(1, 8):
+            with self.subTest(mascara=mascara):
+                parcial = {
+                    columna: None if mascara & (1 << posicion) else 99
+                    for posicion, columna in enumerate(_COLUMNAS_NORMALIZADAS)
+                }
+                conexion = self._preparar(
+                    _factura_normalizada(), _factura_normalizada(numero_factura="2-1", **parcial)
+                )
+                self._comprobar_colision(conexion)
+
+    def test_cada_columna_normalizada_ausente_se_proyecta_como_null(self):
+        for omitidas in [(columna,) for columna in _COLUMNAS_NORMALIZADAS] + [_COLUMNAS_NORMALIZADAS]:
+            with self.subTest(omitidas=omitidas):
+                conexion = self._preparar(
+                    _factura_pendiente(), _factura_pendiente(numero_factura="2-1"),
+                    omitir_columnas_factura=omitidas,
+                    omitir_indices=_INDICES_FACTURA,
+                )
+                self._comprobar_colision(conexion)
+
+    def test_sin_ambiente_ni_columnas_normalizadas(self):
+        conexion = self._preparar(
+            _factura_pendiente(), _factura_pendiente(numero_factura="2-1"),
+            omitir_columnas_factura=("ambiente_arca", *_COLUMNAS_NORMALIZADAS),
+            omitir_indices=_INDICES_FACTURA,
+        )
+        self._comprobar_colision(conexion)
+
+    def test_colisiones_en_cada_ambiente_y_grupo_historico(self):
+        for ambiente in ("HOMOLOGACION", "PRODUCCION", None):
+            with self.subTest(ambiente=ambiente):
+                conexion = self._preparar(
+                    _factura_pendiente(ambiente_arca=ambiente),
+                    _factura_pendiente(ambiente_arca=ambiente, numero_factura="2-1"),
+                )
+                self._comprobar_colision(conexion)
+
+    def test_no_mezcla_ambientes_ni_infiere_null(self):
+        conexion = self._preparar(
+            *(_factura_pendiente(ambiente_arca=ambiente) for ambiente in ("HOMOLOGACION", "PRODUCCION", None))
+        )
+        resultado = database.inspeccionar_estado_base_sqlite(conexion)
+        self.assertEqual(resultado.estado, "INCOMPLETA")
+        self.assertNotIn(_MOTIVO_PROYECCION, resultado.motivos)
+
+    def test_no_mezcla_emisores_aunque_compartan_cuit(self):
+        conexion = self._preparar(_factura_pendiente(emisor_id=1), _factura_pendiente(emisor_id=2))
+        conexion.executemany(
+            "INSERT INTO emisores_facturacion(id, alias, cuit) VALUES (?, ?, ?)",
+            ((1, "Uno", "20111111112"), (2, "Dos", "20111111112")),
+        )
+        resultado = database.inspeccionar_estado_base_sqlite(conexion)
+        self.assertEqual(resultado.estado, "INCOMPLETA")
+        self.assertNotIn(_MOTIVO_PROYECCION, resultado.motivos)
+
+    def test_identidades_realmente_distintas_no_colisionan(self):
+        for distinta in (
+            {"punto_venta": "3", "numero_factura": "3-1"},
+            {"tipo_comprobante": "Factura A"},
+            {"numero_factura": "2-2"},
+        ):
+            with self.subTest(distinta=distinta):
+                conexion = self._preparar(_factura_pendiente(), _factura_pendiente(**distinta))
+                resultado = database.inspeccionar_estado_base_sqlite(conexion)
+                self.assertEqual(resultado.estado, "INCOMPLETA")
+                self.assertNotIn(_MOTIVO_PROYECCION, resultado.motivos)
+
+    def test_no_recalcula_filas_completas_aunque_el_texto_contradiga(self):
+        conexion = self._preparar(
+            _factura_normalizada(),
+            _factura_normalizada(numero_comprobante_num=2),
+        )
+        with patch.object(database, "normalizar_identidad_factura", side_effect=AssertionError("No debe normalizar")):
+            resultado = database.inspeccionar_estado_base_sqlite(conexion)
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+        self.assertNotIn(_MOTIVO_PROYECCION, resultado.motivos)
+
+    def test_filas_incompletas_o_contradictorias_no_colisionan(self):
+        for datos in (
+            {"punto_venta": None},
+            {"punto_venta": "0"},
+            {"tipo_comprobante": None},
+            {"tipo_comprobante": "Factura B"},
+            {"numero_factura": None},
+            {"numero_factura": ""},
+            {"numero_factura": "   "},
+            {"numero_factura": "sin numero"},
+            {"numero_factura": "3-1"},
+            {"numero_factura": "2-0"},
+            {"numero_factura": "000002-000000001"},
+        ):
+            with self.subTest(datos=datos):
+                factura = _factura_pendiente(**datos)
+                conexion = self._preparar(factura, factura)
+                resultado = database.inspeccionar_estado_base_sqlite(conexion)
+                estado_esperado = (
+                    "HISTORICA_SIN_VERSION" if datos.get("numero_factura", "2-1") in (None, "", "   ")
+                    else "INCOMPLETA"
+                )
+                self.assertEqual(resultado.estado, estado_esperado)
+                self.assertNotIn(_MOTIVO_PROYECCION, resultado.motivos)
+
+    def test_emisor_null_cero_o_negativo_no_participa(self):
+        for emisor in (None, 0, -1):
+            with self.subTest(emisor=emisor):
+                factura = _factura_pendiente(emisor_id=emisor)
+                conexion = self._preparar(factura, factura)
+                self.assertNotIn(_MOTIVO_PROYECCION, database.inspeccionar_estado_base_sqlite(conexion).motivos)
+
+    def test_componentes_guardados_cero_o_negativos_no_participan_ni_se_corrigen(self):
+        for columna in _COLUMNAS_NORMALIZADAS:
+            for valor in (0, -1):
+                with self.subTest(columna=columna, valor=valor):
+                    factura = _factura_normalizada(**{columna: valor})
+                    conexion = self._preparar(factura, factura)
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+                    self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+                    self.assertNotIn(_MOTIVO_PROYECCION, resultado.motivos)
+
+    def test_seleccion_respeta_trim_sqlite_y_no_strip_python(self):
+        for numero, seleccionada in (("", False), ("   ", False), (None, False), ("\t", True)):
+            with self.subTest(numero=repr(numero)):
+                conexion = self._preparar(
+                    _factura_normalizada(numero_factura=numero, numero_comprobante_num=None)
+                )
+                with patch.object(
+                    database, "normalizar_identidad_factura", wraps=normalizar_identidad_factura
+                ) as normalizador:
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+                self.assertEqual(normalizador.call_count, int(seleccionada))
+                self.assertNotIn(_MOTIVO_PROYECCION, resultado.motivos)
+                self.assertNotEqual(resultado.estado, "BLOQUEADA")
+
+    def test_digitos_unicode_equivalentes_colisionan(self):
+        conexion = self._preparar(
+            _factura_pendiente(), _factura_pendiente(punto_venta="\u0662", numero_factura="\u0662-\u0661")
+        )
+        self._comprobar_colision(conexion)
+
+    def test_error_de_normalizacion_bloquea_sin_omitir_fila(self):
+        conexion = self._preparar(_factura_pendiente(punto_venta="\u00b2"))
+        resultado = database.inspeccionar_estado_base_sqlite(conexion)
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertIn("No se pudo inspeccionar la conexión SQLite de forma confiable (ValueError).", resultado.motivos)
+
+    def test_no_deja_de_inspeccionar_al_encontrar_colision(self):
+        conexion = self._preparar(
+            _factura_pendiente(), _factura_pendiente(), _factura_pendiente(punto_venta="\u00b2")
+        )
+        resultado = database.inspeccionar_estado_base_sqlite(conexion)
+        self.assertEqual(resultado.estado, "BLOQUEADA")
+        self.assertTrue(any("ValueError" in motivo for motivo in resultado.motivos))
+
+    def test_acumula_cae_triggers_y_problemas_estructurales(self):
+        conexion = self._preparar(
+            _factura_pendiente(cae="111"), _factura_pendiente(cae=" 111 "),
+            omitir_tablas=("cobros",),
+            omitir_indices=_INDICES_FACTURA,
+            reemplazar_tablas={
+                "clientes": f"CREATE TABLE clientes ({', '.join(['id INTEGER', *_TABLAS_BASE['clientes'][1:]])})"
+            },
+        )
+        conexion.execute("CREATE TRIGGER trg_proyeccion AFTER INSERT ON factura_arca BEGIN SELECT 1; END")
+        resultado = self._comprobar_colision(conexion)
+        for motivo in (
+            "duplicados:factura_arca.cae",
+            "trigger_no_reconocido:trg_proyeccion(factura_arca)",
+            "clave_primaria_incompatible:clientes",
+            "tabla_esencial_ausente:cobros; no se recreará automáticamente",
+        ):
+            self.assertIn(motivo, resultado.motivos)
+
+    def test_conserva_control_de_duplicados_ya_normalizados(self):
+        conexion = self._preparar(
+            _factura_normalizada(), _factura_normalizada(), omitir_indices=_INDICES_FACTURA
+        )
+        resultado = self._comprobar_colision(conexion)
+        self.assertIn("duplicados:factura_arca.identidad_fiscal", resultado.motivos)
+
+    def test_version_incompatible_prevalece_y_conserva_colision(self):
+        for sentencia in ("PRAGMA user_version=9", "CREATE TABLE schema_migrations(version TEXT)"):
+            with self.subTest(sentencia=sentencia):
+                conexion = self._preparar(_factura_pendiente(), _factura_pendiente(numero_factura="2-1"))
+                conexion.execute(sentencia)
+                resultado = database.inspeccionar_estado_base_sqlite(conexion)
+                self.assertEqual(resultado.estado, "VERSION_INCOMPATIBLE")
+                self.assertIn(_MOTIVO_PROYECCION, resultado.motivos)
+
+    def test_inspeccion_solo_lectura_no_ejecuta_trigger_ni_backfill(self):
+        conexion = self._preparar(_factura_pendiente(), _factura_pendiente(numero_factura="2-1"))
+        conexion.execute(
+            "CREATE TRIGGER trg_no_actualizar BEFORE UPDATE ON factura_arca "
+            "BEGIN SELECT RAISE(ABORT, 'No actualizar'); END"
+        )
+        conexion.commit()
+        antes = tuple(conexion.iterdump())
+        cambios = conexion.total_changes
+        consultas = []
+        conexion.set_trace_callback(consultas.append)
+        try:
+            self._comprobar_colision(conexion)
+        finally:
+            conexion.set_trace_callback(None)
+        self.assertEqual(tuple(conexion.iterdump()), antes)
+        self.assertEqual(conexion.total_changes, cambios)
+        self.assertFalse(conexion.in_transaction)
+        self.assertEqual(
+            conexion.execute(
+                "SELECT punto_venta_num, tipo_comprobante_num, numero_comprobante_num FROM factura_arca"
+            ).fetchall(),
+            [(None, None, None), (None, None, None)],
+        )
+        self.assertTrue(consultas)
+        self.assertTrue(all(consulta.lstrip().upper().startswith(("SELECT", "PRAGMA")) for consulta in consultas))
+
+    def test_equivalencia_con_indices_creados_manualmente_sin_migrar(self):
+        # Los resultados esperados se escriben a mano; no se obtienen del detector.
+        for ambiente in ("HOMOLOGACION", "PRODUCCION", None):
+            for cambios, normalizada, colision in (
+                ({"punto_venta": "2", "tipo_comprobante": "11", "numero_factura": "2-1"}, (2, 11, 1), True),
+                ({"tipo_comprobante": "Factura A"}, (2, 1, 1), False),
+                ({"punto_venta": "3", "numero_factura": "3-1"}, (3, 11, 1), False),
+                ({"numero_factura": "2-2"}, (2, 11, 2), False),
+            ):
+                with self.subTest(ambiente=ambiente, cambios=cambios):
+                    primera = _factura_normalizada(ambiente_arca=ambiente)
+                    pendiente = _factura_pendiente(ambiente_arca=ambiente, **cambios)
+                    conexion = self._preparar(primera, pendiente)
+                    resultado = database.inspeccionar_estado_base_sqlite(conexion)
+                    self.assertEqual(_MOTIVO_PROYECCION in resultado.motivos, colision)
+                    self.assertEqual(
+                        normalizar_identidad_factura(
+                            pendiente["punto_venta"], pendiente["tipo_comprobante"], pendiente["numero_factura"]
+                        ),
+                        normalizada,
+                    )
+                    equivalente = self._preparar(primera)
+                    candidata = dict(pendiente, **dict(zip(_COLUMNAS_NORMALIZADAS, normalizada)))
+                    if colision:
+                        with self.assertRaises(sqlite3.IntegrityError):
+                            _insertar_factura(equivalente, **candidata)
+                    else:
+                        _insertar_factura(equivalente, **candidata)
 
 
 _INDICES_CAE = ("idx_factura_arca_cae_unico", "idx_factura_arca_cae_historico_unico")

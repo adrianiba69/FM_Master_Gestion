@@ -262,6 +262,43 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
             ):
                 duplicados.append("duplicados:factura_arca.identidad_fiscal")
 
+        if {"emisor_id", "punto_venta", "tipo_comprobante", "numero_factura"}.issubset(columnas_factura):
+            columnas_proyeccion = (
+                "ambiente_arca", "emisor_id", "punto_venta", "tipo_comprobante", "numero_factura",
+                "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num",
+            )
+            seleccion_proyeccion = ", ".join(
+                columna if columna in columnas_factura else f"NULL AS {columna}"
+                for columna in columnas_proyeccion
+            )
+            # La selección y la validez conservan las comparaciones de SQLite de la migración y los índices.
+            cursor.execute(
+                f"SELECT {', '.join(columnas_proyeccion)}, emisor_id > 0, "
+                "punto_venta_num IS NULL OR tipo_comprobante_num IS NULL OR "
+                "(TRIM(COALESCE(numero_factura, '')) <> '' AND numero_comprobante_num IS NULL), "
+                "punto_venta_num > 0 AND tipo_comprobante_num > 0 AND numero_comprobante_num > 0 "
+                f"FROM (SELECT {seleccion_proyeccion} FROM factura_arca)"
+            )
+            identidades_proyectadas = set()
+            colision_proyectada = False
+            for (ambiente, emisor, punto_venta, tipo, numero, punto_num, tipo_num, numero_num,
+                 emisor_utilizable, requiere_normalizacion, identidad_utilizable) in cursor:
+                if requiere_normalizacion:
+                    proyectada = normalizar_identidad_factura(punto_venta, tipo, numero)
+                    if not (
+                        (str(numero or "").strip() and proyectada[0] is None)
+                        or proyectada[0] is None or proyectada[1] is None
+                    ):
+                        punto_num, tipo_num, numero_num = proyectada
+                        identidad_utilizable = all(valor is not None and valor > 0 for valor in proyectada)
+                if emisor_utilizable and identidad_utilizable:
+                    clave_proyectada = (ambiente, emisor, punto_num, tipo_num, numero_num)
+                    if clave_proyectada in identidades_proyectadas:
+                        colision_proyectada = True
+                    identidades_proyectadas.add(clave_proyectada)
+            if colision_proyectada:
+                duplicados.append("duplicados:factura_arca.identidad_fiscal_proyectada")
+
         # Reproduce idx_factura_arca_cae_unico / _historico_unico: TRIM de SQLite, separado por ambiente.
         if "cae" in columnas_factura:
             cae_utilizable = "TRIM(COALESCE(cae, '')) <> ''"
