@@ -9,6 +9,9 @@ Las pruebas marcadas con ``expectedFailure`` documentan requisitos futuros que
 el detector actual todavía no cumple. No deben corregirse modificando estas
 pruebas: cuando el detector implemente la política, pasarán inesperadamente y
 habrá que retirar la marca.
+
+La autorización de arranque se prueba por separado, sin conexiones: por ahora
+ningún resultado autoriza migraciones ni escrituras, incluida una base NUEVA.
 """
 
 import importlib.util
@@ -372,6 +375,116 @@ class _PoliticaBase(unittest.TestCase):
 
     def inspeccionar(self, **kwargs):
         return database.inspeccionar_estado_base_sqlite(self.conexion, **kwargs)
+
+
+class AutorizacionArranqueSQLiteTest(unittest.TestCase):
+    """Política pura: toda conexión o llamada al detector/migraciones falla."""
+
+    def setUp(self):
+        self.conectar = self.enterContext(patch(
+            "sqlite3.connect", side_effect=AssertionError("La política no debe abrir conexiones")
+        ))
+        self.prohibidas = []
+        for nombre, valor in vars(database).items():
+            if callable(valor) and (
+                nombre.startswith(("migrar_", "crear_tabla_", "completar_"))
+                or nombre in ("conectar", "crear_base", "agregar_columna_si_falta",
+                              "inspeccionar_estado_base_sqlite")
+            ):
+                self.prohibidas.append(self.enterContext(patch.object(
+                    database, nombre, side_effect=AssertionError(f"Llamada prohibida: {nombre}")
+                )))
+
+    def tearDown(self):
+        self.conectar.assert_not_called()
+        for prohibida in self.prohibidas:
+            prohibida.assert_not_called()
+
+    def test_estados_del_inspector_denegados(self):
+        for estado in ("VERSION_INCOMPATIBLE", "BLOQUEADA", "INCOMPLETA",
+                       "HISTORICA_SIN_VERSION", "NUEVA"):
+            with self.subTest(estado=estado):
+                decision = database.evaluar_autorizacion_arranque_sqlite(
+                    database.ResultadoInspeccionBaseSQLite(estado)
+                )
+                self.assertIs(decision.autorizado, False)
+                self.assertEqual(decision.estado, estado)
+                self.assertTrue(decision.motivo_denegacion)
+
+    def test_estados_desconocidos_o_inesperados_denegados_sin_reclasificar(self):
+        for estado in ("ACTUAL", "ERROR", "FUTURO", "", "incompleta", None, True, 1, ()):
+            with self.subTest(estado=estado):
+                decision = database.evaluar_autorizacion_arranque_sqlite(
+                    database.ResultadoInspeccionBaseSQLite(estado)
+                )
+                self.assertIs(decision.autorizado, False)
+                self.assertEqual(decision.estado, estado)
+
+    def test_preserva_todos_los_campos_orden_y_repeticiones(self):
+        inspeccion = database.ResultadoInspeccionBaseSQLite(
+            estado="INCOMPLETA",
+            version_registrada=None,
+            motivos=("primero", "segundo", "primero"),
+            estructuras_pendientes=("tabla:intentos_emision_arca", "columna:factura_arca.cae"),
+            condiciones_pendientes=("factura_arca.identidad_normalizada_backfill:2",),
+            advertencias=("ambiente desconocido",),
+        )
+        decision = database.evaluar_autorizacion_arranque_sqlite(inspeccion)
+        for campo in ("estado", "version_registrada", "motivos", "estructuras_pendientes",
+                      "condiciones_pendientes", "advertencias"):
+            self.assertEqual(getattr(decision, campo), getattr(inspeccion, campo))
+        self.assertIs(decision.autorizado, False)
+        self.assertNotIn(decision.motivo_denegacion, decision.motivos)
+
+    def test_version_incompatible_preserva_prioridad_y_motivos_acumulados(self):
+        inspeccion = database.ResultadoInspeccionBaseSQLite(
+            "VERSION_INCOMPATIBLE", version_registrada=9,
+            motivos=("PRAGMA user_version=9",
+                     "trigger_no_reconocido:trg(factura_arca)",
+                     "duplicados:factura_arca.cae",
+                     "contradiccion:factura_arca.identidad_fiscal"),
+            estructuras_pendientes=("tabla:intentos_emision_arca",),
+        )
+        decision = database.evaluar_autorizacion_arranque_sqlite(inspeccion)
+        self.assertEqual(decision.estado, "VERSION_INCOMPATIBLE")
+        self.assertEqual(decision.version_registrada, 9)
+        self.assertEqual(decision.motivos, inspeccion.motivos)
+        self.assertEqual(decision.estructuras_pendientes, inspeccion.estructuras_pendientes)
+        self.assertIs(decision.autorizado, False)
+
+    def test_error_de_inspeccion_conservado_y_denegado(self):
+        motivo = "No se pudo inspeccionar la conexión SQLite de forma confiable (ValueError)."
+        decision = database.evaluar_autorizacion_arranque_sqlite(
+            database.ResultadoInspeccionBaseSQLite("BLOQUEADA", motivos=(motivo,))
+        )
+        self.assertIs(decision.autorizado, False)
+        self.assertEqual(decision.motivos, (motivo,))
+
+    def test_pendientes_vacios_no_autorizan(self):
+        decision = database.evaluar_autorizacion_arranque_sqlite(
+            database.ResultadoInspeccionBaseSQLite("HISTORICA_SIN_VERSION")
+        )
+        self.assertEqual(decision.estructuras_pendientes, ())
+        self.assertEqual(decision.condiciones_pendientes, ())
+        self.assertIs(decision.autorizado, False)
+
+    def test_entradas_ajenas_al_contrato_producen_error_explicito(self):
+        for entrada in (None, False, "ACTUAL", {}, {"estado": "INCOMPLETA"}, ValueError("error")):
+            with self.subTest(entrada=entrada):
+                with self.assertRaisesRegex(TypeError, "ResultadoInspeccionBaseSQLite"):
+                    database.evaluar_autorizacion_arranque_sqlite(entrada)
+
+    def test_determinismo_y_entrada_intacta(self):
+        inspeccion = database.ResultadoInspeccionBaseSQLite(
+            "INCOMPLETA", motivos=("revisión manual",),
+            estructuras_pendientes=("tabla:intentos_emision_arca",),
+        )
+        antes = vars(inspeccion).copy()
+        primera = database.evaluar_autorizacion_arranque_sqlite(inspeccion)
+        segunda = database.evaluar_autorizacion_arranque_sqlite(inspeccion)
+        self.assertEqual(primera, segunda)
+        self.assertEqual(vars(inspeccion), antes)
+        self.assertIs(primera.autorizado, False)
 
 
 class AislamientoSQLiteTest(unittest.TestCase):

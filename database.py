@@ -40,6 +40,44 @@ class ResultadoInspeccionBaseSQLite:
     advertencias: tuple = ()
 
 
+@dataclass(frozen=True)
+class DecisionAutorizacionArranqueSQLite:
+    autorizado: bool
+    estado: str
+    motivos: tuple
+    estructuras_pendientes: tuple
+    condiciones_pendientes: tuple
+    advertencias: tuple
+    version_registrada: object
+    motivo_denegacion: str
+
+
+def evaluar_autorizacion_arranque_sqlite(
+    inspeccion: ResultadoInspeccionBaseSQLite,
+) -> DecisionAutorizacionArranqueSQLite:
+    """Decide sin efectos secundarios; no está conectada al arranque real.
+
+    La política provisional no reconoce ningún estado que autorice migraciones
+    o escrituras, ni siquiera NUEVA. Conserva la inspección sin reclasificarla.
+    Entradas ajenas al contrato producen TypeError, nunca una autorización.
+    """
+    if not isinstance(inspeccion, ResultadoInspeccionBaseSQLite):
+        raise TypeError("Se requiere un ResultadoInspeccionBaseSQLite.")
+    return DecisionAutorizacionArranqueSQLite(
+        autorizado=False,
+        estado=inspeccion.estado,
+        motivos=inspeccion.motivos,
+        estructuras_pendientes=inspeccion.estructuras_pendientes,
+        condiciones_pendientes=inspeccion.condiciones_pendientes,
+        advertencias=inspeccion.advertencias,
+        version_registrada=inspeccion.version_registrada,
+        motivo_denegacion=(
+            "La política provisional no reconoce estados que autoricen "
+            "migraciones ni escrituras durante el arranque."
+        ),
+    )
+
+
 _ESTRUCTURAS_INSPECCION_ESPERADAS = {
     "clientes": ("id", "emisor_id", "emisor_recomendado_id", "modalidad_comprobante", "emisor_habitual"),
     "servicios": ("id", "fecha_inicio", "fecha_fin", "renovable", "estado_periodo"),
