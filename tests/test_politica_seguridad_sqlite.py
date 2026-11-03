@@ -2193,6 +2193,174 @@ class IndiceUnicoCaeEquivalenteTest(_PoliticaBase):
         self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
 
 
+class LiteralesTextoIndicesTest(_PoliticaBase):
+    """Compara la unicidad real de SQLite con la inspección, sin migraciones."""
+
+    def _comprobar_unicidad(self, estado_protegido, estado_excluido):
+        sentencia = (
+            "INSERT INTO intentos_emision_arca "
+            "(ambiente_arca, cuit_emisor, punto_venta, tipo_comprobante, numero_planificado, estado) "
+            "VALUES (?, '20123456789', 2, 11, 10, ?)"
+        )
+        for ambiente in ("HOMOLOGACION", None):
+            with self.subTest(ambiente=ambiente):
+                self.conexion.execute(sentencia, (ambiente, estado_protegido))
+                with self.assertRaises(sqlite3.IntegrityError):
+                    self.conexion.execute(sentencia, (ambiente, estado_protegido))
+                self.conexion.execute(sentencia, (ambiente, estado_excluido))
+                self.conexion.execute(sentencia, (ambiente, estado_excluido))
+                for estado, cantidad in ((estado_protegido, 1), (estado_excluido, 2)):
+                    self.assertEqual(
+                        self.conexion.execute(
+                            "SELECT COUNT(*) FROM intentos_emision_arca "
+                            "WHERE ambiente_arca IS ? AND estado = ?",
+                            (ambiente, estado),
+                        ).fetchone()[0],
+                        cantidad,
+                    )
+
+    def test_indices_correctos_son_reconocidos_y_protegen_enviando(self):
+        _crear_esquema_historico(self.conexion)
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+        self.assertEqual(resultado.estructuras_pendientes, ())
+        self._comprobar_unicidad("ENVIANDO", "enviando")
+
+    def test_literal_alterado_protege_minusculas_pero_permite_duplicar_enviando(self):
+        _crear_esquema_historico(
+            self.conexion,
+            reemplazar_indices={
+                nombre: _INDICES_UNICOS[nombre].replace("'ENVIANDO'", "'enviando'")
+                for nombre in _INDICES_INTENTOS
+            },
+        )
+
+        self._comprobar_unicidad("enviando", "ENVIANDO")
+
+    def test_inspector_no_debe_equiparar_literales_con_distinta_semantica(self):
+        # La sintaxis puede cambiar de caja; los literales no son equivalentes.
+        _crear_esquema_historico(
+            self.conexion,
+            reemplazar_indices={
+                nombre: _INDICES_UNICOS[nombre].replace("'ENVIANDO'", "'enviando'")
+                for nombre in _INDICES_INTENTOS
+            },
+        )
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(
+            set(resultado.estructuras_pendientes),
+            {f"indice_incompatible:{nombre}" for nombre in _INDICES_INTENTOS},
+        )
+        self.assertNotEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+
+    def test_formato_y_caja_fuera_de_literales_son_equivalentes(self):
+        _crear_esquema_historico(
+            self.conexion,
+            reemplazar_indices={
+                nombre: _INDICES_UNICOS[nombre]
+                .replace("CREATE UNIQUE INDEX", "create\tunique\nindex IF NOT EXISTS")
+                .replace(" ON ", " \n on\t")
+                .replace(" WHERE ", "\nwhere  ")
+                .replace(" AND ", "\tand\n")
+                .replace(" IS NOT NULL ", " is  not\tNULL ")
+                for nombre in _INDICES_INTENTOS
+            },
+        )
+
+        resultado = self.inspeccionar()
+
+        self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
+        self.assertEqual(resultado.estructuras_pendientes, ())
+        self._comprobar_unicidad("ENVIANDO", "enviando")
+
+    def test_literales_alterados_se_conservan_y_son_incompatibles(self):
+        _crear_esquema_historico(self.conexion)
+        for literal in (
+            "enviando", "Enviando", " ENVIANDO", "ENVIANDO ",
+            "EN VIANDO", "EN  VIANDO", "EN\tVIANDO", "EN\nVIANDO",
+            "ENVIANDO'' if not exists",
+        ):
+            with self.subTest(literal=literal):
+                for nombre in _INDICES_INTENTOS:
+                    self.conexion.execute(f"DROP INDEX {nombre}")
+                    self.conexion.execute(
+                        _INDICES_UNICOS[nombre].replace("'ENVIANDO'", f"'{literal}'")
+                    )
+
+                resultado = self.inspeccionar()
+
+                self.assertEqual(resultado.estado, "INCOMPLETA")
+                self.assertEqual(
+                    set(resultado.estructuras_pendientes),
+                    {f"indice_incompatible:{nombre}" for nombre in _INDICES_INTENTOS},
+                )
+
+    def test_espacios_internos_no_se_colapsan_ni_eliminan_clausulas(self):
+        # Referencia sintética: prueba el comparador con literales que contienen
+        # espacios; no certifica ni modifica el esquema esperado del programa.
+        esperados = tuple(
+            (nombre, tabla, clave, condicion.replace("'ENVIANDO'", "'EN VIANDO if not exists'"))
+            for nombre, tabla, clave, condicion
+            in database._INDICES_UNICOS_INSPECCION_ESPERADOS
+        )
+        _crear_esquema_historico(self.conexion)
+        with patch.object(database, "_INDICES_UNICOS_INSPECCION_ESPERADOS", esperados):
+            for literal, compatible in (
+                ("EN VIANDO if not exists", True),
+                ("EN  VIANDO if not exists", False),
+                ("EN\tVIANDO if not exists", False),
+                ("EN\nVIANDO if not exists", False),
+                ("EN VIANDO", False),
+            ):
+                with self.subTest(literal=literal):
+                    for nombre in _INDICES_INTENTOS:
+                        self.conexion.execute(f"DROP INDEX {nombre}")
+                        self.conexion.execute(
+                            _INDICES_UNICOS[nombre].replace("'ENVIANDO'", f"'{literal}'")
+                        )
+                    self.assertEqual(
+                        self.conexion.execute(
+                            "SELECT ? = ?", (literal, "EN VIANDO if not exists")
+                        ).fetchone()[0],
+                        int(compatible),
+                    )
+
+                    resultado = self.inspeccionar()
+
+                    self.assertEqual(
+                        resultado.estado,
+                        "HISTORICA_SIN_VERSION" if compatible else "INCOMPLETA",
+                    )
+                    self.assertEqual(
+                        set(resultado.estructuras_pendientes),
+                        set() if compatible else {
+                            f"indice_incompatible:{nombre}" for nombre in _INDICES_INTENTOS
+                        },
+                    )
+
+    def test_cambios_de_expresion_y_predicado_no_son_equivalentes(self):
+        _crear_esquema_historico(self.conexion)
+        for original, alterado in (
+            ("punto_venta > 0", "punto_venta >= 0"),
+            (" AND estado IN ", " OR estado IN "),
+            ("cuit_emisor, punto_venta,", "LOWER(cuit_emisor), punto_venta,"),
+        ):
+            with self.subTest(alterado=alterado):
+                for nombre in _INDICES_INTENTOS:
+                    self.conexion.execute(f"DROP INDEX {nombre}")
+                    self.conexion.execute(_INDICES_UNICOS[nombre].replace(original, alterado))
+                resultado = self.inspeccionar()
+                self.assertEqual(resultado.estado, "INCOMPLETA")
+                self.assertEqual(
+                    set(resultado.estructuras_pendientes),
+                    {f"indice_incompatible:{nombre}" for nombre in _INDICES_INTENTOS},
+                )
+
+
 class IndicesDesconocidosTest(_PoliticaBase):
 
     def test_indice_con_mismo_nombre_y_otra_definicion_no_es_historico(self):

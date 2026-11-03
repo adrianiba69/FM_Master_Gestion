@@ -1,5 +1,6 @@
 import sqlite3
 import calendar
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -251,19 +252,38 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
                 if columna not in columnas
             )
 
+        def normalizar_sql_indice(sql):
+            # No modificar textos, identificadores delimitados ni comentarios.
+            segmentos = re.split(
+                r"""('(?:''|[^'])*'|"(?:\"\"|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]"""
+                r"|--[^\r\n]*(?:\r\n|\r|\n|$)|/\*[\s\S]*?\*/)",
+                sql,
+            )
+            minusculas_ascii = str.maketrans(
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+            )
+            normalizado = "".join(
+                segmento if posicion % 2 else re.sub(
+                    r"[ \t\r\n\f]+", " ", segmento.translate(minusculas_ascii)
+                )
+                for posicion, segmento in enumerate(segmentos)
+            ).strip(" \t\r\n\f")
+            return re.sub(
+                r"^create unique index if not exists ", "create unique index ", normalizado
+            )
+
         for nombre, tabla, clave, condicion in _INDICES_UNICOS_INSPECCION_ESPERADOS:
             cursor.execute(
                 "SELECT tbl_name, sql FROM sqlite_master WHERE type='index' AND name=?", (nombre,)
             )
             indice = cursor.fetchone()
-            esperado_sql = " ".join(
+            esperado_sql = normalizar_sql_indice(
                 f"CREATE UNIQUE INDEX IF NOT EXISTS {nombre} ON {tabla}({clave}) WHERE {condicion}"
-                .lower().split()
-            ).replace(" if not exists", "")
+            )
             if indice is None:
                 estructuras_pendientes.append(f"indice:{nombre}")
             else:
-                sql_actual = " ".join(str(indice[1] or "").lower().split()).replace(" if not exists", "")
+                sql_actual = normalizar_sql_indice(str(indice[1] or ""))
                 if indice[0] != tabla or sql_actual != esperado_sql:
                     estructuras_pendientes.append(f"indice_incompatible:{nombre}")
 
