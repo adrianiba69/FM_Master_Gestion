@@ -2193,6 +2193,65 @@ class IndiceUnicoCaeEquivalenteTest(_PoliticaBase):
         self.assertEqual(resultado.estado, "HISTORICA_SIN_VERSION")
 
 
+class NormalizadorSQLIndiceTest(unittest.TestCase):
+
+    def test_formato_exterior_y_prefijo_if_not_exists(self):
+        self.assertEqual(
+            database._normalizar_sql_indice(
+                "\tCREATE \n UNIQUE INDEX IF NOT EXISTS idx ON tabla(col) WHERE estado = 'ENVIANDO' \r\n"
+            ),
+            "create unique index idx on tabla(col) where estado = 'ENVIANDO'",
+        )
+
+    def test_literales_y_comillas_escapadas_se_preservan(self):
+        for literal in (
+            "'ENVIANDO'", "'enviando'", "'Enviando'", "'EN  VIANDO'",
+            "'EN\tVIANDO'", "'EN\nVIANDO'", "'ENVIANDO'' if not exists'",
+        ):
+            with self.subTest(literal=literal):
+                self.assertEqual(
+                    database._normalizar_sql_indice(f"SELECT {literal}"),
+                    f"select {literal}",
+                )
+
+    def test_identificadores_delimitados_se_preservan(self):
+        for identificador in ('"Mi  Columna"', '"Mi""Columna"', "`Mi``Columna`", "[Mi  Columna]"):
+            with self.subTest(identificador=identificador):
+                self.assertEqual(
+                    database._normalizar_sql_indice(f"SELECT {identificador} FROM Tabla"),
+                    f"select {identificador} from tabla",
+                )
+
+    def test_comentarios_se_preservan_incluido_fin_de_linea(self):
+        for comentario in (
+            "-- ENVIANDO  'Texto'\n", "-- ENVIANDO\r\n", "-- ENVIANDO\r",
+            "/* ENVIANDO  'Texto'\n if not exists */",
+        ):
+            with self.subTest(comentario=comentario):
+                self.assertEqual(
+                    database._normalizar_sql_indice(f"SELECT {comentario}  Col"),
+                    f"select {comentario} col",
+                )
+
+    def test_diferencias_semanticas_no_se_equiparan(self):
+        for original, alterado in (
+            ("'ENVIANDO'", "'enviando'"),
+            ("'EN VIANDO'", "'EN  VIANDO'"),
+            ("'EN VIANDO'", "'EN\tVIANDO'"),
+            ("'EN VIANDO'", "'EN\nVIANDO'"),
+            ("'ENVIANDO if not exists'", "'ENVIANDO'"),
+            ("punto_venta > 0", "punto_venta >= 0"),
+            ("activo AND valido", "activo OR valido"),
+            ("cuit_emisor", "LOWER(cuit_emisor)"),
+            ('"MiColumna"', '"micolumna"'),
+        ):
+            with self.subTest(original=original, alterado=alterado):
+                self.assertNotEqual(
+                    database._normalizar_sql_indice(original),
+                    database._normalizar_sql_indice(alterado),
+                )
+
+
 class LiteralesTextoIndicesTest(_PoliticaBase):
     """Compara la unicidad real de SQLite con la inspección, sin migraciones."""
 
