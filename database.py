@@ -162,6 +162,36 @@ _INDICES_UNICOS_INSPECCION_ESPERADOS = (
 )
 
 
+_DEFINICIONES_INDICES_FISCALES_ACTUALES = tuple(
+    (
+        nombre, tabla,
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {nombre} ON {tabla}({clave}) WHERE {condicion}",
+    )
+    for nombre, tabla, clave, condicion in _INDICES_UNICOS_INSPECCION_ESPERADOS
+)
+
+# SQL acreditado en 0fe8ac7 (facturas) y af3e31e (intentos), sin variantes adicionales.
+_DEFINICIONES_INDICES_FISCALES_HISTORICAS = (
+    (
+        "idx_factura_arca_identidad_unica", "factura_arca",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_factura_arca_identidad_unica "
+        "ON factura_arca(emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num) "
+        "WHERE numero_comprobante_num IS NOT NULL",
+    ),
+    (
+        "idx_factura_arca_cae_unico", "factura_arca",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_factura_arca_cae_unico "
+        "ON factura_arca(cae) WHERE TRIM(COALESCE(cae, '')) <> ''",
+    ),
+    (
+        "idx_intentos_emision_arca_clave_activa", "intentos_emision_arca",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_intentos_emision_arca_clave_activa "
+        "ON intentos_emision_arca(cuit_emisor, punto_venta, tipo_comprobante, numero_planificado) "
+        "WHERE estado IN ('PENDIENTE_RECONCILIAR', 'ENVIANDO', 'CONFLICTO_MANUAL')",
+    ),
+)
+
+
 def _normalizar_sql_indice(sql):
     # No modificar textos, identificadores delimitados ni comentarios.
     segmentos = re.split(
@@ -181,6 +211,36 @@ def _normalizar_sql_indice(sql):
     return re.sub(
         r"^create unique index if not exists ", "create unique index ", normalizado
     )
+
+
+def _coincide_definicion_indice_fiscal(
+    nombre: str, tabla: str, sql: str, definicion: tuple[str, str, str],
+) -> bool:
+    nombre_esperado, tabla_esperada, sql_esperado = definicion
+    return (
+        nombre == nombre_esperado
+        and tabla == tabla_esperada
+        and _normalizar_sql_indice(sql) == _normalizar_sql_indice(sql_esperado)
+    )
+
+
+def _reconocer_definicion_indice_fiscal(nombre: str, tabla: str, sql: str | None) -> str:
+    """Clasifica solo la definicion suministrada; no certifica ni modifica SQLite.
+
+    Devuelve ACTUAL, HISTORICA o DESCONOCIDA. SQL ausente o entradas no textuales
+    no se reconocen. Nombre y tabla deben coincidir exactamente con el catalogo.
+    No esta conectada al inspector, las migraciones ni la autorizacion de arranque.
+    """
+    if not isinstance(nombre, str) or not isinstance(tabla, str) or not isinstance(sql, str):
+        return "DESCONOCIDA"
+    for estado, definiciones in (
+        ("ACTUAL", _DEFINICIONES_INDICES_FISCALES_ACTUALES),
+        ("HISTORICA", _DEFINICIONES_INDICES_FISCALES_HISTORICAS),
+    ):
+        for definicion in definiciones:
+            if _coincide_definicion_indice_fiscal(nombre, tabla, sql, definicion):
+                return estado
+    return "DESCONOCIDA"
 
 
 def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=False):
