@@ -243,6 +243,139 @@ def _reconocer_definicion_indice_fiscal(nombre: str, tabla: str, sql: str | None
     return "DESCONOCIDA"
 
 
+def _validar_solicitud_indice_fiscal(
+    nombre: str, clave: str, condicion: str, tabla: str = "factura_arca",
+) -> tuple[str, str, str]:
+    """Valida un destino actual y devuelve su definicion, sin ejecutar SQL."""
+    if not all(isinstance(valor, str) for valor in (nombre, clave, condicion, tabla)):
+        raise TypeError("La solicitud de indice fiscal requiere valores de texto.")
+    sql = f"CREATE UNIQUE INDEX IF NOT EXISTS {nombre} ON {tabla}({clave}) WHERE {condicion}"
+    for definicion in _DEFINICIONES_INDICES_FISCALES_ACTUALES:
+        if _coincide_definicion_indice_fiscal(nombre, tabla, sql, definicion):
+            return definicion
+    raise ValueError(f"Destino de indice fiscal no catalogado: {tabla}.{nombre}.")
+
+
+_COLUMNAS_CLAVE_INDICES_FISCALES = {
+    ("ACTUAL", "idx_factura_arca_identidad_unica"): (
+        "ambiente_arca", "emisor_id", "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num",
+    ),
+    ("ACTUAL", "idx_factura_arca_identidad_historica_unica"): (
+        "emisor_id", "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num",
+    ),
+    ("ACTUAL", "idx_factura_arca_cae_unico"): ("ambiente_arca", None),
+    ("ACTUAL", "idx_factura_arca_cae_historico_unico"): (None,),
+    ("ACTUAL", "idx_intentos_emision_arca_clave_activa_ambiente"): (
+        "ambiente_arca", "cuit_emisor", "punto_venta", "tipo_comprobante", "numero_planificado",
+    ),
+    ("ACTUAL", "idx_intentos_emision_arca_clave_activa_historica"): (
+        "cuit_emisor", "punto_venta", "tipo_comprobante", "numero_planificado",
+    ),
+    ("HISTORICA", "idx_factura_arca_identidad_unica"): (
+        "emisor_id", "punto_venta_num", "tipo_comprobante_num", "numero_comprobante_num",
+    ),
+    ("HISTORICA", "idx_factura_arca_cae_unico"): ("cae",),
+    ("HISTORICA", "idx_intentos_emision_arca_clave_activa"): (
+        "cuit_emisor", "punto_venta", "tipo_comprobante", "numero_planificado",
+    ),
+}
+
+
+def _validar_indice_fiscal_sqlite(cur: sqlite3.Cursor, nombre: str, tabla: str) -> str:
+    """Lee exclusivamente main: ACTUAL, HISTORICA o AUSENTE; incompatibles fallan.
+
+    AUSENTE solo informa ausencia del indice en una tabla existente, no valida
+    sus datos ni autoriza crearlo. Se admiten claves ASC/BINARY y tablas rowid;
+    None en el mapa de claves representa una expresion, verificada tambien por SQL.
+    No certifica tipos ni colaciones de columnas ajenas a las claves del indice.
+    No modifica objetos ni controla transacciones.
+    """
+    catalogo = _DEFINICIONES_INDICES_FISCALES_ACTUALES + _DEFINICIONES_INDICES_FISCALES_HISTORICAS
+    if not any(nombre == n and tabla == t for n, t, _sql in catalogo):
+        raise ValueError(f"Indice fiscal no catalogado: {tabla}.{nombre}.")
+    cur.execute(
+        "SELECT name FROM main.sqlite_master WHERE type='table' AND name=? COLLATE NOCASE",
+        (tabla,),
+    )
+    tablas = cur.fetchall()
+    if len(tablas) != 1 or tablas[0][0] != tabla:
+        raise ValueError(f"Tabla fiscal ausente o incompatible en main: {tabla}.")
+    cur.execute(
+        "SELECT type, name, tbl_name, sql FROM main.sqlite_master WHERE name=? COLLATE NOCASE",
+        (nombre,),
+    )
+    objetos = cur.fetchall()
+    if not objetos:
+        return "AUSENTE"
+    if len(objetos) != 1 or tuple(objetos[0][:3]) != ("index", nombre, tabla):
+        raise ValueError(f"Objeto homonimo o propietario incompatible: {nombre}.")
+    estado = _reconocer_definicion_indice_fiscal(nombre, tabla, objetos[0][3])
+    if estado == "DESCONOCIDA":
+        raise ValueError(f"Definicion de indice fiscal desconocida: {nombre}.")
+
+    cur.execute(f"PRAGMA main.index_list({tabla})")
+    indices = [fila for fila in cur.fetchall() if fila[1] == nombre]
+    if len(indices) != 1 or tuple(indices[0][2:]) != (1, "c", 1):
+        raise ValueError(f"Unicidad, origen o predicado parcial incompatible: {nombre}.")
+
+    cur.execute(f"PRAGMA main.table_info({tabla})")
+    columnas = {fila[1]: fila[0] for fila in cur.fetchall()}
+    claves = _COLUMNAS_CLAVE_INDICES_FISCALES[(estado, nombre)]
+    esperadas = []
+    for posicion, columna in enumerate(claves):
+        if columna is not None and columna not in columnas:
+            raise ValueError(f"Columna de indice fiscal ausente: {tabla}.{columna}.")
+        cid = -2 if columna is None else columnas[columna]
+        esperadas.append((posicion, cid, columna, 0, "BINARY", 1))
+    esperadas.append((len(claves), -1, None, 0, "BINARY", 0))
+    cur.execute(f"PRAGMA main.index_xinfo({nombre})")
+    if [tuple(fila) for fila in cur.fetchall()] != esperadas:
+        raise ValueError(f"Claves, orden, colaciones o referencia rowid incompatibles: {nombre}.")
+    return estado
+
+
+@dataclass(frozen=True)
+class _ContextoTransaccionalSQLite:
+    en_transaccion: bool
+    autocommit: bool | int | None
+    isolation_level: str | None
+    journal_mode: str
+    query_only: bool
+
+
+def _inspeccionar_contexto_transaccional_sqlite(
+    conexion: sqlite3.Connection,
+) -> _ContextoTransaccionalSQLite:
+    """Fotografia de lectura, no una autorizacion ni una garantia de durabilidad.
+
+    Antes de operar habra que validar LEGACY_TRANSACTION_CONTROL y autocommit=False;
+    autocommit=True requiere contrato explicito y no se habilita aqui. None indica
+    una API sin atributo autocommit, no un modo aceptado por defecto.
+    DELETE/TRUNCATE/PERSIST/WAL son candidatos con respaldo y pruebas posteriores;
+    MEMORY permite pruebas atomicas, no recuperacion durable. OFF y query_only=1
+    no deben habilitar escrituras fiscales. No cambia ninguna de estas opciones.
+    Sin BEGIN exterior, RELEASE del ultimo SAVEPOINT confirma: el futuro llamador
+    debe definir quien abre y finaliza la transaccion; este auxiliar no lo hace.
+    """
+    cur = conexion.cursor()
+    try:
+        cur.execute("PRAGMA main.journal_mode")
+        journal = cur.fetchone()
+        cur.execute("PRAGMA query_only")
+        query_only = cur.fetchone()
+        if journal is None or query_only is None:
+            raise ValueError("No se pudo inspeccionar el contexto transaccional SQLite.")
+        return _ContextoTransaccionalSQLite(
+            en_transaccion=conexion.in_transaction,
+            autocommit=getattr(conexion, "autocommit", None),
+            isolation_level=conexion.isolation_level,
+            journal_mode=journal[0],
+            query_only=bool(query_only[0]),
+        )
+    finally:
+        cur.close()
+
+
 def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=False):
     """Inspecciona una conexión SQLite existente usando solo metadatos y SELECT.
 
