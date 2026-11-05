@@ -1,6 +1,8 @@
 import sqlite3
 import calendar
+import itertools
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -374,6 +376,172 @@ def _inspeccionar_contexto_transaccional_sqlite(
         )
     finally:
         cur.close()
+
+
+# (nombre, tabla, clave, condicion) de los seis destinos; derivado sin reescribir reglas.
+_DESTINOS_INDICES_FISCALES = tuple(
+    (nombre, tabla, clave, condicion)
+    for nombre, tabla, clave, condicion in _INDICES_UNICOS_INSPECCION_ESPERADOS
+)
+
+
+def _prevalidar_destinos_indices_fiscales(destinos=None):
+    """Valida sin SQL que los destinos sean exactamente los seis actuales, en orden.
+
+    Cada destino pasa por _validar_solicitud_indice_fiscal y, ademas, su SQL debe
+    ser textualmente el del catalogo, para que no se propaguen variantes de formato.
+    Devuelve las definiciones (nombre, tabla, sql) del catalogo. No esta conectada
+    a ninguna migracion.
+    """
+    if destinos is None:
+        destinos = _DESTINOS_INDICES_FISCALES
+    if isinstance(destinos, (str, bytes)) or not isinstance(destinos, (tuple, list)):
+        raise TypeError("Los destinos de indices fiscales deben ser una secuencia de tuplas.")
+    validadas = []
+    for destino in destinos:
+        if not isinstance(destino, tuple) or len(destino) != 4:
+            raise TypeError("Cada destino de indice fiscal requiere (nombre, tabla, clave, condicion).")
+        nombre, tabla, clave, condicion = destino
+        definicion = _validar_solicitud_indice_fiscal(nombre, clave, condicion, tabla)
+        sql = f"CREATE UNIQUE INDEX IF NOT EXISTS {nombre} ON {tabla}({clave}) WHERE {condicion}"
+        if sql != definicion[2]:
+            raise ValueError(f"Destino de indice fiscal con formato no canonico: {tabla}.{nombre}.")
+        validadas.append(definicion)
+    nombres = [definicion[0] for definicion in validadas]
+    repetidos = sorted({nombre for nombre in nombres if nombres.count(nombre) > 1})
+    if repetidos:
+        raise ValueError(f"Destinos de indices fiscales repetidos: {', '.join(repetidos)}.")
+    esperados = [definicion[0] for definicion in _DEFINICIONES_INDICES_FISCALES_ACTUALES]
+    faltantes = [nombre for nombre in esperados if nombre not in nombres]
+    if faltantes:
+        raise ValueError(f"Destinos de indices fiscales faltantes: {', '.join(faltantes)}.")
+    if len(validadas) != len(esperados):
+        raise ValueError("Destinos de indices fiscales adicionales.")
+    if tuple(validadas) != _DEFINICIONES_INDICES_FISCALES_ACTUALES:
+        raise ValueError("Los destinos de indices fiscales no respetan el orden del catalogo.")
+    return tuple(validadas)
+
+
+class _ContextoTransaccionalNoAdmitido(ValueError):
+    """La conexion no ofrece garantias para escrituras fiscales atomicas."""
+
+
+class _TransaccionIndicesFiscalesPerdida(RuntimeError):
+    """SQLite o el bloque protegido finalizaron la transaccion fuera del contrato."""
+
+
+class _RestauracionTransaccionalFallida(RuntimeError):
+    """No se pudo revertir el bloque protegido; el estado debe tratarse como incierto."""
+
+    def __init__(self, mensaje, error_original, error_restauracion):
+        super().__init__(mensaje)
+        self.error_original = error_original
+        self.error_restauracion = error_restauracion
+
+
+_JOURNAL_ADMITIDOS_INDICES_FISCALES = frozenset({"delete", "truncate", "persist", "wal"})
+_SECUENCIA_SAVEPOINT_INDICES_FISCALES = itertools.count(1)
+
+
+def _verificar_contexto_indices_fiscales(cur, contexto):
+    if contexto.autocommit is True:
+        raise _ContextoTransaccionalNoAdmitido("autocommit=True no admite escrituras fiscales atomicas.")
+    if contexto.autocommit not in (False, sqlite3.LEGACY_TRANSACTION_CONTROL):
+        raise _ContextoTransaccionalNoAdmitido("Modo autocommit desconocido.")
+    if contexto.query_only:
+        raise _ContextoTransaccionalNoAdmitido("La conexion esta en query_only.")
+    journal = str(contexto.journal_mode).lower()
+    if journal == "memory":
+        # MEMORY solo es aceptable sin archivo: no ofrece recuperacion durable.
+        cur.execute("PRAGMA database_list")
+        archivos = [fila[2] for fila in cur.fetchall() if fila[1] == "main"]
+        if archivos != [""]:
+            raise _ContextoTransaccionalNoAdmitido("journal_mode=MEMORY no se admite sobre archivo.")
+    elif journal not in _JOURNAL_ADMITIDOS_INDICES_FISCALES:
+        raise _ContextoTransaccionalNoAdmitido(f"journal_mode={journal} no se admite.")
+
+
+def _restaurar_bloque_indices_fiscales(cur, nombre, propia, original):
+    """Revierte solo lo propio y vuelve a lanzar; nunca ejecuta COMMIT ni RELEASE exitoso."""
+    conexion = cur.connection
+    if not conexion.in_transaction:
+        if propia:
+            raise original
+        raise _TransaccionIndicesFiscalesPerdida(
+            "SQLite revirtio la transaccion exterior del llamador."
+        ) from original
+    try:
+        cur.execute(f"ROLLBACK TO {nombre}")
+        cur.execute(f"RELEASE {nombre}")
+    except BaseException as secundario:
+        if not propia:
+            raise _RestauracionTransaccionalFallida(
+                "No se pudo revertir el SAVEPOINT fiscal; revertir la transaccion exterior.",
+                original, secundario,
+            ) from original
+        original.add_note(f"Restauracion parcial fallida: {secundario!r}")
+    if propia:
+        try:
+            if conexion.in_transaction:
+                cur.execute("ROLLBACK")
+        except BaseException as secundario:
+            raise _RestauracionTransaccionalFallida(
+                "No se pudo revertir la transaccion propia de indices fiscales.",
+                original, secundario,
+            ) from original
+    raise original
+
+
+@contextmanager
+def _transaccion_indices_fiscales(cur):
+    """Protege un bloque con SAVEPOINT; nunca ejecuta COMMIT.
+
+    Si no hay transaccion abre BEGIN IMMEDIATE y, en exito, la deja abierta: el
+    llamador confirma o revierte. Una transaccion o SAVEPOINT del llamador se
+    conserva. Ante fallo revierte solo el bloque (y su BEGIN propio) y relanza el
+    mismo error. Todas las sentencias de control se ejecutan con ``cur``.
+    No esta conectado a ninguna migracion.
+    """
+    conexion = cur.connection
+    contexto = _inspeccionar_contexto_transaccional_sqlite(conexion)
+    _verificar_contexto_indices_fiscales(cur, contexto)
+    nombre = f"fm_indices_fiscales_{next(_SECUENCIA_SAVEPOINT_INDICES_FISCALES)}"
+    propia = not contexto.en_transaccion
+    if propia:
+        cur.execute("BEGIN IMMEDIATE")
+    try:
+        cur.execute(f"SAVEPOINT {nombre}")
+    except BaseException as error:
+        if not conexion.in_transaction:
+            if propia:
+                raise
+            raise _TransaccionIndicesFiscalesPerdida(
+                "SQLite revirtio la transaccion exterior del llamador."
+            ) from error
+        if propia:
+            try:
+                cur.execute("ROLLBACK")
+            except BaseException as secundario:
+                raise _RestauracionTransaccionalFallida(
+                    "No se pudo revertir la transaccion propia de indices fiscales.",
+                    error, secundario,
+                ) from error
+        raise
+    try:
+        yield
+        if not conexion.in_transaction:
+            raise _TransaccionIndicesFiscalesPerdida(
+                "La transaccion finalizo dentro del bloque fiscal protegido."
+            )
+        cur.execute(f"RELEASE {nombre}")
+        if not conexion.in_transaction:
+            raise _TransaccionIndicesFiscalesPerdida(
+                "RELEASE del SAVEPOINT fiscal finalizo la transaccion."
+            )
+    except _TransaccionIndicesFiscalesPerdida:
+        raise
+    except BaseException as error:
+        _restaurar_bloque_indices_fiscales(cur, nombre, propia, error)
 
 
 def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=False):
