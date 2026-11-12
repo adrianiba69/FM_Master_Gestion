@@ -2,7 +2,6 @@
 
 import io
 import json
-import os
 import sqlite3
 import tempfile
 import unittest
@@ -10,24 +9,56 @@ from contextlib import closing, redirect_stdout
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from database import crear_tabla_intentos_emision_arca, migrar_indices_activos_intentos_emision_arca
-from services.arca.contexto_fiscal_service import ContextoFiscalService
-from services.arca.homologacion_service import HomologacionService
-from services.arca.reconciliacion_contracts import (
-    EstadoIntentoEmision,
-    ResultadoReconciliacion,
-    SnapshotFiscalEsperado,
+from tests._guardia_indices_fiscales import (
+    HISTORICO_INTENTOS, database, foto, imports_fiscales,
 )
-from services.arca.reconciliacion_service import ReconciliacionArcaService
-from services.arca.recuperacion_local_service import RecuperacionLocalArcaService
-from services.arca.wsaa_login_service import WSAALoginService
-from services.arca.wsaa_service import WSAAService
-from services.arca.wsfe_service import WSFEService
-from services.intento_emision_arca_service import (
-    ConflictoIntentoAmbiguoError,
-    IntentoEmisionArcaService,
-)
-from tests._cierre_contexto_helper import configuracion_arca_para_test
+
+with imports_fiscales():
+    from services.arca.contexto_fiscal_service import ContextoFiscalService
+    from services.arca.homologacion_service import HomologacionService
+    from services.arca.reconciliacion_contracts import (
+        EstadoIntentoEmision,
+        ResultadoReconciliacion,
+        SnapshotFiscalEsperado,
+    )
+    from services.arca.reconciliacion_service import ReconciliacionArcaService
+    from services.arca.recuperacion_local_service import RecuperacionLocalArcaService
+    from services.arca.wsaa_login_service import WSAALoginService
+    from services.arca.wsaa_service import WSAAService
+    from services.arca.wsfe_service import WSFEService
+    from services.intento_emision_arca_service import (
+        ConflictoIntentoAmbiguoError,
+        IntentoEmisionArcaService,
+    )
+    from tests._cierre_contexto_helper import configuracion_arca_para_test
+
+migrar_indices_activos_intentos_emision_arca = database.migrar_indices_activos_intentos_emision_arca
+
+
+def setUpModule():
+    guardia = imports_fiscales()
+    guardia.__enter__()
+    unittest.addModuleCleanup(guardia.__exit__, None, None, None)
+
+
+class ConexionMemoria:
+    """Conexion independiente; publica solo commits en el almacen tambien en memoria.
+
+    Permite cierres reales y rollback al cerrar sin recurrir a una URI compartida.
+    No simula concurrencia ni bloqueos entre conexiones.
+    """
+
+    def __init__(self, almacen):
+        self._almacen = almacen
+        self._conexion = sqlite3.connect(":memory:")
+        almacen.backup(self._conexion)
+
+    def __getattr__(self, nombre):
+        return getattr(self._conexion, nombre)
+
+    def commit(self):
+        self._conexion.commit()
+        self._conexion.backup(self._almacen)
 
 H, P = "HOMOLOGACION", "PRODUCCION"
 CUIT = "20206871629"
@@ -134,12 +165,38 @@ class ConexionCommitFallido:
         self._conexion.close()
 
 
+class ConexionMemoriaTest(unittest.TestCase):
+    def test_commit_persiste_entre_conexiones_independientes(self):
+        almacen = sqlite3.connect(":memory:")
+        self.addCleanup(almacen.close)
+        with closing(ConexionMemoria(almacen)) as conexion:
+            conexion.execute("CREATE TABLE evidencia(id INTEGER PRIMARY KEY)")
+            conexion.execute("INSERT INTO evidencia VALUES(1)")
+            conexion.commit()
+        with closing(ConexionMemoria(almacen)) as reabierta:
+            self.assertEqual(reabierta.execute("SELECT * FROM evidencia").fetchall(), [(1,)])
+
+    def test_rollback_y_cierre_sin_commit_no_publican_cambios(self):
+        almacen = sqlite3.connect(":memory:")
+        self.addCleanup(almacen.close)
+        almacen.execute("CREATE TABLE evidencia(id INTEGER PRIMARY KEY)")
+        for rollback in (False, True):
+            with self.subTest(rollback=rollback):
+                with closing(ConexionMemoria(almacen)) as conexion:
+                    conexion.execute("INSERT INTO evidencia VALUES(1)")
+                    if rollback:
+                        conexion.rollback()
+                        conexion.commit()
+                with closing(ConexionMemoria(almacen)) as reabierta:
+                    self.assertEqual(reabierta.execute("SELECT * FROM evidencia").fetchall(), [])
+
+
 class Base3B4C(unittest.TestCase):
     def setUp(self):
-        archivo = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        archivo.close()
-        self.ruta = archivo.name
-        with closing(sqlite3.connect(self.ruta)) as conexion:
+        self.almacen = sqlite3.connect(":memory:")
+        self.addCleanup(self.almacen.close)
+        self.factory = lambda: ConexionMemoria(self.almacen)
+        with closing(self.factory()) as conexion:
             conexion.executescript(
                 """
                 CREATE TABLE resumenes(id INTEGER PRIMARY KEY, estado_facturacion TEXT, fecha_facturacion TEXT,
@@ -155,17 +212,39 @@ class Base3B4C(unittest.TestCase):
                 INSERT INTO resumenes VALUES(11, 'Pendiente', '', '', '', '');
                 """
             )
-            crear_tabla_intentos_emision_arca(conexion.cursor())
+            conexion.executescript(
+                """
+                CREATE TABLE intentos_emision_arca(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, resumen_id INTEGER NOT NULL,
+                    cliente_id INTEGER NOT NULL, emisor_fiscal_id INTEGER NOT NULL, emisor_id INTEGER NOT NULL,
+                    cuit_emisor TEXT NOT NULL, punto_venta INTEGER NOT NULL, tipo_comprobante INTEGER NOT NULL,
+                    numero_planificado INTEGER NOT NULL, fecha_comprobante TEXT NOT NULL, concepto INTEGER NOT NULL,
+                    tipo_documento INTEGER NOT NULL, documento_receptor INTEGER NOT NULL,
+                    condicion_iva_receptor_id INTEGER NOT NULL, importe_total TEXT NOT NULL, importe_neto TEXT NOT NULL,
+                    importe_iva TEXT NOT NULL, importe_exento TEXT NOT NULL, importe_no_gravado TEXT NOT NULL,
+                    importe_tributos TEXT NOT NULL, moneda TEXT NOT NULL, cotizacion TEXT NOT NULL,
+                    alicuotas_iva TEXT NOT NULL DEFAULT '[]', estado TEXT NOT NULL, cae TEXT, vencimiento_cae TEXT,
+                    error_codigo TEXT, error_mensaje TEXT, detalle_tecnico TEXT, factura_arca_id INTEGER,
+                    creado_en TEXT NOT NULL, actualizado_en TEXT NOT NULL, reconciliado_en TEXT,
+                    contexto_fiscal_json TEXT, contexto_fiscal_version INTEGER, contexto_fiscal_hash TEXT,
+                    FOREIGN KEY(resumen_id) REFERENCES resumenes(id),
+                    FOREIGN KEY(cliente_id) REFERENCES clientes(id),
+                    FOREIGN KEY(emisor_fiscal_id) REFERENCES emisores_fiscales(id),
+                    FOREIGN KEY(emisor_id) REFERENCES emisores_facturacion(id),
+                    FOREIGN KEY(factura_arca_id) REFERENCES factura_arca(id)
+                );
+                CREATE INDEX idx_intentos_emision_arca_estado ON intentos_emision_arca(estado, creado_en);
+                CREATE INDEX idx_intentos_emision_arca_resumen ON intentos_emision_arca(resumen_id);
+                CREATE INDEX idx_intentos_emision_arca_clave_fiscal
+                    ON intentos_emision_arca(cuit_emisor, punto_venta, tipo_comprobante, numero_planificado);
+                """
+            )
+            migrar_indices_activos_intentos_emision_arca(conexion.cursor())
             conexion.commit()
-        self.factory = lambda: sqlite3.connect(self.ruta)
         self.intentos = IntentoEmisionArcaService(self.factory)
 
-    def tearDown(self):
-        if os.path.exists(self.ruta):
-            os.remove(self.ruta)
-
     def sql(self, consulta, parametros=()):
-        with closing(sqlite3.connect(self.ruta)) as conexion:
+        with closing(self.factory()) as conexion:
             filas = conexion.execute(consulta, parametros).fetchall()
             conexion.commit()
             return filas
@@ -191,7 +270,7 @@ class Base3B4C(unittest.TestCase):
         )
 
     def factura(self, ambiente, resumen_id=10, numero=123, cae=CAE, emisor_id=40):
-        with closing(sqlite3.connect(self.ruta)) as conexion:
+        with closing(self.factory()) as conexion:
             cursor = conexion.execute(
                 "INSERT INTO factura_arca(cliente_id,emisor_id,resumen_id,fecha,punto_venta,tipo_comprobante,"
                 "importe_total,estado,numero_factura,cae,vencimiento_cae,punto_venta_num,tipo_comprobante_num,"
@@ -256,7 +335,7 @@ class IndicesIntentosTest(Base3B4C):
         self.assertEqual(self.sql("SELECT ambiente_arca FROM intentos_emision_arca ORDER BY id"), [(H,), (P,)])
 
     def test_null_null_protegido_y_ambiente_conocido_independiente(self):
-        with closing(sqlite3.connect(self.ruta)) as conexion:
+        with closing(self.factory()) as conexion:
             insertar_crudo(conexion, None)
             with self.assertRaises(sqlite3.IntegrityError):
                 insertar_crudo(conexion, None)
@@ -265,7 +344,7 @@ class IndicesIntentosTest(Base3B4C):
 
     def test_estados_terminales_no_reservan_identidad(self):
         for ambiente in (H, P, None):
-            with closing(sqlite3.connect(self.ruta)) as conexion:
+            with closing(self.factory()) as conexion:
                 for _ in range(2):
                     insertar_crudo(conexion, ambiente, estado="RECONCILIADO")
                     insertar_crudo(conexion, ambiente, estado="NO_AUTORIZADO")
@@ -275,64 +354,98 @@ class IndicesIntentosTest(Base3B4C):
         with self.assertRaises(sqlite3.IntegrityError):
             self.crear(H, resumen_id=11)
 
-    def test_duplicados_nulos_preexistentes_omiten_solo_el_indice_historico_sin_perder_datos(self):
-        with closing(sqlite3.connect(self.ruta)) as conexion:
+    def test_duplicados_nulos_preexistentes_rechazan_grupo_sin_perder_datos(self):
+        with closing(self.factory()) as conexion:
             conexion.execute(f"DROP INDEX {INDICE_AMBIENTE}")
             conexion.execute(f"DROP INDEX {INDICE_HISTORICO}")
             insertar_crudo(conexion, None)
             insertar_crudo(conexion, None)
             conexion.commit()
-            antes = conexion.execute("SELECT * FROM intentos_emision_arca ORDER BY id").fetchall()
+            antes = foto(conexion, "intentos_emision_arca")
             salida = io.StringIO()
-            with redirect_stdout(salida):
+            with self.assertRaises(sqlite3.IntegrityError), redirect_stdout(salida):
                 migrar_indices_activos_intentos_emision_arca(conexion.cursor())
             indices = {fila[0] for fila in conexion.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-            self.assertIn(INDICE_AMBIENTE, indices)
+            self.assertNotIn(INDICE_AMBIENTE, indices)
             self.assertNotIn(INDICE_HISTORICO, indices)
             self.assertNotIn(INDICE_GLOBAL_ANTERIOR, indices)
-            self.assertIn(INDICE_HISTORICO, salida.getvalue())
-            self.assertEqual(conexion.execute("SELECT * FROM intentos_emision_arca ORDER BY id").fetchall(), antes)
+            self.assertEqual(salida.getvalue(), "")
+            self.assertFalse(conexion.in_transaction)
+            self.assertEqual(foto(conexion, "intentos_emision_arca"), antes)
 
     def test_migracion_repetida_es_idempotente(self):
-        antes = self.sql("SELECT name, sql FROM sqlite_master WHERE type='index' ORDER BY name")
-        with closing(sqlite3.connect(self.ruta)) as conexion:
+        with closing(self.factory()) as conexion:
+            antes = foto(conexion, "intentos_emision_arca")
             salida = io.StringIO()
             with redirect_stdout(salida):
                 migrar_indices_activos_intentos_emision_arca(conexion.cursor())
                 migrar_indices_activos_intentos_emision_arca(conexion.cursor())
+            self.assertTrue(conexion.in_transaction)
+            self.assertEqual(foto(conexion, "intentos_emision_arca"), antes)
         self.assertEqual(salida.getvalue(), "")
-        self.assertEqual(self.sql("SELECT name, sql FROM sqlite_master WHERE type='index' ORDER BY name"), antes)
+
+    def test_global_desconocido_rechaza_y_preserva_transaccion_exterior(self):
+        with closing(self.factory()) as conexion:
+            conexion.execute(
+                f"CREATE UNIQUE INDEX {INDICE_GLOBAL_ANTERIOR} ON intentos_emision_arca(id)"
+            )
+            conexion.commit()
+            insertar_crudo(conexion, H)
+            conexion.execute("SAVEPOINT llamador")
+            antes = foto(conexion, "intentos_emision_arca")
+            with self.assertRaises(ValueError):
+                migrar_indices_activos_intentos_emision_arca(conexion.cursor())
+            self.assertTrue(conexion.in_transaction)
+            self.assertEqual(foto(conexion, "intentos_emision_arca"), antes)
+            conexion.execute("ROLLBACK TO llamador")
+            conexion.execute("RELEASE llamador")
+            conexion.rollback()
+            self.assertEqual(conexion.execute("SELECT COUNT(*) FROM intentos_emision_arca").fetchone(), (0,))
+
+    def test_exito_reversible_y_repetible_desde_savepoint_del_llamador(self):
+        with closing(self.factory()) as conexion:
+            conexion.execute(f"DROP INDEX {INDICE_AMBIENTE}")
+            conexion.execute(f"DROP INDEX {INDICE_HISTORICO}")
+            conexion.execute(HISTORICO_INTENTOS)
+            conexion.commit()
+            insertar_crudo(conexion, None)
+            antes = foto(conexion, "intentos_emision_arca")
+            conexion.execute("SAVEPOINT llamador")
+            migrar_indices_activos_intentos_emision_arca(conexion.cursor())
+            actual = foto(conexion, "intentos_emision_arca")
+            migrar_indices_activos_intentos_emision_arca(conexion.cursor())
+            self.assertEqual(foto(conexion, "intentos_emision_arca"), actual)
+            conexion.execute("ROLLBACK TO llamador")
+            self.assertEqual(foto(conexion, "intentos_emision_arca"), antes)
+            conexion.execute("RELEASE llamador")
+            self.assertTrue(conexion.in_transaction)
+            conexion.rollback()
+            self.assertEqual(conexion.execute("SELECT COUNT(*) FROM intentos_emision_arca").fetchone(), (0,))
 
     def test_indice_global_anterior_se_retira_y_no_bloquea_h_p(self):
-        ruta = self.ruta + ".legacy"
-        try:
-            with closing(sqlite3.connect(ruta)) as conexion:
+        with closing(sqlite3.connect(":memory:")) as conexion:
+            conexion.execute(
+                "CREATE TABLE intentos_emision_arca(id INTEGER PRIMARY KEY, cuit_emisor TEXT, punto_venta INTEGER,"
+                " tipo_comprobante INTEGER, numero_planificado INTEGER, estado TEXT)"
+            )
+            conexion.execute(HISTORICO_INTENTOS)
+            self.assertEqual(database._validar_indice_fiscal_sqlite(
+                conexion.cursor(), INDICE_GLOBAL_ANTERIOR, "intentos_emision_arca"), "HISTORICA")
+            conexion.execute("INSERT INTO intentos_emision_arca VALUES(1,?,5,11,123,'ENVIANDO')", (CUIT,))
+            migrar_indices_activos_intentos_emision_arca(conexion.cursor())
+            nombres = {fila[0] for fila in conexion.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+            self.assertNotIn(INDICE_GLOBAL_ANTERIOR, nombres)
+            self.assertEqual(conexion.execute("SELECT ambiente_arca FROM intentos_emision_arca").fetchall(), [(None,)])
+            for ambiente in (H, P):
                 conexion.execute(
-                    "CREATE TABLE intentos_emision_arca(id INTEGER PRIMARY KEY, cuit_emisor TEXT, punto_venta INTEGER,"
-                    " tipo_comprobante INTEGER, numero_planificado INTEGER, estado TEXT)"
+                    "INSERT INTO intentos_emision_arca(cuit_emisor,punto_venta,tipo_comprobante,numero_planificado,"
+                    "estado,ambiente_arca) VALUES(?,5,11,123,'ENVIANDO',?)", (CUIT, ambiente),
                 )
+            with self.assertRaises(sqlite3.IntegrityError):
                 conexion.execute(
-                    f"CREATE UNIQUE INDEX {INDICE_GLOBAL_ANTERIOR} ON intentos_emision_arca(cuit_emisor, punto_venta,"
-                    " tipo_comprobante, numero_planificado) WHERE estado IN ('PENDIENTE_RECONCILIAR','ENVIANDO','CONFLICTO_MANUAL')"
+                    "INSERT INTO intentos_emision_arca(cuit_emisor,punto_venta,tipo_comprobante,numero_planificado,"
+                    "estado) VALUES(?,5,11,123,'ENVIANDO')", (CUIT,),
                 )
-                conexion.execute("INSERT INTO intentos_emision_arca VALUES(1,?,5,11,123,'ENVIANDO')", (CUIT,))
-                migrar_indices_activos_intentos_emision_arca(conexion.cursor())
-                nombres = {fila[0] for fila in conexion.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-                self.assertNotIn(INDICE_GLOBAL_ANTERIOR, nombres)
-                self.assertEqual(conexion.execute("SELECT ambiente_arca FROM intentos_emision_arca").fetchall(), [(None,)])
-                for ambiente in (H, P):
-                    conexion.execute(
-                        "INSERT INTO intentos_emision_arca(cuit_emisor,punto_venta,tipo_comprobante,numero_planificado,"
-                        "estado,ambiente_arca) VALUES(?,5,11,123,'ENVIANDO',?)", (CUIT, ambiente),
-                    )
-                with self.assertRaises(sqlite3.IntegrityError):
-                    conexion.execute(
-                        "INSERT INTO intentos_emision_arca(cuit_emisor,punto_venta,tipo_comprobante,numero_planificado,"
-                        "estado) VALUES(?,5,11,123,'ENVIANDO')", (CUIT,),
-                    )
-        finally:
-            if os.path.exists(ruta):
-                os.remove(ruta)
 
 
 class CreacionIntentosTest(Base3B4C):
@@ -401,7 +514,7 @@ class CreacionIntentosTest(Base3B4C):
         self.assertTrue(self.crear(P, resumen_id=11))
 
     def test_esquema_fisicamente_antiguo_sin_columna(self):
-        with closing(sqlite3.connect(self.ruta)) as conexion:
+        with closing(self.factory()) as conexion:
             conexion.execute(f"DROP INDEX {INDICE_AMBIENTE}")
             conexion.execute(f"DROP INDEX {INDICE_HISTORICO}")
             conexion.execute("ALTER TABLE intentos_emision_arca DROP COLUMN ambiente_arca")
@@ -413,7 +526,7 @@ class CreacionIntentosTest(Base3B4C):
         self.assertEqual(len(self.intentos.listar_activos_por_resumen(10)), 1)
 
     def test_caida_antes_del_commit_no_deja_intento(self):
-        servicio = IntentoEmisionArcaService(lambda: ConexionCommitFallido(sqlite3.connect(self.ruta)))
+        servicio = IntentoEmisionArcaService(lambda: ConexionCommitFallido(self.factory()))
         validacion = ContextoFiscalService.validar(contexto(H))
         with self.assertRaises(sqlite3.OperationalError):
             servicio.crear_intento(
@@ -618,7 +731,7 @@ class ReconciliadoTerminalTest(Base3B4C):
 
     def test_factura_sin_columna_ambiente_no_se_puede_demostrar(self):
         intento_id, _ = self.reconciliado(H, H)
-        with closing(sqlite3.connect(self.ruta)) as conexion:
+        with closing(self.factory()) as conexion:
             conexion.execute("ALTER TABLE factura_arca DROP COLUMN ambiente_arca")
             conexion.commit()
         self.assertEqual(self.evaluar(intento_id).resultado, ResultadoReconciliacion.CONSULTA_INCIERTA)
