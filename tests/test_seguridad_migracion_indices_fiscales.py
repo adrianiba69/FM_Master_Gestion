@@ -14,13 +14,14 @@ Las pruebas ``expectedFailure`` documentan protecciones todavía ausentes.
 
 import importlib.util
 import io
+import re
 import sqlite3
 import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 _CONNECT_ORIGINAL = sqlite3.connect
@@ -136,7 +137,11 @@ class _CursorConFalloDeCreacion:
 
     def execute(self, sql, *args):
         texto = " ".join(str(sql).split()).upper()
-        if texto.startswith("CREATE UNIQUE INDEX") and f" {self._nombre.upper()} " in f"{texto} ":
+        if re.match(
+            rf"^CREATE UNIQUE INDEX (?:IF NOT EXISTS )?(?:MAIN\s*\.\s*)?"
+            rf"{re.escape(self._nombre.upper())}\s+ON\b",
+            texto,
+        ):
             self.fallos += 1
             raise self._error
         self._cursor.execute(sql, *args)
@@ -144,6 +149,44 @@ class _CursorConFalloDeCreacion:
 
     def __getattr__(self, nombre):
         return getattr(self._cursor, nombre)
+
+
+class ReconocimientoInyectorSeguridadTest(unittest.TestCase):
+    def test_create_inyecta_error_exacto_con_y_sin_main(self):
+        nombre = INDICES_FACTURA[0]
+        for prefijo in ("", "main.", "MaIn . "):
+            for clausula in ("", "IF NOT EXISTS "):
+                for tipo in (sqlite3.IntegrityError, sqlite3.OperationalError):
+                    with self.subTest(prefijo=prefijo, clausula=clausula, error=tipo.__name__):
+                        delegado = Mock()
+                        error = tipo("CREATE inyectado")
+                        cursor = _CursorConFalloDeCreacion(delegado, nombre, error)
+                        sql = f"create unique index {clausula}{prefijo}{nombre} ON tabla(id)"
+                        with self.assertRaises(tipo) as capturado:
+                            cursor.execute(sql)
+                        self.assertIs(capturado.exception, error)
+                        self.assertEqual(cursor.fallos, 1)
+                        delegado.execute.assert_not_called()
+
+    def test_no_inyecta_por_nombres_similares_predicados_u_otra_operacion(self):
+        nombre = INDICES_FACTURA[0]
+        for sql in (
+            f"CREATE UNIQUE INDEX main.{nombre}_extra ON tabla(id)",
+            f"CREATE UNIQUE INDEX prefijo_{nombre} ON tabla(id)",
+            f"CREATE UNIQUE INDEX temp.{nombre} ON tabla(id)",
+            f"CREATE UNIQUE INDEX otro ON tabla(id) WHERE estado = ' {nombre} '",
+            f"CREATE INDEX main.{nombre} ON tabla(id)",
+            f"DROP INDEX main.{nombre}",
+            f"SELECT '{nombre}'",
+        ):
+            with self.subTest(sql=sql):
+                delegado = Mock()
+                cursor = _CursorConFalloDeCreacion(
+                    delegado, nombre, sqlite3.OperationalError("no esperado")
+                )
+                self.assertIs(cursor.execute(sql), cursor)
+                self.assertEqual(cursor.fallos, 0)
+                delegado.execute.assert_called_once_with(sql)
 
 
 class _BaseSeguridadIndices(unittest.TestCase):

@@ -6,9 +6,11 @@ expectedFailure documenta defectos pendientes, no protecciones implementadas.
 """
 
 import io
+import re
 import sqlite3
 import unittest
 from contextlib import redirect_stdout
+from unittest.mock import Mock
 
 from tests.test_catalogo_indices_fiscales import ACTUALES, HISTORICAS, database
 
@@ -31,9 +33,15 @@ class _CursorConFallo:
 
     def execute(self, sql, parametros=()):
         texto = " ".join(sql.split()).upper()
-        es_create = texto.startswith("CREATE UNIQUE INDEX")
-        es_drop = texto.startswith("DROP INDEX")
-        objetivo = f" {self.nombre.upper()} " in f"{texto} "
+        nombre = re.escape(self.nombre.upper())
+        es_create = re.match(
+            rf"^CREATE UNIQUE INDEX (?:IF NOT EXISTS )?(?:MAIN\s*\.\s*)?{nombre}\s+ON\b",
+            texto,
+        ) is not None
+        es_drop = re.fullmatch(
+            rf"DROP INDEX (?:IF EXISTS )?(?:MAIN\s*\.\s*)?{nombre}\s*;?",
+            texto,
+        ) is not None
         if self.armado and self.modo == "verificacion" and (
             ("SQLITE_MASTER" in texto or "SQLITE_SCHEMA" in texto) and texto.startswith("SELECT")
             or texto.startswith("PRAGMA") and "INDEX" in texto
@@ -41,7 +49,7 @@ class _CursorConFallo:
             self.verificaciones += 1
             self.armado = False
             raise self.error
-        coincide = objetivo and (
+        coincide = (
             self.operacion == "CREATE" and es_create or self.operacion == "DROP" and es_drop
         )
         if coincide:
@@ -69,6 +77,86 @@ def _solicitud(definicion):
     nombre, tabla, sql = definicion
     clave, condicion = sql.split(f"ON {tabla}(", 1)[1].split(") WHERE ", 1)
     return nombre, clave, condicion, tabla
+
+
+class ReconocimientoInyectorAtomicidadTest(unittest.TestCase):
+    def test_create_inyecta_error_exacto_con_y_sin_main(self):
+        nombre = ACTUALES[0][0]
+        for prefijo in ("", "main.", "MaIn . "):
+            for clausula in ("", "IF NOT EXISTS "):
+                for tipo in (sqlite3.IntegrityError, sqlite3.OperationalError):
+                    with self.subTest(prefijo=prefijo, clausula=clausula, error=tipo.__name__):
+                        delegado = Mock()
+                        error = tipo("CREATE inyectado")
+                        cursor = _CursorConFallo(delegado, "CREATE", nombre, error)
+                        sql = f"create unique index {clausula}{prefijo}{nombre} ON tabla(id)"
+                        with self.assertRaises(tipo) as capturado:
+                            cursor.execute(sql)
+                        self.assertIs(capturado.exception, error)
+                        self.assertEqual(cursor.intervenciones, 1)
+                        delegado.execute.assert_not_called()
+
+    def test_drop_inyecta_error_exacto_con_y_sin_main(self):
+        nombre = ACTUALES[0][0]
+        for prefijo in ("", "main.", "MaIn . "):
+            for clausula in ("", "IF EXISTS "):
+                for tipo in (sqlite3.IntegrityError, sqlite3.OperationalError):
+                    with self.subTest(prefijo=prefijo, clausula=clausula, error=tipo.__name__):
+                        delegado = Mock()
+                        error = tipo("DROP inyectado")
+                        cursor = _CursorConFallo(delegado, "DROP", nombre, error)
+                        with self.assertRaises(tipo) as capturado:
+                            cursor.execute(f"drop index {clausula}{prefijo}{nombre};")
+                        self.assertIs(capturado.exception, error)
+                        self.assertEqual(cursor.intervenciones, 1)
+                        delegado.execute.assert_not_called()
+
+    def test_no_inyecta_por_nombres_similares_predicados_u_otro_esquema(self):
+        nombre = ACTUALES[0][0]
+        sentencias = (
+            f"CREATE UNIQUE INDEX main.{nombre}_extra ON tabla(id)",
+            f"CREATE UNIQUE INDEX prefijo_{nombre} ON tabla(id)",
+            f"CREATE UNIQUE INDEX temp.{nombre} ON tabla(id)",
+            f"CREATE UNIQUE INDEX otro ON tabla(id) WHERE estado = ' {nombre} '",
+            f"CREATE INDEX main.{nombre} ON tabla(id)",
+            f"DROP INDEX main.{nombre}_extra",
+            f"DROP INDEX prefijo_{nombre}",
+            f"DROP INDEX temp.{nombre}",
+            f"DROP INDEX otro /* {nombre} */",
+            f"SELECT '{nombre}'",
+        )
+        for operacion in ("CREATE", "DROP"):
+            for sql in sentencias:
+                with self.subTest(operacion=operacion, sql=sql):
+                    delegado = Mock()
+                    cursor = _CursorConFallo(
+                        delegado, operacion, nombre, sqlite3.OperationalError("no esperado")
+                    )
+                    self.assertIs(cursor.execute(sql), cursor)
+                    self.assertEqual(cursor.intervenciones, 0)
+                    delegado.execute.assert_called_once_with(sql, ())
+
+    def test_create_calificado_activa_modos_definicion_y_verificacion(self):
+        nombre = ACTUALES[0][0]
+        sql = f"CREATE UNIQUE INDEX main.{nombre} ON factura_arca(id)"
+        for modo in ("definicion", "verificacion"):
+            with self.subTest(modo=modo):
+                delegado = Mock()
+                error = sqlite3.OperationalError("verificacion inyectada")
+                cursor = _CursorConFallo(delegado, "CREATE", nombre, error, modo=modo)
+                self.assertIs(cursor.execute(sql), cursor)
+                self.assertEqual(cursor.intervenciones, 1)
+                self.assertEqual(cursor.completadas, [sql])
+                if modo == "verificacion":
+                    with self.assertRaises(sqlite3.OperationalError) as capturado:
+                        cursor.execute("PRAGMA main.index_list(factura_arca)")
+                    self.assertIs(capturado.exception, error)
+                    self.assertEqual(cursor.verificaciones, 1)
+                    delegado.execute.assert_called_once_with(sql, ())
+                else:
+                    delegado.execute.assert_called_once_with(
+                        f"CREATE UNIQUE INDEX {nombre} ON factura_arca(id) WHERE id > 0"
+                    )
 
 
 class AtomicidadIndicesFiscalesTest(unittest.TestCase):
