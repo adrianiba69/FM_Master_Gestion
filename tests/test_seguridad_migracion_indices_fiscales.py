@@ -9,7 +9,7 @@ creadas por cada prueba. Política verificada:
 - Reemplazar índices históricos reconocidos solo de forma atómica y verificada.
 - No modificar ni eliminar registros fiscales para resolver duplicados.
 
-Las pruebas ``expectedFailure`` documentan protecciones todavía ausentes.
+Cada fallo debe detener la migración y restaurar sus protecciones.
 """
 
 import importlib.util
@@ -344,9 +344,7 @@ class IndicesFacturaArcaSeguridadTest(_BaseSeguridadIndices):
 
         self.assertDetenidaSinPerderProtecciones(antes, error)
 
-    @unittest.expectedFailure
     def test_historico_con_duplicados_trim_se_detiene_y_conserva_indice(self):
-        # Hoy: DROP del índice CAE histórico y omisión del reemplazo por duplicados.
         self.factura("HOMOLOGACION", numero=8, cae="111")
         self.factura("HOMOLOGACION", numero=9, cae=" 111 ")
         self.conexion.execute(HISTORICO_CAE_0FE8AC7)
@@ -356,10 +354,7 @@ class IndicesFacturaArcaSeguridadTest(_BaseSeguridadIndices):
 
         self.assertDetenidaSinPerderProtecciones(antes, error)
 
-    @unittest.expectedFailure
     def test_historico_null_con_duplicados_trim_se_detiene_y_conserva_indice(self):
-        # Hoy: se reemplaza por el índice de ambiente conocido y las filas NULL
-        # quedan sin unicidad de CAE.
         self.factura(None, numero=8, cae="111")
         self.factura(None, numero=9, cae=" 111 ")
         self.conexion.execute(HISTORICO_CAE_0FE8AC7)
@@ -369,9 +364,7 @@ class IndicesFacturaArcaSeguridadTest(_BaseSeguridadIndices):
 
         self.assertDetenidaSinPerderProtecciones(antes, error)
 
-    @unittest.expectedFailure
     def test_definicion_desconocida_se_detiene_sin_eliminarla(self):
-        # Hoy: cualquier definición distinta se elimina y se recrea.
         self.factura()
         self.conexion.execute("CREATE UNIQUE INDEX idx_factura_arca_cae_unico ON factura_arca(cae)")
         antes = self.foto()
@@ -380,9 +373,7 @@ class IndicesFacturaArcaSeguridadTest(_BaseSeguridadIndices):
 
         self.assertDetenidaSinPerderProtecciones(antes, error)
 
-    @unittest.expectedFailure
     def test_indice_homonimo_sobre_otra_tabla_se_detiene_sin_eliminarlo(self):
-        # Hoy: se elimina el índice de resumenes y se crea uno nuevo en factura_arca.
         self.factura()
         self.conexion.execute("INSERT INTO resumenes(cae) VALUES('111')")
         self.conexion.execute("CREATE UNIQUE INDEX idx_factura_arca_cae_unico ON resumenes(cae)")
@@ -392,9 +383,7 @@ class IndicesFacturaArcaSeguridadTest(_BaseSeguridadIndices):
 
         self.assertDetenidaSinPerderProtecciones(antes, error)
 
-    @unittest.expectedFailure
     def test_faltante_con_duplicados_se_detiene_sin_modificar_filas(self):
-        # Hoy: imprime una advertencia y continúa sin la protección.
         self.factura(None, numero=8, cae="111")
         self.factura(None, numero=9, cae=" 111 ")
         antes = self.foto()
@@ -406,9 +395,7 @@ class IndicesFacturaArcaSeguridadTest(_BaseSeguridadIndices):
 
         self.assertDetenidaSinPerderProtecciones(antes, error)
 
-    @unittest.expectedFailure
     def test_error_de_creacion_restaura_el_historico_atomicamente(self):
-        # Hoy: el DROP del histórico queda aplicado aunque falle la creación.
         for error_simulado in (sqlite3.IntegrityError("fallo simulado"),
                                sqlite3.OperationalError("fallo simulado")):
             with self.subTest(error=type(error_simulado).__name__):
@@ -467,9 +454,7 @@ class IndicesIntentosSeguridadTest(_BaseSeguridadIndices):
         self.intento("HOMOLOGACION")
         self.intento("PRODUCCION")
 
-    @unittest.expectedFailure
     def test_literal_enviando_alterado_se_detiene(self):
-        # Hoy: lower() equipara 'enviando' con 'ENVIANDO' y acepta el índice sin aviso.
         for nombre in INDICES_INTENTOS:
             self.conexion.execute(_ddl_esperado(nombre).replace("'ENVIANDO'", "'enviando'"))
         for con_duplicados in (False, True):
@@ -483,9 +468,7 @@ class IndicesIntentosSeguridadTest(_BaseSeguridadIndices):
 
                 self.assertDetenidaSinPerderProtecciones(antes, error)
 
-    @unittest.expectedFailure
     def test_global_de_definicion_desconocida_no_se_elimina(self):
-        # Hoy: DROP INDEX incondicional del índice global anterior.
         self.intento(None)
         self.conexion.execute(
             f"CREATE UNIQUE INDEX {INDICE_GLOBAL_INTENTOS} ON intentos_emision_arca"
@@ -497,9 +480,7 @@ class IndicesIntentosSeguridadTest(_BaseSeguridadIndices):
 
         self.assertDetenidaSinPerderProtecciones(antes, error)
 
-    @unittest.expectedFailure
     def test_error_al_crear_reemplazo_conserva_global_historico(self):
-        # Hoy: el global se elimina antes de crear los reemplazos.
         for error_simulado in (sqlite3.IntegrityError("fallo simulado"),
                                sqlite3.OperationalError("fallo simulado")):
             with self.subTest(error=type(error_simulado).__name__):
@@ -520,9 +501,7 @@ class IndicesIntentosSeguridadTest(_BaseSeguridadIndices):
                 self.assertEqual(cursor.fallos, 1, "CONFIGURACION: el fallo simulado no se ejecutó")
                 self.assertDetenidaSinPerderProtecciones(antes, error)
 
-    @unittest.expectedFailure
     def test_faltante_con_intentos_activos_duplicados_se_detiene(self):
-        # Hoy: crea el índice por ambiente, omite el histórico y continúa.
         self.intento(None)
         self.intento(None)
         antes = self.foto()

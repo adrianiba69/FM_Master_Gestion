@@ -1,6 +1,6 @@
 """Etapa 3B: prevalidacion de destinos y contexto transaccional, solo :memory:.
 
-Los auxiliares no estan conectados a migraciones; aqui se prueban de forma aislada.
+Aqui los auxiliares se prueban de forma aislada, sin ejecutar migraciones.
 """
 
 import sqlite3

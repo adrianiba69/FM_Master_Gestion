@@ -2,7 +2,7 @@
 
 Complementa test_seguridad_migracion_indices_fiscales con fotos de metadatos,
 fallos en operaciones concretas, rollback de grupo y transacciones del llamador.
-expectedFailure documenta defectos pendientes, no protecciones implementadas.
+Los fallos deben propagarse tras restaurar el grupo y conservar al llamador.
 """
 
 import io
@@ -10,7 +10,7 @@ import re
 import sqlite3
 import unittest
 from contextlib import redirect_stdout
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from tests.test_catalogo_indices_fiscales import ACTUALES, HISTORICAS, database
 
@@ -65,6 +65,8 @@ class _CursorConFallo:
                 return self
         self.cursor.execute(sql, parametros)
         self.completadas.append(sql)
+        if coincide and self.modo == "despues":
+            raise self.error
         if coincide and self.modo == "verificacion":
             self.armado = True
         return self
@@ -302,32 +304,22 @@ class AtomicidadIndicesFiscalesTest(unittest.TestCase):
             self.restaurada(antes, error, error_simulado)
         return error
 
-    @unittest.expectedFailure
     def test_create_operational_individual_restaura_sql_y_metadatos(self):
-        # El helper propaga OperationalError, pero ya perdio el indice historico.
         self.fallo_factura("CREATE", 2, sqlite3.OperationalError, individual=True)
 
-    @unittest.expectedFailure
     def test_create_integrity_individual_restaura_y_propaga(self):
-        # IntegrityError se convierte en advertencia tras eliminar el historico.
         self.fallo_factura("CREATE", 2, sqlite3.IntegrityError, individual=True)
 
-    @unittest.expectedFailure
     def test_ultimo_create_factura_revierte_todos_los_reemplazos(self):
-        # Falta SAVEPOINT de grupo: quedan los tres indices anteriores aplicados.
         self.fallo_factura("CREATE", 3, sqlite3.OperationalError)
 
-    @unittest.expectedFailure
     def test_drop_tardio_factura_revierte_reemplazos_anteriores(self):
-        # El DROP falla, pero los dos indices de identidad ya fueron modificados.
         self.fallo_factura("DROP", 2, sqlite3.OperationalError)
 
     def test_drop_individual_fallido_conserva_indice_y_propaga(self):
         self.fallo_factura("DROP", 2, sqlite3.OperationalError, individual=True)
 
-    @unittest.expectedFailure
     def test_trim_historico_null_no_deja_grupo_parcial(self):
-        # El duplicado NULL aparece en el ultimo destino y el grupo continua.
         self.factura(1, "111", None)
         self.factura(2, " 111 ", None)
         self.conexion.execute(HISTORICAS[1][2])
@@ -360,14 +352,10 @@ class AtomicidadIndicesFiscalesTest(unittest.TestCase):
         error, _ = self.ejecutar(database.migrar_indices_unicos_factura_arca)
         self.restaurada(antes, error)
 
-    @unittest.expectedFailure
     def test_desconocido_tardio_preserva_grupo_completo(self):
-        # Se elimina la definicion desconocida y quedan cambios previos de grupo.
         self.bloqueo_tardio()
 
-    @unittest.expectedFailure
     def test_homonimo_tardio_en_otra_tabla_preserva_grupo_completo(self):
-        # Se elimina una proteccion de resumenes para crear otra en factura_arca.
         self.bloqueo_tardio(otra_tabla=True)
 
     def fallo_global(self, posicion, operacion="CREATE"):
@@ -385,14 +373,10 @@ class AtomicidadIndicesFiscalesTest(unittest.TestCase):
                                 for s in cursor.completadas))
         self.restaurada(antes, error, simulado)
 
-    @unittest.expectedFailure
     def test_primer_create_intentos_conserva_global(self):
-        # El global se elimina antes del primer reemplazo.
         self.fallo_global(4)
 
-    @unittest.expectedFailure
     def test_ultimo_create_intentos_conserva_global_sin_reemplazo_parcial(self):
-        # El global desaparece y queda solo el reemplazo por ambiente.
         self.fallo_global(5)
 
     def test_drop_global_fallido_preserva_filas_indices_y_error(self):
@@ -416,19 +400,13 @@ class AtomicidadIndicesFiscalesTest(unittest.TestCase):
         else:
             self.restaurada(antes, error)
 
-    @unittest.expectedFailure
     def test_create_exitoso_con_definicion_incorrecta_debe_revertirse(self):
-        # CREATE devuelve exito pero la definicion creada no se verifica.
         self.fallo_verificacion("definicion")
 
-    @unittest.expectedFailure
     def test_error_de_consulta_de_verificacion_debe_restaurar(self):
-        # Hoy no existe verificacion posterior: el fallo queda armado sin ejecutar.
         self.fallo_verificacion("verificacion")
 
-    @unittest.expectedFailure
     def test_fallo_grupo_preserva_transaccion_y_savepoint_sin_rollback_del_llamador(self):
-        # Preservar la transaccion no basta: el grupo debe deshacer sus propios DDL.
         self.historicos()
         self.conexion.execute("BEGIN")
         self.conexion.execute("INSERT INTO resumenes VALUES(2,'pendiente')")
@@ -463,14 +441,10 @@ class AtomicidadIndicesFiscalesTest(unittest.TestCase):
         self.exigir(abierta and self.foto() == antes,
                     "Sin BEGIN previo, los DDL se confirman y rollback no restaura")
 
-    @unittest.expectedFailure
     def test_factura_sin_transaccion_permanece_reversible_por_el_llamador(self):
-        # No se abre transaccion exterior y cada DDL queda confirmado.
         self.sin_transaccion(database.migrar_indices_unicos_factura_arca)
 
-    @unittest.expectedFailure
     def test_intentos_sin_transaccion_permanece_reversible_por_el_llamador(self):
-        # El DROP global y los CREATE quedan confirmados sin BEGIN previo.
         self.sin_transaccion(database.migrar_indices_activos_intentos_emision_arca)
 
     def test_indices_actuales_idempotentes_con_metadatos_y_transaccion_intactos(self):
@@ -549,9 +523,7 @@ class AtomicidadIndicesFiscalesTest(unittest.TestCase):
         self.assertEqual(self.foto(), antes)
         self.conexion.rollback()
 
-    @unittest.expectedFailure
     def test_fallo_intentos_revierte_columna_ambiente_y_global(self):
-        # ALTER y DROP quedan fuera de una proteccion de grupo incluso con BEGIN.
         self.sin_ambiente()
         self.conexion.execute("BEGIN")
         antes = self.foto()
@@ -564,9 +536,7 @@ class AtomicidadIndicesFiscalesTest(unittest.TestCase):
         self.assertTrue(self.conexion.in_transaction)
         self.restaurada(antes, error, simulado)
 
-    @unittest.expectedFailure
     def test_ambiente_sin_transaccion_previa_es_reversible(self):
-        # ALTER sin BEGIN se confirma; rollback del llamador no devuelve el esquema.
         self.sin_ambiente()
         antes = self.foto()
         for funcion in (
@@ -579,6 +549,291 @@ class AtomicidadIndicesFiscalesTest(unittest.TestCase):
         self.conexion.rollback()
         self.exigir(abierta and self.foto() == antes,
                     "ambiente_arca y los indices no son reversibles sin BEGIN exterior")
+
+    def test_planificacion_solo_lectura_modela_ambiente_ausente(self):
+        self.sin_ambiente()
+        antes = self.foto()
+        trazas = []
+        self.conexion.set_trace_callback(trazas.append)
+        try:
+            for tabla in ("factura_arca", "intentos_emision_arca"):
+                destinos = tuple(d for d in database._DESTINOS_INDICES_FISCALES if d[1] == tabla)
+                plan, sin_ambiente = database._planificar_indices_fiscales(
+                    self.conexion.cursor(), destinos
+                )
+                self.assertEqual(sin_ambiente, {tabla})
+                self.assertEqual([p[:3] for p in plan], [d for d in ACTUALES if d[1] == tabla])
+                self.assertEqual([p[3] for p in plan],
+                                 ["HISTORICA", "AUSENTE", "HISTORICA", "AUSENTE"]
+                                 if tabla == "factura_arca" else ["AUSENTE", "AUSENTE"])
+        finally:
+            self.conexion.set_trace_callback(None)
+        self.assertTrue(trazas)
+        self.assertTrue(all(s.lstrip().upper().startswith(("SELECT", "PRAGMA")) for s in trazas))
+        self.assertEqual(self.foto(), antes)
+        self.assertFalse(self.conexion.in_transaction)
+
+    def test_prevalida_los_seis_destinos_antes_de_abrir_transaccion(self):
+        destinos = list(database._DESTINOS_INDICES_FISCALES)
+        nombre, tabla, clave, condicion = destinos[-1]
+        destinos[-1] = (nombre, tabla, clave, condicion.replace("'ENVIANDO'", "'enviando'"))
+        antes = self.foto()
+        trazas = []
+        self.conexion.set_trace_callback(trazas.append)
+        try:
+            with patch.object(database, "_DESTINOS_INDICES_FISCALES", tuple(destinos)):
+                for funcion, args in (
+                    (database.migrar_indices_unicos_factura_arca, ()),
+                    (database.migrar_indices_activos_intentos_emision_arca, ()),
+                    (database._migrar_indice_factura_arca, _solicitud(ACTUALES[2])),
+                ):
+                    with self.subTest(funcion=funcion.__name__), self.assertRaises(ValueError):
+                        funcion(self.conexion.cursor(), *args)
+        finally:
+            self.conexion.set_trace_callback(None)
+        self.assertEqual(trazas, [])
+        self.assertEqual(self.foto(), antes)
+        self.assertFalse(self.conexion.in_transaction)
+
+    def test_duplicados_se_detectan_antes_de_alter_y_drop(self):
+        self.sin_ambiente()
+        self.conexion.execute("INSERT INTO main.factura_arca VALUES(2,1,2,11,2,' 111 ')")
+        self.conexion.commit()
+        antes = self.foto()
+        trazas = []
+        self.conexion.set_trace_callback(trazas.append)
+        try:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, ACTUALES[3][0]):
+                database.migrar_indices_unicos_factura_arca(self.conexion.cursor())
+        finally:
+            self.conexion.set_trace_callback(None)
+        self.assertFalse(any(s.upper().startswith(("ALTER", "CREATE", "DROP")) for s in trazas))
+        self.assertEqual(self.foto(), antes)
+        self.assertFalse(self.conexion.in_transaction)
+
+    def test_columnas_ausentes_bloquean_el_grupo_antes_de_ddl(self):
+        for tabla, columna, funcion in (
+            ("factura_arca", "cae", database.migrar_indices_unicos_factura_arca),
+            ("intentos_emision_arca", "estado", database.migrar_indices_activos_intentos_emision_arca),
+        ):
+            with self.subTest(tabla=tabla):
+                self.conexion.execute(f"ALTER TABLE main.{tabla} DROP COLUMN {columna}")
+                antes = self.foto()
+                trazas = []
+                self.conexion.set_trace_callback(trazas.append)
+                try:
+                    with self.assertRaisesRegex(ValueError, "Columnas fiscales ausentes"):
+                        funcion(self.conexion.cursor())
+                finally:
+                    self.conexion.set_trace_callback(None)
+                self.assertFalse(any(s.upper().startswith(("ALTER", "CREATE", "DROP")) for s in trazas))
+                self.assertEqual(self.foto(), antes)
+
+    def test_desconocidos_y_homonimos_bloquean_antes_de_cualquier_ddl(self):
+        for nombre, tabla, funcion in (
+            (ACTUALES[3][0], "factura_arca", database.migrar_indices_unicos_factura_arca),
+            (ACTUALES[3][0], "resumenes", database.migrar_indices_unicos_factura_arca),
+            (ACTUALES[5][0], "intentos_emision_arca",
+             database.migrar_indices_activos_intentos_emision_arca),
+            (HISTORICAS[2][0], "intentos_emision_arca",
+             database.migrar_indices_activos_intentos_emision_arca),
+        ):
+            with self.subTest(nombre=nombre, tabla=tabla):
+                self.sin_ambiente()
+                if nombre == HISTORICAS[2][0]:
+                    self.conexion.execute(f"DROP INDEX main.{nombre}")
+                self.conexion.execute(f"CREATE UNIQUE INDEX main.{nombre} ON {tabla}(id)")
+                antes = self.foto()
+                trazas = []
+                self.conexion.set_trace_callback(trazas.append)
+                try:
+                    with self.assertRaises(ValueError):
+                        funcion(self.conexion.cursor())
+                finally:
+                    self.conexion.set_trace_callback(None)
+                self.assertFalse(any(s.upper().startswith(("ALTER", "CREATE", "DROP")) for s in trazas))
+                self.assertEqual(self.foto(), antes)
+                self.assertFalse(self.conexion.in_transaction)
+
+    def test_metadatos_incompatibles_tras_create_revierten_el_grupo(self):
+        self.conexion.execute("DROP TABLE main.factura_arca")
+        self.conexion.execute(
+            "CREATE TABLE main.factura_arca(id INTEGER PRIMARY KEY, "
+            "ambiente_arca TEXT COLLATE NOCASE, emisor_id INTEGER, punto_venta_num INTEGER, "
+            "tipo_comprobante_num INTEGER, numero_comprobante_num INTEGER, cae TEXT)"
+        )
+        self.historicos()
+        antes = self.foto()
+        trazas = []
+        self.conexion.set_trace_callback(trazas.append)
+        try:
+            with self.assertRaisesRegex(ValueError, "colaciones"):
+                database.migrar_indices_unicos_factura_arca(self.conexion.cursor())
+        finally:
+            self.conexion.set_trace_callback(None)
+        self.assertIn(f"DROP INDEX main.{ACTUALES[0][0]}", trazas)
+        self.assertTrue(any(s.startswith("CREATE UNIQUE INDEX") for s in trazas))
+        self.assertEqual(self.foto(), antes)
+        self.assertFalse(self.conexion.in_transaction)
+
+    def test_fallo_despues_de_ddl_restaura_grupo_y_estado_del_llamador(self):
+        casos = (
+            (database._migrar_indice_factura_arca, _solicitud(ACTUALES[2]), "DROP", ACTUALES[2][0]),
+            (database._migrar_indice_factura_arca, _solicitud(ACTUALES[2]), "CREATE", ACTUALES[2][0]),
+            (database.migrar_indices_unicos_factura_arca, (), "CREATE", ACTUALES[3][0]),
+            (database.migrar_indices_activos_intentos_emision_arca, (), "CREATE", ACTUALES[5][0]),
+            (database.migrar_indices_activos_intentos_emision_arca, (), "DROP", HISTORICAS[2][0]),
+        )
+        for funcion, args, operacion, nombre in casos:
+            for exterior in (False, True):
+                for tipo in (sqlite3.IntegrityError, sqlite3.OperationalError):
+                    with self.subTest(funcion=funcion.__name__, operacion=operacion,
+                                      exterior=exterior, error=tipo.__name__):
+                        self.sin_ambiente()
+                        if exterior:
+                            self.conexion.execute("SAVEPOINT llamador")
+                            self.conexion.execute("INSERT INTO main.resumenes VALUES(2,'pendiente')")
+                        antes = self.foto()
+                        simulado = tipo("fallo posterior a DDL ejecutado")
+                        cursor = _CursorConFallo(
+                            self.conexion.cursor(), operacion, nombre, simulado, modo="despues"
+                        )
+                        error, _ = self.ejecutar(funcion, *args, cursor=cursor)
+                        self.assertEqual(cursor.intervenciones, 1)
+                        self.assertTrue(any(nombre in s and s.startswith(
+                            "CREATE UNIQUE INDEX" if operacion == "CREATE" else "DROP INDEX"
+                        ) for s in cursor.completadas), "DDL no completado antes del fallo")
+                        self.restaurada(antes, error, simulado)
+                        self.assertEqual(self.conexion.in_transaction, exterior)
+                        if exterior:
+                            self.conexion.execute("ROLLBACK TO llamador")
+                            self.conexion.execute("RELEASE llamador")
+                            self.assertEqual(self.conexion.execute(
+                                "SELECT id FROM main.resumenes").fetchall(), [(1,)])
+
+    def test_global_se_retira_solo_despues_de_verificar_ambos_reemplazos(self):
+        self.global_intentos()
+        antes = self.foto()
+        simulado = sqlite3.OperationalError("fallo despues de retirar global")
+        cursor = _CursorConFallo(
+            self.conexion.cursor(), "DROP", HISTORICAS[2][0], simulado, modo="despues"
+        )
+        error, _ = self.ejecutar(database.migrar_indices_activos_intentos_emision_arca, cursor=cursor)
+        self.assertEqual(cursor.intervenciones, 1)
+        completadas = cursor.completadas
+        posicion_drop = completadas.index(f"DROP INDEX main.{HISTORICAS[2][0]}")
+        for nombre, _tabla, _sql in ACTUALES[4:]:
+            posicion_create = next(i for i, s in enumerate(completadas)
+                                   if s.startswith("CREATE UNIQUE INDEX") and nombre in s)
+            posicion_verificacion = completadas.index(f"PRAGMA main.index_xinfo({nombre})")
+            self.assertLess(posicion_create, posicion_verificacion)
+            self.assertLess(posicion_verificacion, posicion_drop)
+        self.restaurada(antes, error, simulado)
+
+    def test_sombras_temp_no_desvian_planificacion_alter_ni_indices(self):
+        self.sin_ambiente()
+        self.conexion.execute("CREATE TABLE temp.factura_arca(id INTEGER PRIMARY KEY, cae TEXT)")
+        self.conexion.execute("CREATE TABLE temp.intentos_emision_arca(id INTEGER PRIMARY KEY)")
+        for nombre, tabla, _sql in ACTUALES + HISTORICAS[2:]:
+            self.conexion.execute(f"CREATE UNIQUE INDEX temp.{nombre} ON {tabla}(id)")
+        self.conexion.execute("INSERT INTO temp.factura_arca VALUES(1,'solo temp')")
+        self.conexion.commit()
+        temp_antes = self.conexion.execute(
+            "SELECT * FROM temp.sqlite_master ORDER BY name"
+        ).fetchall()
+        antes = self.foto()
+        for funcion in (
+            database.migrar_indices_unicos_factura_arca,
+            database.migrar_indices_activos_intentos_emision_arca,
+        ):
+            funcion(self.conexion.cursor())
+        for nombre, tabla, _sql in ACTUALES:
+            self.assertEqual(database._validar_indice_fiscal_sqlite(
+                self.conexion.cursor(), nombre, tabla), "ACTUAL")
+        self.assertEqual(database._validar_indice_fiscal_sqlite(
+            self.conexion.cursor(), *HISTORICAS[2][:2]), "AUSENTE")
+        self.assertEqual(self.conexion.execute(
+            "SELECT * FROM temp.sqlite_master ORDER BY name").fetchall(), temp_antes)
+        self.assertEqual(self.conexion.execute(
+            "SELECT * FROM temp.factura_arca").fetchall(), [(1, "solo temp")])
+        for tabla in ("factura_arca", "intentos_emision_arca"):
+            self.assertEqual(self.conexion.execute(
+                f"SELECT ambiente_arca FROM main.{tabla}").fetchall(), [(None,)])
+        self.assertTrue(self.conexion.in_transaction)
+        self.conexion.rollback()
+        self.assertEqual(self.foto(), antes)
+        self.assertEqual(self.conexion.execute(
+            "SELECT * FROM temp.sqlite_master ORDER BY name").fetchall(), temp_antes)
+
+    def test_tabla_temp_vacia_no_oculta_duplicados_main(self):
+        self.factura(1, "111", None)
+        self.factura(2, " 111 ", None)
+        self.conexion.execute("CREATE TABLE temp.factura_arca(id INTEGER)")
+        self.conexion.commit()
+        antes = self.foto()
+        with self.assertRaises(sqlite3.IntegrityError):
+            database.migrar_indices_unicos_factura_arca(self.conexion.cursor())
+        self.assertEqual(self.foto(), antes)
+        self.assertFalse(self.conexion.in_transaction)
+
+    def test_auxiliar_individual_sin_transaccion_es_reversible(self):
+        self.historicos()
+        antes = self.foto()
+        database._migrar_indice_factura_arca(self.conexion.cursor(), *_solicitud(ACTUALES[2]))
+        self.assertTrue(self.conexion.in_transaction)
+        self.assertEqual(database._validar_indice_fiscal_sqlite(
+            self.conexion.cursor(), *ACTUALES[2][:2]), "ACTUAL")
+        self.conexion.rollback()
+        self.assertEqual(self.foto(), antes)
+
+    def test_modos_legacy_y_autocommit_false_sin_commit_de_migracion(self):
+        for modo in (None, "", "IMMEDIATE", "EXCLUSIVE", False):
+            with self.subTest(modo=modo):
+                self.sin_ambiente()
+                if modo is False:
+                    self.conexion.autocommit = False
+                else:
+                    self.conexion.isolation_level = modo
+                antes = self.foto()
+                trazas = []
+                self.conexion.set_trace_callback(trazas.append)
+                try:
+                    database.migrar_indices_unicos_factura_arca(self.conexion.cursor())
+                    database.migrar_indices_activos_intentos_emision_arca(self.conexion.cursor())
+                finally:
+                    self.conexion.set_trace_callback(None)
+                self.assertTrue(self.conexion.in_transaction)
+                self.assertFalse(any(s.upper().startswith(("COMMIT", "END")) for s in trazas))
+                self.conexion.rollback()
+                self.assertEqual(self.foto(), antes)
+
+    def test_modos_inseguros_rechazados_incluso_con_indices_actuales(self):
+        for modo in ("query_only", "journal_off", "autocommit_true"):
+            with self.subTest(modo=modo):
+                self.sin_ambiente()
+                for nombre, _tabla, _sql in HISTORICAS:
+                    self.conexion.execute(f"DROP INDEX main.{nombre}")
+                for tabla in ("factura_arca", "intentos_emision_arca"):
+                    self.conexion.execute(f"ALTER TABLE main.{tabla} ADD COLUMN ambiente_arca TEXT")
+                for _nombre, _tabla, sql in ACTUALES:
+                    self.conexion.execute(sql)
+                self.conexion.commit()
+                if modo == "query_only":
+                    self.conexion.execute("PRAGMA query_only=ON")
+                elif modo == "journal_off":
+                    self.conexion.execute("PRAGMA journal_mode=OFF")
+                else:
+                    self.conexion.autocommit = True
+                antes = self.foto()
+                for funcion, args in (
+                    (database.migrar_indices_unicos_factura_arca, ()),
+                    (database.migrar_indices_activos_intentos_emision_arca, ()),
+                    (database._migrar_indice_factura_arca, _solicitud(ACTUALES[2])),
+                ):
+                    with self.assertRaises(database._ContextoTransaccionalNoAdmitido):
+                        funcion(self.conexion.cursor(), *args)
+                    self.assertEqual(self.foto(), antes)
+                    self.assertFalse(self.conexion.in_transaction)
 
 
 if __name__ == "__main__":

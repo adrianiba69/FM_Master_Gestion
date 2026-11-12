@@ -231,7 +231,7 @@ def _reconocer_definicion_indice_fiscal(nombre: str, tabla: str, sql: str | None
 
     Devuelve ACTUAL, HISTORICA o DESCONOCIDA. SQL ausente o entradas no textuales
     no se reconocen. Nombre y tabla deben coincidir exactamente con el catalogo.
-    No esta conectada al inspector, las migraciones ni la autorizacion de arranque.
+    No autoriza escrituras por si sola; las migraciones verifican tambien SQLite.
     """
     if not isinstance(nombre, str) or not isinstance(tabla, str) or not isinstance(sql, str):
         return "DESCONOCIDA"
@@ -390,8 +390,7 @@ def _prevalidar_destinos_indices_fiscales(destinos=None):
 
     Cada destino pasa por _validar_solicitud_indice_fiscal y, ademas, su SQL debe
     ser textualmente el del catalogo, para que no se propaguen variantes de formato.
-    Devuelve las definiciones (nombre, tabla, sql) del catalogo. No esta conectada
-    a ninguna migracion.
+    Devuelve las definiciones (nombre, tabla, sql) del catalogo para su planificacion.
     """
     if destinos is None:
         destinos = _DESTINOS_INDICES_FISCALES
@@ -500,7 +499,7 @@ def _transaccion_indices_fiscales(cur):
     llamador confirma o revierte. Una transaccion o SAVEPOINT del llamador se
     conserva. Ante fallo revierte solo el bloque (y su BEGIN propio) y relanza el
     mismo error. Todas las sentencias de control se ejecutan con ``cur``.
-    No esta conectado a ninguna migracion.
+    Las migraciones fiscales lo usan tanto por grupo como individualmente.
     """
     conexion = cur.connection
     contexto = _inspeccionar_contexto_transaccional_sqlite(conexion)
@@ -1013,54 +1012,83 @@ def _columnas_tabla(cur, nombre_tabla):
     return {fila[1] for fila in cur.fetchall()}
 
 
+def _planificar_indices_fiscales(cur, destinos):
+    """Solo lectura: certifica destinos, estructuras, indices y ausencia de duplicados.
+
+    Se llama dentro del bloque protegido, antes de cualquier ALTER/DROP/CREATE.
+    Si falta ambiente_arca, una proyeccion NULL modela su incorporacion sin backfill.
+    Devuelve el plan y las tablas que requieren esa columna; no autoriza SQL ajeno.
+    """
+    definiciones = _prevalidar_destinos_indices_fiscales()
+    plan = []
+    sin_ambiente = set()
+    for nombre, tabla, clave, condicion in destinos:
+        definicion = _validar_solicitud_indice_fiscal(nombre, clave, condicion, tabla)
+        if definicion not in definiciones:
+            raise ValueError(f"Destino de indice fiscal incompatible: {nombre}.")
+        estado = _validar_indice_fiscal_sqlite(cur, nombre, tabla)
+        cur.execute(f"PRAGMA main.table_info({tabla})")
+        columnas = {fila[1] for fila in cur.fetchall()}
+        necesarias = {
+            columna for columna in _COLUMNAS_CLAVE_INDICES_FISCALES[("ACTUAL", nombre)]
+            if columna is not None
+        }
+        if tabla == "factura_arca":
+            necesarias.add("cae" if "cae" in clave else "numero_comprobante_num")
+        else:
+            necesarias.add("estado")
+        faltantes = necesarias - columnas - {"ambiente_arca"}
+        if faltantes:
+            raise ValueError(f"Columnas fiscales ausentes en main.{tabla}: {sorted(faltantes)}.")
+        cur.execute(f"PRAGMA main.table_list({tabla})")
+        tablas = [fila for fila in cur.fetchall() if fila[0] == "main" and fila[1] == tabla]
+        if len(tablas) != 1 or tablas[0][2] != "table" or tablas[0][4]:
+            raise ValueError(f"Se requiere una tabla fiscal rowid ordinaria en main: {tabla}.")
+        fuente = f"main.{tabla}"
+        if "ambiente_arca" not in columnas:
+            sin_ambiente.add(tabla)
+            fuente = f"(SELECT *, NULL AS ambiente_arca FROM main.{tabla})"
+        cur.execute(
+            f"SELECT {clave}, COUNT(*) FROM {fuente} "
+            f"WHERE {condicion} GROUP BY {clave} HAVING COUNT(*) > 1 LIMIT 1"
+        )
+        if cur.fetchone() is not None:
+            raise sqlite3.IntegrityError(f"Duplicados incompatibles con el indice fiscal {nombre}.")
+        plan.append((*definicion, estado))
+    return tuple(plan), sin_ambiente
+
+
+def _aplicar_plan_indices_fiscales(cur, plan, sin_ambiente):
+    """Aplica un plan cerrado dentro del SAVEPOINT del llamador y verifica cada destino."""
+    for tabla in sorted(sin_ambiente):
+        cur.execute(f"ALTER TABLE main.{tabla} ADD COLUMN ambiente_arca TEXT")
+    for nombre, tabla, sql, estado in plan:
+        if estado == "HISTORICA":
+            cur.execute(f"DROP INDEX main.{nombre}")
+        if estado != "ACTUAL":
+            cur.execute(sql.replace("INDEX IF NOT EXISTS ", "INDEX IF NOT EXISTS main.", 1))
+        if _validar_indice_fiscal_sqlite(cur, nombre, tabla) != "ACTUAL":
+            raise ValueError(f"El indice fiscal no quedo ACTUAL: {nombre}.")
+
+
 def _migrar_indice_factura_arca(cur, nombre_indice, clave, condicion, tabla="factura_arca"):
-    ddl_sql = (
-        f"CREATE UNIQUE INDEX IF NOT EXISTS {nombre_indice} "
-        f"ON {tabla}({clave}) WHERE {condicion}"
-    )
-    cur.execute(
-        f"SELECT {clave}, COUNT(*), GROUP_CONCAT(id) FROM {tabla} "
-        f"WHERE {condicion} GROUP BY {clave} HAVING COUNT(*) > 1"
-    )
-    duplicados = cur.fetchall()
-    cur.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (nombre_indice,))
-    fila = cur.fetchone()
-    sql_existente = (fila[0] if fila else "").strip() if fila else ""
-    sql_existente_normalizado = " ".join(sql_existente.lower().split()).replace(" if not exists", "")
-    ddl_normalizado = " ".join(ddl_sql.lower().split()).replace(" if not exists", "")
-    if sql_existente and sql_existente_normalizado != ddl_normalizado:
-        print(f"ADVERTENCIA: {nombre_indice} tiene una definicion anterior; se retira para migrar su unicidad.")
-        cur.execute(f"DROP INDEX IF EXISTS {nombre_indice}")
-    if duplicados:
-        print(f"ADVERTENCIA: {nombre_indice} NO se creo por duplicados: {duplicados}")
-        return
-    if sql_existente_normalizado == ddl_normalizado:
-        return
-    try:
-        cur.execute(ddl_sql)
-    except sqlite3.IntegrityError as error:
-        print(f"ADVERTENCIA: {nombre_indice} no se pudo crear (IntegrityError): {error}")
+    """Migra un destino catalogado bajo proteccion propia, sin confirmar al llamador."""
+    _prevalidar_destinos_indices_fiscales()
+    _validar_solicitud_indice_fiscal(nombre_indice, clave, condicion, tabla)
+    with _transaccion_indices_fiscales(cur):
+        plan, sin_ambiente = _planificar_indices_fiscales(
+            cur, ((nombre_indice, tabla, clave, condicion),)
+        )
+        _aplicar_plan_indices_fiscales(cur, plan, sin_ambiente)
 
 
 def migrar_indices_unicos_factura_arca(cur):
-    """Protege por separado ambientes conocidos e historicos sin atribuir ambiente."""
-    agregar_columna_si_falta(cur, "factura_arca", "ambiente_arca", "TEXT")
-    identidad = "emisor_id, punto_venta_num, tipo_comprobante_num, numero_comprobante_num"
-    utilizables = (
-        "numero_comprobante_num IS NOT NULL AND emisor_id > 0 AND punto_venta_num > 0 "
-        "AND tipo_comprobante_num > 0 AND numero_comprobante_num > 0"
-    )
-    for nombre, clave, condicion in (
-        ("idx_factura_arca_identidad_unica", f"ambiente_arca, {identidad}",
-         f"ambiente_arca IS NOT NULL AND {utilizables}"),
-        ("idx_factura_arca_identidad_historica_unica", identidad,
-         f"ambiente_arca IS NULL AND {utilizables}"),
-        ("idx_factura_arca_cae_unico", "ambiente_arca, TRIM(cae)",
-         "ambiente_arca IS NOT NULL AND TRIM(COALESCE(cae, '')) <> ''"),
-        ("idx_factura_arca_cae_historico_unico", "TRIM(cae)",
-         "ambiente_arca IS NULL AND TRIM(COALESCE(cae, '')) <> ''"),
-    ):
-        _migrar_indice_factura_arca(cur, nombre, clave, condicion)
+    """Migra los cuatro destinos como grupo atomico, sin atribuir ambiente ni confirmar."""
+    _prevalidar_destinos_indices_fiscales()
+    destinos = tuple(d for d in _DESTINOS_INDICES_FISCALES if d[1] == "factura_arca")
+    with _transaccion_indices_fiscales(cur):
+        plan, sin_ambiente = _planificar_indices_fiscales(cur, destinos)
+        _aplicar_plan_indices_fiscales(cur, plan, sin_ambiente)
 
 
 def sumar_un_mes(fecha):
@@ -1129,22 +1157,21 @@ def migrar_intentos_emision_arca_ambiente(cur):
 
 
 def migrar_indices_activos_intentos_emision_arca(cur):
-    """Reemplaza el UNIQUE activo global por uno por ambiente conocido y otro historico NULL."""
-    migrar_intentos_emision_arca_ambiente(cur)
-    cur.execute("DROP INDEX IF EXISTS idx_intentos_emision_arca_clave_activa")
-    clave = "cuit_emisor, punto_venta, tipo_comprobante, numero_planificado"
-    utilizable = (
-        "TRIM(COALESCE(cuit_emisor, '')) <> '' AND punto_venta > 0 "
-        "AND tipo_comprobante > 0 AND numero_planificado > 0 "
-        "AND estado IN ('PENDIENTE_RECONCILIAR', 'ENVIANDO', 'CONFLICTO_MANUAL')"
-    )
-    for nombre, columnas, condicion in (
-        ("idx_intentos_emision_arca_clave_activa_ambiente", f"ambiente_arca, {clave}",
-         f"ambiente_arca IS NOT NULL AND {utilizable}"),
-        ("idx_intentos_emision_arca_clave_activa_historica", clave,
-         f"ambiente_arca IS NULL AND {utilizable}"),
-    ):
-        _migrar_indice_factura_arca(cur, nombre, columnas, condicion, tabla="intentos_emision_arca")
+    """Verifica ambos reemplazos antes de retirar el global historico; nunca confirma."""
+    _prevalidar_destinos_indices_fiscales()
+    tabla = "intentos_emision_arca"
+    global_historico = "idx_intentos_emision_arca_clave_activa"
+    destinos = tuple(d for d in _DESTINOS_INDICES_FISCALES if d[1] == tabla)
+    with _transaccion_indices_fiscales(cur):
+        estado_global = _validar_indice_fiscal_sqlite(cur, global_historico, tabla)
+        plan, sin_ambiente = _planificar_indices_fiscales(cur, destinos)
+        _aplicar_plan_indices_fiscales(cur, plan, sin_ambiente)
+        if estado_global == "HISTORICA":
+            if _validar_indice_fiscal_sqlite(cur, global_historico, tabla) != "HISTORICA":
+                raise ValueError("El indice global historico cambio durante la migracion.")
+            cur.execute(f"DROP INDEX main.{global_historico}")
+        if _validar_indice_fiscal_sqlite(cur, global_historico, tabla) != "AUSENTE":
+            raise ValueError("El indice global historico no fue retirado.")
 
 
 def migrar_intentos_emision_arca_contexto_fiscal(cur):
