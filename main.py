@@ -1,6 +1,8 @@
+import logging
 import sqlite3
 import sys
 import tkinter as tk
+import traceback
 
 import customtkinter as ctk
 from tkinter import messagebox, ttk
@@ -651,16 +653,59 @@ def verificar_base_antes_de_arrancar(
     return True
 
 
+def _registrar_error_inicializacion(error):
+    # No registrar mensajes, notas ni variables: pueden contener datos fiscales o credenciales.
+    ubicaciones = [
+        f"{frame.f_globals.get('__name__', '<modulo>')}.{frame.f_code.co_name}:{linea}"
+        for frame, linea in traceback.walk_tb(error.__traceback__)
+    ]
+    logging.getLogger(__name__).error(
+        "Fallo de inicializacion de la base. Tipo: %s. Ubicaciones: %s",
+        type(error).__name__,
+        " -> ".join(ubicaciones),
+    )
+
+
+def inicializar_base_antes_de_arrancar(
+    *,
+    inicializar=crear_base,
+    inspeccionar=inspeccionar_archivo_base,
+    notificar=mostrar_error_arranque,
+):
+    """Bloquea el arranque ante errores ordinarios, sin reintentar ni reparar la base."""
+    try:
+        inicializar()
+    except Exception as error:
+        _registrar_error_inicializacion(error)
+        titulo = "No se pudo iniciar FM Master Gestión"
+        mensaje = (
+            "No se pudo completar la inicialización de la base de datos.\n"
+            "El programa se cerrará sin abrir la interfaz ni iniciar los servicios.\n\n"
+            "No debe continuar utilizando el programa hasta resolver el problema.\n"
+            "Contacte al soporte técnico para revisar el diagnóstico."
+        )
+        if isinstance(error, sqlite3.OperationalError):
+            try:
+                estado_base = inspeccionar()
+            except Exception as error_inspeccion:
+                _registrar_error_inicializacion(error_inspeccion)
+            else:
+                if estado_base.estado != ESTADO_BASE_EXISTENTE:
+                    titulo = "Base de datos no encontrada"
+                    mensaje = _mensaje_base_ausente(estado_base) + "\n\n" + mensaje
+        notificar(titulo, mensaje)
+        return False
+    return True
+
+
 if __name__ == "__main__":
     if not verificar_base_antes_de_arrancar():
         sys.exit(1)
-    try:
-        crear_base()
-    except sqlite3.OperationalError:
-        estado_base = inspeccionar_archivo_base()
-        if estado_base.estado == ESTADO_BASE_EXISTENTE:
-            raise
-        mostrar_error_arranque("Base de datos no encontrada", _mensaje_base_ausente(estado_base))
+    if not inicializar_base_antes_de_arrancar(
+        inicializar=crear_base,
+        inspeccionar=inspeccionar_archivo_base,
+        notificar=mostrar_error_arranque,
+    ):
         sys.exit(1)
     UsuarioService.init_admin_if_missing()
 
