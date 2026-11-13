@@ -1,4 +1,5 @@
 import os
+import secrets
 import sqlite3
 import tempfile
 from contextlib import ExitStack, closing
@@ -11,6 +12,9 @@ from runtime_paths import BACKUP_DIR, DATABASE_PATH
 class BackupService:
     DATABASE_PATH = DATABASE_PATH
     BACKUP_DIR = BACKUP_DIR
+    PREFIJO_TEMPORAL_PRE_MIGRACION = ".pre_migracion_incompleto_"
+    SUFIJO_TEMPORAL_PRE_MIGRACION = ".tmp"
+    INTENTOS_PUBLICACION_PRE_MIGRACION = 100
 
     @classmethod
     def listar_backups(cls):
@@ -63,10 +67,15 @@ class BackupService:
     def crear_backup_pre_migracion(cls, ruta_base, directorio_backups):
         """Copia una instantanea verificada; no coordina la futura migracion.
 
+        La copia se escribe en un archivo temporal no publicable, se verifica
+        (quick_check, integrity_check, esquema, user_version y registros por
+        tabla) y solo entonces se publica con un nombre definitivo nuevo, sin
+        reemplazar backups existentes. Devuelve la ruta publicada o lanza
+        OSError; interrupciones como KeyboardInterrupt se relanzan sin envolver.
         WAL se lee mediante SQLite, no mediante copia del archivo principal.
         El llamador debe impedir escrituras entre el respaldo y la migracion.
         """
-        destino = None
+        temporal = None
         try:
             if not str(ruta_base or "").strip() or not str(directorio_backups or "").strip():
                 raise OSError("Debe indicar la base de origen y el directorio de backups.")
@@ -92,49 +101,99 @@ class BackupService:
                     raise OSError("La verificacion de la base de origen no fue satisfactoria.")
                 esquema_origen = origen.execute(consulta_esquema).fetchall()
                 version_origen = origen.execute("PRAGMA user_version").fetchone()
+                filas_origen = cls._contar_filas_por_tabla(origen, esquema_origen)
 
                 directorio.mkdir(parents=True, exist_ok=True)
+                # Nombre no publicable: una copia interrumpida nunca parece un backup terminado.
                 descriptor, nombre = tempfile.mkstemp(
-                    prefix=f"pre_migracion_{datetime.now().strftime('%Y%m%d_%H%M%S')}_",
-                    suffix=".db", dir=str(directorio),
+                    prefix=cls.PREFIJO_TEMPORAL_PRE_MIGRACION,
+                    suffix=cls.SUFIJO_TEMPORAL_PRE_MIGRACION, dir=str(directorio),
                 )
-                destino = Path(nombre)
+                temporal = Path(nombre)
                 with os.fdopen(descriptor, "wb"):
                     pass
-                if destino.samefile(origen_path):
-                    destino = None
+                if temporal.samefile(origen_path):
+                    temporal = None
                     raise OSError("El destino coincide con la base de origen.")
 
-                with closing(sqlite3.connect(destino.as_uri() + "?mode=rw", uri=True)) as respaldo:
+                with closing(sqlite3.connect(temporal.as_uri() + "?mode=rw", uri=True)) as respaldo:
                     origen.backup(respaldo)
+                    # Una copia de un origen WAL hereda ese modo; se publica como archivo unico autonomo.
+                    if respaldo.execute("PRAGMA journal_mode=DELETE").fetchone() != ("delete",):
+                        raise OSError("No se pudo normalizar el modo de journal del backup pre-migracion.")
 
-                if destino.stat().st_size == 0:
+                if temporal.stat().st_size == 0:
                     raise OSError("El backup pre-migracion quedo vacio.")
-                with closing(sqlite3.connect(destino.as_uri() + "?mode=ro", uri=True)) as verificacion:
+                with closing(sqlite3.connect(temporal.as_uri() + "?mode=ro", uri=True)) as verificacion:
                     if verificacion.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                         raise OSError("La verificacion del backup pre-migracion no fue satisfactoria.")
+                    if verificacion.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                        raise OSError("La verificacion de integridad completa del backup no fue satisfactoria.")
                     if verificacion.execute(consulta_esquema).fetchall() != esquema_origen:
                         raise OSError("El esquema del backup no coincide con la instantanea del origen.")
                     if verificacion.execute("PRAGMA user_version").fetchone() != version_origen:
                         raise OSError("La version del backup no coincide con la instantanea del origen.")
-            return str(destino)
-        except Exception as error:
+                    if cls._contar_filas_por_tabla(verificacion, esquema_origen) != filas_origen:
+                        raise OSError("La cantidad de registros del backup no coincide con la instantanea del origen.")
+
+            for archivo in cls._archivos_auxiliares(temporal):
+                if archivo.exists():
+                    raise OSError("El backup temporal conserva archivos auxiliares de SQLite.")
+            publicado = cls._publicar_sin_sobrescribir(temporal, directorio)
+            temporal = None
+            return str(publicado)
+        except BaseException as error:
             errores_limpieza = []
-            if destino is not None:
-                for archivo in (
-                    destino,
-                    Path(str(destino) + "-journal"),
-                    Path(str(destino) + "-wal"),
-                    Path(str(destino) + "-shm"),
-                ):
+            if temporal is not None:
+                for archivo in (temporal, *cls._archivos_auxiliares(temporal)):
                     try:
                         archivo.unlink(missing_ok=True)
                     except OSError as error_limpieza:
                         errores_limpieza.append(str(error_limpieza))
+            if not isinstance(error, Exception):
+                if errores_limpieza:
+                    error.add_note(
+                        "No se pudieron eliminar archivos temporales del backup pre-migracion: "
+                        + "; ".join(errores_limpieza)
+                    )
+                raise
             detalle = f"No se pudo crear un backup pre-migracion verificado: {error}"
             if errores_limpieza:
                 detalle += "; no se pudieron eliminar archivos incompletos: " + "; ".join(errores_limpieza)
             raise OSError(detalle) from error
+
+    @staticmethod
+    def _archivos_auxiliares(ruta):
+        return tuple(Path(str(ruta) + sufijo) for sufijo in ("-journal", "-wal", "-shm"))
+
+    @staticmethod
+    def _contar_filas_por_tabla(conexion, esquema):
+        conteos = {}
+        for tipo, nombre, _, _ in esquema:
+            if tipo == "table":
+                identificador = '"' + nombre.replace('"', '""') + '"'
+                conteos[nombre] = conexion.execute(
+                    f"SELECT COUNT(*) FROM main.{identificador}"
+                ).fetchone()[0]
+        return conteos
+
+    @classmethod
+    def _publicar_sin_sobrescribir(cls, temporal, directorio):
+        """Publica con un nombre definitivo nuevo; nunca reemplaza un archivo existente."""
+        marca = datetime.now().strftime("%Y%m%d_%H%M%S")
+        for _ in range(cls.INTENTOS_PUBLICACION_PRE_MIGRACION):
+            final = directorio / f"pre_migracion_{marca}_{secrets.token_hex(4)}.db"
+            try:
+                if os.name == "nt":
+                    # En Windows os.rename falla si el destino existe: publicacion atomica sin reemplazo.
+                    os.rename(temporal, final)
+                else:
+                    os.link(temporal, final)
+                    os.unlink(temporal)
+            except FileExistsError:
+                continue
+            return final
+        raise OSError("No se encontro un nombre libre para publicar el backup pre-migracion.")
 
     @classmethod
     def crear_backup_automatico(cls):
