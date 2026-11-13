@@ -1244,10 +1244,31 @@ def migrar_emisor_fiscal_arca_config(cur):
 
 
 def crear_base():
-
+    """Inicializa en una unica transaccion; revierte y cierra ante cualquier fallo."""
     conn = conectar()
-    cur = conn.cursor()
+    error_original = None
+    try:
+        cur = conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        _inicializar_base(cur)
+        conn.commit()
+    except BaseException as error:
+        error_original = error
+        try:
+            conn.rollback()
+        except BaseException as error_rollback:
+            error.add_note(f"No se pudo revertir la inicializacion: {error_rollback!r}")
+        raise
+    finally:
+        try:
+            conn.close()
+        except BaseException as error_cierre:
+            if error_original is None:
+                raise
+            error_original.add_note(f"No se pudo cerrar la conexion: {error_cierre!r}")
 
+
+def _inicializar_base(cur):
     # ==========================
     # TABLA CLIENTES
     # ==========================
@@ -1988,9 +2009,6 @@ def crear_base():
     for columna, definicion in columnas_usuarios.items():
         agregar_columna_si_falta(cur, "usuarios", columna, definicion)
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_usuario ON usuarios(usuario)")
-
-    conn.commit()
-    conn.close()
 
 
 def obtener_clientes():
