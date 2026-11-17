@@ -1243,8 +1243,34 @@ def migrar_emisor_fiscal_arca_config(cur):
     return resultado
 
 
-def crear_base():
-    """Inicializa en una unica transaccion; revierte y cierra ante cualquier fallo."""
+def crear_base(conexion=None):
+    """Inicializa el esquema dentro de una unica transaccion.
+
+    Sin ``conexion``: abre con conectar(), ejecuta BEGIN IMMEDIATE, confirma con un
+    unico commit, revierte ante cualquier fallo y cierra siempre la conexion.
+
+    Con ``conexion`` (sqlite3.Connection con transaccion activa): el llamador es
+    dueno de la conexion y de la transaccion. Aqui no se abre otra conexion ni se
+    ejecuta BEGIN, commit, rollback ni close; los errores se propagan sin envolver y
+    el llamador debe revertir y cerrar. ``in_transaction`` solo prueba que hay una
+    transaccion abierta, no que se haya adquirido la reserva de escritura: el
+    llamador debe haber ejecutado BEGIN IMMEDIATE antes de invocar esta funcion.
+    """
+    if conexion is not None:
+        if not isinstance(conexion, sqlite3.Connection):
+            raise TypeError("La conexion externa debe ser una sqlite3.Connection.")
+        if getattr(conexion, "autocommit", None) is True:
+            raise ValueError("La conexion externa no puede usar autocommit=True.")
+        if not conexion.in_transaction:
+            raise ValueError("La conexion externa debe tener una transaccion activa.")
+        _inicializar_base(conexion.cursor())
+        if not conexion.in_transaction:
+            raise RuntimeError(
+                "La transaccion externa finalizo durante la inicializacion; "
+                "el estado de la base debe verificarse."
+            )
+        return
+
     conn = conectar()
     error_original = None
     try:
