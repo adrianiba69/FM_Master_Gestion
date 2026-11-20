@@ -113,7 +113,7 @@ _TABLAS_BASE = {
         "condicion_iva TEXT",
         "tipo_factura TEXT",
         "ambiente_arca TEXT",
-        "punto_venta INTEGER",
+        "punto_venta TEXT",
         "ruta_certificado TEXT",
         "ruta_clave_privada TEXT",
         "carpeta_facturas TEXT",
@@ -121,8 +121,8 @@ _TABLAS_BASE = {
     "emisor_fiscal_arca_config": (
         "id INTEGER PRIMARY KEY AUTOINCREMENT",
         "emisor_fiscal_id INTEGER NOT NULL",
-        "ambiente_arca TEXT NOT NULL",
-        "punto_venta INTEGER",
+        "ambiente_arca TEXT NOT NULL CHECK(ambiente_arca IN ('HOMOLOGACION', 'PRODUCCION'))",
+        "punto_venta TEXT",
         "ruta_certificado TEXT",
         "ruta_clave_privada TEXT",
         "carpeta_facturas TEXT",
@@ -140,8 +140,8 @@ _TABLAS_BASE = {
     ),
     "resumenes": (
         "id INTEGER PRIMARY KEY AUTOINCREMENT",
-        "numero TEXT",
-        "cliente_id INTEGER",
+        "numero INTEGER NOT NULL UNIQUE",
+        "cliente_id INTEGER NOT NULL",
         "emisor_fiscal_id INTEGER",
         "fecha TEXT",
         "fecha_vencimiento TEXT",
@@ -190,10 +190,10 @@ _TABLAS_BASE = {
         "cliente_id INTEGER",
         "emisor_fiscal_id INTEGER",
         "emisor_id INTEGER",
-        "cuit_emisor TEXT",
-        "punto_venta INTEGER",
-        "tipo_comprobante INTEGER",
-        "numero_planificado INTEGER",
+        "cuit_emisor TEXT NOT NULL",
+        "punto_venta INTEGER NOT NULL",
+        "tipo_comprobante INTEGER NOT NULL",
+        "numero_planificado INTEGER NOT NULL",
         "concepto INTEGER",
         "estado TEXT NOT NULL",
         "cae TEXT",
@@ -215,11 +215,11 @@ _TABLAS_BASE = {
         "titulo TEXT",
         "estado TEXT",
         "fecha TEXT",
-        "clave TEXT",
+        "clave TEXT UNIQUE",
     ),
     "usuarios": (
         "id INTEGER PRIMARY KEY AUTOINCREMENT",
-        "usuario TEXT NOT NULL",
+        "usuario TEXT NOT NULL UNIQUE",
         "clave TEXT NOT NULL",
         "rol TEXT DEFAULT 'operador'",
         "activo INTEGER DEFAULT 1",
@@ -228,9 +228,9 @@ _TABLAS_BASE = {
 
 _COLUMNAS_FACTURA_ARCA = (
     ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
-    ("cliente_id", "INTEGER"),
+    ("cliente_id", "INTEGER NOT NULL"),
     ("emisor_id", "INTEGER"),
-    ("resumen_id", "INTEGER"),
+    ("resumen_id", "INTEGER NOT NULL"),
     ("fecha", "TEXT"),
     ("punto_venta", "TEXT"),
     ("tipo_comprobante", "TEXT"),
@@ -243,7 +243,7 @@ _COLUMNAS_FACTURA_ARCA = (
     ("tipo_comprobante_num", "INTEGER"),
     ("numero_comprobante_num", "INTEGER"),
     ("tipo_documento_receptor", "INTEGER"),
-    ("documento_receptor", "TEXT"),
+    ("documento_receptor", "INTEGER"),
     ("snapshot_fiscal_json", "TEXT"),
     ("snapshot_version", "INTEGER"),
     ("snapshot_hash", "TEXT"),
@@ -290,6 +290,39 @@ _INDICES_UNICOS = {
     ),
 }
 
+# Restricciones de tabla y claves foráneas como en una instalación real.
+_RESTRICCIONES_TABLA = {
+    "servicios": ("FOREIGN KEY(cliente_id) REFERENCES clientes(id)",),
+    "emisor_fiscal_arca_config": (
+        "UNIQUE(emisor_fiscal_id, ambiente_arca)",
+        "FOREIGN KEY(emisor_fiscal_id) REFERENCES emisores_fiscales(id)",
+    ),
+    "servicio_renovaciones": (
+        "FOREIGN KEY(servicio_id) REFERENCES servicios(id)",
+        "FOREIGN KEY(cliente_id) REFERENCES clientes(id)",
+    ),
+    "resumenes": ("FOREIGN KEY(cliente_id) REFERENCES clientes(id)",),
+    "resumen_conceptos": (
+        "FOREIGN KEY(resumen_id) REFERENCES resumenes(id)",
+        "FOREIGN KEY(servicio_id) REFERENCES servicios(id)",
+    ),
+    "cobros": ("FOREIGN KEY(cliente_id) REFERENCES clientes(id)",),
+    "tareas": ("FOREIGN KEY(cliente_id) REFERENCES clientes(id)",),
+    "contactos": ("FOREIGN KEY(cliente_id) REFERENCES clientes(id)",),
+    "oportunidades": ("FOREIGN KEY(cliente_id) REFERENCES clientes(id)",),
+    "factura_arca": (
+        "FOREIGN KEY(cliente_id) REFERENCES clientes(id)",
+        "FOREIGN KEY(emisor_id) REFERENCES emisores_facturacion(id)",
+        "FOREIGN KEY(resumen_id) REFERENCES resumenes(id)",
+    ),
+    "intentos_emision_arca": (
+        "FOREIGN KEY(resumen_id) REFERENCES resumenes(id)",
+        "FOREIGN KEY(cliente_id) REFERENCES clientes(id)",
+        "FOREIGN KEY(emisor_fiscal_id) REFERENCES emisores_fiscales(id)",
+        "FOREIGN KEY(emisor_id) REFERENCES emisores_facturacion(id)",
+    ),
+}
+
 _INDICES_FACTURA = tuple(nombre for nombre in _INDICES_UNICOS if nombre.startswith("idx_factura_arca_"))
 _INDICES_INTENTOS = tuple(nombre for nombre in _INDICES_UNICOS if nombre.startswith("idx_intentos_emision_arca_"))
 _INDICES_POR_TABLA = {"factura_arca": _INDICES_FACTURA, "intentos_emision_arca": _INDICES_INTENTOS}
@@ -314,6 +347,7 @@ def _crear_esquema_historico(
     omitir_columnas_factura=(),
     omitir_indices=(),
     reemplazar_indices=None,
+    sin_unicos=False,
 ):
     """Construye una base histórica sin versión a partir del esquema escrito a mano."""
     reemplazar_tablas = reemplazar_tablas or {}
@@ -328,7 +362,12 @@ def _crear_esquema_historico(
         if tabla in reemplazar_tablas:
             cursor.execute(reemplazar_tablas[tabla])
             continue
-        cursor.execute(f"CREATE TABLE {tabla} ({', '.join(columnas)})")
+        definiciones = [d.replace(" UNIQUE", "") for d in columnas] if sin_unicos else list(columnas)
+        definiciones += [
+            restriccion for restriccion in _RESTRICCIONES_TABLA.get(tabla, ())
+            if not (sin_unicos and restriccion.startswith("UNIQUE("))
+        ]
+        cursor.execute(f"CREATE TABLE {tabla} ({', '.join(definiciones)})")
 
     if "factura_arca" not in omitir_tablas:
         if "factura_arca" in reemplazar_tablas:
@@ -337,6 +376,7 @@ def _crear_esquema_historico(
             columnas_factura = [
                 f"{nombre} {tipo}" for nombre, tipo in _COLUMNAS_FACTURA_ARCA if nombre not in omitir_columnas_factura
             ]
+            columnas_factura += _RESTRICCIONES_TABLA["factura_arca"]
             cursor.execute(f"CREATE TABLE factura_arca ({', '.join(columnas_factura)})")
 
     for nombre, sql in _INDICES_UNICOS.items():
@@ -347,6 +387,23 @@ def _crear_esquema_historico(
 
 
 def _insertar_factura(conexion, **valores):
+    for columna in ("cliente_id", "resumen_id", "emisor_id"):
+        valores.setdefault(columna, 1)
+    # Padres mínimos para no introducir claves foráneas huérfanas ajenas al objetivo de cada prueba.
+    for sql, parametros in (
+        ("INSERT OR IGNORE INTO clientes (id, nombre) VALUES (?, 'ficticio')", (valores["cliente_id"],)),
+        (
+            "INSERT OR IGNORE INTO resumenes (id, numero, cliente_id, estado_facturacion) VALUES (?, ?, ?, 'Pendiente')",
+            (valores["resumen_id"], valores["resumen_id"], valores["cliente_id"]),
+        ),
+        ("INSERT OR IGNORE INTO emisores_facturacion (id, alias) VALUES (?, 'ficticio')", (valores.get("emisor_id"),)),
+    ):
+        if parametros[0] is None:
+            continue
+        try:
+            conexion.execute(sql, parametros)
+        except sqlite3.Error:
+            pass
     columnas = ", ".join(valores)
     marcadores = ", ".join("?" for _ in valores)
     conexion.execute(f"INSERT INTO factura_arca ({columnas}) VALUES ({marcadores})", tuple(valores.values()))
@@ -609,6 +666,9 @@ class ClavesPrimariasEsencialesTest(_PoliticaBase):
                 columnas.insert(0, f"id {definicion_id}")
             if restriccion is not None:
                 columnas.append(restriccion)
+            columnas.extend(
+                r for r in _RESTRICCIONES_TABLA.get(tabla, ()) if r.startswith(("FOREIGN KEY", "UNIQUE("))
+            )
             reemplazos[tabla] = f"CREATE TABLE {tabla} ({', '.join(columnas)})"
         _crear_esquema_historico(self.conexion, reemplazar_tablas=reemplazos, **opciones)
 
@@ -706,7 +766,7 @@ class ClavesPrimariasEsencialesTest(_PoliticaBase):
     def test_varias_incompatibilidades_y_duplicados_conservan_motivos(self):
         self._crear_con_claves(
             {"clientes": ("INTEGER", None), "tareas": ("TEXT PRIMARY KEY", None)},
-            omitir_tablas=("cobros",),
+            omitir_tablas=("cobros",), sin_unicos=True,
         )
         self.conexion.executemany(
             "INSERT INTO usuarios (usuario, clave) VALUES (?, ?)", (("admin", "a"), ("admin", "b"))
@@ -747,7 +807,19 @@ class ClavesPrimariasEsencialesTest(_PoliticaBase):
         self._crear_con_claves({"clientes": ("INTEGER", None)})
         self.conexion.execute("INSERT INTO clientes (id, nombre) VALUES (7, 'Cliente ficticio')")
         self.conexion.commit()
-        antes = tuple(self.conexion.iterdump())
+
+        # iterdump() falla con claves foráneas deliberadamente incompatibles; se compara esquema y filas.
+        def instantanea():
+            maestro = self.conexion.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name"
+            ).fetchall()
+            filas = {
+                nombre: self.conexion.execute(f'SELECT * FROM "{nombre}" ORDER BY rowid').fetchall()
+                for tipo, nombre, _, _ in maestro if tipo == "table"
+            }
+            return maestro, filas
+
+        antes = instantanea()
         cambios = self.conexion.total_changes
         consultas = []
         self.conexion.set_trace_callback(consultas.append)
@@ -757,7 +829,7 @@ class ClavesPrimariasEsencialesTest(_PoliticaBase):
             self.conexion.set_trace_callback(None)
 
         self.assertEqual(resultado.estado, "BLOQUEADA")
-        self.assertEqual(tuple(self.conexion.iterdump()), antes)
+        self.assertEqual(instantanea(), antes)
         self.assertEqual(self.conexion.total_changes, cambios)
         self.assertFalse(self.conexion.in_transaction)
         self.assertTrue(consultas)
@@ -937,6 +1009,7 @@ class TriggersNoReconocidosTest(_PoliticaBase):
         _crear_esquema_historico(
             self.conexion,
             omitir_tablas=("cobros",),
+            sin_unicos=True,
             reemplazar_tablas={
                 "clientes": f"CREATE TABLE clientes ({', '.join(['id INTEGER', *_TABLAS_BASE['clientes'][1:]])})"
             },
@@ -1143,7 +1216,7 @@ class BaseIncompletaTest(_PoliticaBase):
         self.assertIn("tabla:clientes", resultado.estructuras_pendientes)
 
     def test_tabla_esencial_ausente_y_duplicados_informan_ambos_motivos(self):
-        _crear_esquema_historico(self.conexion, omitir_tablas=("clientes",))
+        _crear_esquema_historico(self.conexion, omitir_tablas=("clientes",), sin_unicos=True)
         self.conexion.executemany(
             "INSERT INTO usuarios (usuario, clave) VALUES (?, ?)", (("admin", "a"), ("admin", "b"))
         )
@@ -1259,7 +1332,7 @@ class DuplicadosFiscalesTest(_PoliticaBase):
         self.assertIn("duplicados:intentos_emision_arca.clave_activa", resultado.motivos)
 
     def test_usuario_duplicado_bloquea(self):
-        _crear_esquema_historico(self.conexion)
+        _crear_esquema_historico(self.conexion, sin_unicos=True)
         self.conexion.executemany(
             "INSERT INTO usuarios (usuario, clave) VALUES (?, ?)", (("admin", "a"), ("admin", "b"))
         )
@@ -1432,7 +1505,7 @@ class IdentidadFiscalProyectadaTest(_PoliticaBase):
     def test_no_mezcla_emisores_aunque_compartan_cuit(self):
         conexion = self._preparar(_factura_pendiente(emisor_id=1), _factura_pendiente(emisor_id=2))
         conexion.executemany(
-            "INSERT INTO emisores_facturacion(id, alias, cuit) VALUES (?, ?, ?)",
+            "INSERT OR REPLACE INTO emisores_facturacion(id, alias, cuit) VALUES (?, ?, ?)",
             ((1, "Uno", "20111111112"), (2, "Dos", "20111111112")),
         )
         resultado = database.inspeccionar_estado_base_sqlite(conexion)
@@ -2352,7 +2425,8 @@ class LiteralesTextoIndicesTest(_PoliticaBase):
 
                 resultado = self.inspeccionar()
 
-                self.assertEqual(resultado.estado, "INCOMPLETA")
+                # Etapa 3D.4C.5C.3: un índice fiscal contradictorio bloquea (antes: INCOMPLETA).
+                self.assertEqual(resultado.estado, "BLOQUEADA")
                 self.assertEqual(
                     set(resultado.estructuras_pendientes),
                     {f"indice_incompatible:{nombre}" for nombre in _INDICES_INTENTOS},
@@ -2390,10 +2464,9 @@ class LiteralesTextoIndicesTest(_PoliticaBase):
 
                     resultado = self.inspeccionar()
 
-                    self.assertEqual(
-                        resultado.estado,
-                        "HISTORICA_SIN_VERSION" if compatible else "INCOMPLETA",
-                    )
+                    # El catálogo sintético parchea solo el comparador de pendientes; la validación
+                    # estricta 3D.4C.5C.3 usa las definiciones reales y bloquea cualquier literal alterado.
+                    self.assertEqual(resultado.estado, "BLOQUEADA")
                     self.assertEqual(
                         set(resultado.estructuras_pendientes),
                         set() if compatible else {
@@ -2413,7 +2486,8 @@ class LiteralesTextoIndicesTest(_PoliticaBase):
                     self.conexion.execute(f"DROP INDEX {nombre}")
                     self.conexion.execute(_INDICES_UNICOS[nombre].replace(original, alterado))
                 resultado = self.inspeccionar()
-                self.assertEqual(resultado.estado, "INCOMPLETA")
+                # Etapa 3D.4C.5C.3: un índice fiscal contradictorio bloquea (antes: INCOMPLETA).
+                self.assertEqual(resultado.estado, "BLOQUEADA")
                 self.assertEqual(
                     set(resultado.estructuras_pendientes),
                     {f"indice_incompatible:{nombre}" for nombre in _INDICES_INTENTOS},
@@ -2447,9 +2521,9 @@ class IndicesDesconocidosTest(_PoliticaBase):
             "indice_incompatible:idx_factura_arca_cae_unico", self.inspeccionar().estructuras_pendientes
         )
 
-    @unittest.expectedFailure
     def test_requisito_futuro_indice_de_definicion_desconocida_debe_bloquear(self):
-        # Hoy se clasifica como INCOMPLETA y _migrar_indice_factura_arca eliminaría
+        # Cumplido en la etapa 3D.4C.5C.3 (validación estricta de índices fiscales).
+        # Antes se clasificaba como INCOMPLETA y _migrar_indice_factura_arca eliminaría
         # el índice ajeno para recrearlo. Una definición desconocida debe bloquear.
         _crear_esquema_historico(
             self.conexion,

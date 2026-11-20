@@ -891,8 +891,11 @@ CASOS_NEGATIVOS = (
          motivos_contienen=("DatabaseError",)),
     Caso("corrupcion_todas_las_paginas", _corrupcion_en_todas_las_paginas, "BLOQUEADA", NO_SQLITE_O_CORRUPTA,
          COHERENTE, motivos_contienen=("DatabaseError",)),
-    Caso("corrupcion_sutil_tabla_no_leida", _corrupcion_sutil_tareas, "HISTORICA_SIN_VERSION",
-         NO_SQLITE_O_CORRUPTA, FALSO_POSITIVO),
+    # Etapa 3D.4C.5C.3: los casos siguientes eran FALSO_POSITIVO/TOLERANCIA_A_REVISAR en 3D.4C.5C.2.
+    # El endurecimiento (quick_check, application_id, marcadores ampliados, tipos, restricciones,
+    # claves foráneas e índices fiscales estrictos) los bloquea deliberadamente por el contrato de seguridad.
+    Caso("corrupcion_sutil_tabla_no_leida", _corrupcion_sutil_tareas, "BLOQUEADA",
+         NO_SQLITE_O_CORRUPTA, COHERENTE, motivos_contienen=("integridad_sqlite_fallida",)),
     Caso("otra_aplicacion", lambda p: p.construir("ajena", (
         "CREATE TABLE users(id INTEGER PRIMARY KEY, email TEXT)",
         "CREATE TABLE orders(id INTEGER PRIMARY KEY, user_id INTEGER)")),
@@ -900,10 +903,10 @@ CASOS_NEGATIVOS = (
     Caso("otra_aplicacion_con_tabla_clientes", lambda p: p.construir("ajena_clientes", (
         "CREATE TABLE clientes(id INTEGER PRIMARY KEY, nombre TEXT)",)),
          "BLOQUEADA", AJENA_O_IMITACION, COHERENTE, motivos_contienen=("tabla_esencial_ausente:servicios",)),
-    Caso("imitacion_nombres_sin_indices", _imitacion(False), "INCOMPLETA", AJENA_O_IMITACION, FALSO_POSITIVO,
+    Caso("imitacion_nombres_sin_indices", _imitacion(False), "BLOQUEADA", AJENA_O_IMITACION, COHERENTE,
          pendientes_contienen=("indice:" + _IDX_IDENTIDAD,)),
-    Caso("imitacion_nombres_con_indices", _imitacion(True), "HISTORICA_SIN_VERSION", AJENA_O_IMITACION,
-         FALSO_POSITIVO),
+    Caso("imitacion_nombres_con_indices", _imitacion(True), "BLOQUEADA", AJENA_O_IMITACION,
+         COHERENTE),
     Caso("parcial_sin_tabla_config_ambiente",
          _referencia("parcial_config", omitir=("emisor_fiscal_arca_config",)),
          "INCOMPLETA", LEGITIMA_ALTERADA, COHERENTE, pendientes_contienen=("tabla:emisor_fiscal_arca_config",)),
@@ -929,30 +932,33 @@ CASOS_NEGATIVOS = (
     Caso("marcador_migraciones_esquema", _referencia("me", posteriores=("CREATE TABLE migraciones_esquema(v)",)),
          "VERSION_INCOMPATIBLE", LEGITIMA_ALTERADA, COHERENTE, motivos_contienen=("migraciones_esquema",)),
     Caso("marcador_application_id_ignorado", _referencia("appid", posteriores=("PRAGMA application_id=1179468372",)),
-         "HISTORICA_SIN_VERSION", LEGITIMA_ALTERADA, FALSO_POSITIVO),
+         "VERSION_INCOMPATIBLE", LEGITIMA_ALTERADA, COHERENTE, motivos_contienen=("application_id",)),
     Caso("marcador_alembic_version_ignorado", _referencia("alembic", posteriores=("CREATE TABLE alembic_version(v)",)),
-         "HISTORICA_SIN_VERSION", LEGITIMA_ALTERADA, FALSO_POSITIVO),
+         "VERSION_INCOMPATIBLE", LEGITIMA_ALTERADA, COHERENTE, motivos_contienen=("alembic_version",)),
     Caso("tabla_ajena_adicional", _referencia("tabla_extra", posteriores=("CREATE TABLE users(id INTEGER PRIMARY KEY)",)),
          "HISTORICA_SIN_VERSION", LEGITIMA_ALTERADA, TOLERANCIA_A_REVISAR),
     Caso("vista_adicional", _referencia("vista", posteriores=("CREATE VIEW v_ficticia AS SELECT * FROM clientes",)),
          "HISTORICA_SIN_VERSION", LEGITIMA_ALTERADA, TOLERANCIA_A_REVISAR),
     Caso("indice_cae_sin_where", _referencia("cae_sin_where", omitir=(_IDX_CAE,), posteriores=(
         f"CREATE UNIQUE INDEX {_IDX_CAE} ON factura_arca(cae)",)),
-         "INCOMPLETA", LEGITIMA_ALTERADA, TOLERANCIA_A_REVISAR, pendientes_contienen=("indice_incompatible:" + _IDX_CAE,)),
+         "BLOQUEADA", LEGITIMA_ALTERADA, COHERENTE, pendientes_contienen=("indice_incompatible:" + _IDX_CAE,),
+         motivos_contienen=("indice_fiscal_incompatible:" + _IDX_CAE,)),
     Caso("indice_cae_no_unico", _referencia("cae_no_unico", omitir=(_IDX_CAE,), posteriores=(
         f"CREATE INDEX {_IDX_CAE} ON factura_arca(cae) WHERE cae IS NOT NULL",)),
-         "INCOMPLETA", LEGITIMA_ALTERADA, TOLERANCIA_A_REVISAR, pendientes_contienen=("indice_incompatible:" + _IDX_CAE,)),
+         "BLOQUEADA", LEGITIMA_ALTERADA, COHERENTE, pendientes_contienen=("indice_incompatible:" + _IDX_CAE,),
+         motivos_contienen=("indice_fiscal_incompatible:" + _IDX_CAE,)),
     Caso("indice_identidad_columnas_ajenas", _referencia("identidad_ajena", omitir=(_IDX_IDENTIDAD,), posteriores=(
         f"CREATE UNIQUE INDEX {_IDX_IDENTIDAD} ON factura_arca(id)",)),
-         "INCOMPLETA", LEGITIMA_ALTERADA, TOLERANCIA_A_REVISAR,
-         pendientes_contienen=("indice_incompatible:" + _IDX_IDENTIDAD,)),
+         "BLOQUEADA", LEGITIMA_ALTERADA, COHERENTE,
+         pendientes_contienen=("indice_incompatible:" + _IDX_IDENTIDAD,),
+         motivos_contienen=("indice_fiscal_incompatible:" + _IDX_IDENTIDAD,)),
     Caso("restriccion_unique_resumenes_ausente", _referencia("resumenes_sin_unique", reemplazos=(
         ("resumenes", "numero INTEGER NOT NULL UNIQUE", "numero INTEGER"),)),
-         "HISTORICA_SIN_VERSION", LEGITIMA_ALTERADA, FALSO_POSITIVO),
+         "BLOQUEADA", LEGITIMA_ALTERADA, COHERENTE),
     Caso("tipo_columna_cae_blob", _referencia("cae_blob", reemplazos=(("factura_arca", "cae TEXT", "cae BLOB"),)),
-         "HISTORICA_SIN_VERSION", LEGITIMA_ALTERADA, FALSO_POSITIVO),
+         "BLOQUEADA", LEGITIMA_ALTERADA, COHERENTE),
     Caso("clave_foranea_huerfana", _referencia("fk_huerfana", datos=_fk_huerfana),
-         "HISTORICA_SIN_VERSION", LEGITIMA_ALTERADA, FALSO_POSITIVO),
+         "BLOQUEADA", LEGITIMA_ALTERADA, COHERENTE),
 )
 
 

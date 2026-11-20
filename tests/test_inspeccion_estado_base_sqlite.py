@@ -29,18 +29,30 @@ database = _cargar_database_aislado()
 
 
 def _crear_esquema_completo(
-    conexion, tabla_omitida=None, columna_omitida=None, indice_omitido=None, crear_indices=True
+    conexion, tabla_omitida=None, columna_omitida=None, indice_omitido=None, crear_indices=True,
+    sin_unicos_de_tabla=(),
 ):
     cursor = conexion.cursor()
     for tabla, columnas in database._ESTRUCTURAS_INSPECCION_ESPERADAS.items():
         if tabla == tabla_omitida:
             continue
         columnas_tabla = [columna for columna in columnas if (tabla, columna) != columna_omitida]
-        columnas_sql = ", ".join(
-            '"id" INTEGER PRIMARY KEY' if columna == "id" else f'"{columna}"'
+        tipos = database._TIPOS_COLUMNAS_ESPERADOS.get(tabla, {})
+        obligatorias = database._COLUMNAS_NOT_NULL_ESPERADAS.get(tabla, ())
+        definiciones = [
+            '"id" INTEGER PRIMARY KEY' if columna == "id"
+            else f'"{columna}" {tipos.get(columna, "TEXT")}' + (" NOT NULL" if columna in obligatorias else "")
             for columna in columnas_tabla
-        )
-        cursor.execute(f'CREATE TABLE "{tabla}" ({columnas_sql})')
+        ]
+        for tabla_unica, clave in database._RESTRICCIONES_UNICAS_ESPERADAS:
+            if tabla_unica == tabla and tabla not in sin_unicos_de_tabla and set(clave).issubset(columnas_tabla):
+                definiciones.append(f"UNIQUE({', '.join(clave)})")
+        for tabla_fk, columna, padre in database._CLAVES_FORANEAS_ESPERADAS:
+            if tabla_fk == tabla and columna in columnas_tabla:
+                definiciones.append(f"FOREIGN KEY({columna}) REFERENCES {padre}(id)")
+        if tabla == "emisor_fiscal_arca_config":
+            definiciones.append("CHECK(ambiente_arca IN ('HOMOLOGACION', 'PRODUCCION'))")
+        cursor.execute(f'CREATE TABLE "{tabla}" ({", ".join(definiciones)})')
 
     if not crear_indices:
         return
@@ -126,7 +138,7 @@ class InspeccionEstadoBaseSQLiteTest(unittest.TestCase):
         )
 
     def test_duplicados_que_bloquean_indice_unico_clasifican_bloqueada(self):
-        _crear_esquema_completo(self.conexion)
+        _crear_esquema_completo(self.conexion, sin_unicos_de_tabla=("emisor_fiscal_arca_config",))
         self.conexion.executemany(
             "INSERT INTO emisor_fiscal_arca_config(emisor_fiscal_id, ambiente_arca) VALUES(?, ?)",
             ((30, "HOMOLOGACION"), (30, "HOMOLOGACION")),
@@ -143,14 +155,18 @@ class InspeccionEstadoBaseSQLiteTest(unittest.TestCase):
     def test_ambiente_historico_nulo_es_advertencia_no_bloqueante(self):
         _crear_esquema_completo(self.conexion)
         self.conexion.execute(
-            "INSERT INTO factura_arca(id, emisor_id, numero_factura, cae, punto_venta_num, "
+            "INSERT INTO factura_arca(id, cliente_id, resumen_id, emisor_id, numero_factura, cae, punto_venta_num, "
             "tipo_comprobante_num, numero_comprobante_num, ambiente_arca) "
-            "VALUES(1, 40, '00002-00000001', 'CAE-1', 2, 11, 1, NULL)"
+            "VALUES(1, 1, 1, 40, '00002-00000001', 'CAE-1', 2, 11, 1, NULL)"
         )
         self.conexion.execute(
             "INSERT INTO intentos_emision_arca(id, cuit_emisor, punto_venta, tipo_comprobante, "
             "numero_planificado, estado, ambiente_arca) "
             "VALUES(1, '20206871629', 2, 11, 1, 'PENDIENTE_RECONCILIAR', NULL)"
+        )
+        self.conexion.executescript(
+            "INSERT INTO clientes(id) VALUES(1); INSERT INTO resumenes(id, numero, cliente_id, estado_facturacion) VALUES(1, 9, 1, 'Pendiente');"
+            "INSERT INTO emisores_facturacion(id) VALUES(40);"
         )
 
         resultado = self.inspeccionar()
@@ -227,8 +243,9 @@ class InspeccionEstadoBaseSQLiteTest(unittest.TestCase):
     def test_inspeccion_no_modifica_version_esquema_ni_filas(self):
         _crear_esquema_completo(self.conexion)
         self.conexion.execute(
-            "INSERT INTO resumenes(id, numero, estado_facturacion) VALUES(1, 100, 'Pendiente')"
+            "INSERT INTO resumenes(id, numero, cliente_id, estado_facturacion) VALUES(1, 100, 1, 'Pendiente')"
         )
+        self.conexion.execute("INSERT INTO clientes(id) VALUES(1)")
         user_version_antes = self.conexion.execute("PRAGMA user_version").fetchone()[0]
         esquema_antes = self.conexion.execute(
             "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
@@ -288,8 +305,8 @@ class IndicesMigradosFrenteAlDetectorTest(unittest.TestCase):
 
     def test_identidad_fiscal_es_unica_por_ambiente(self):
         insertar = (
-            "INSERT INTO factura_arca(emisor_id, punto_venta_num, tipo_comprobante_num, "
-            "numero_comprobante_num, ambiente_arca) VALUES(1, 2, 11, 5, ?)"
+            "INSERT INTO factura_arca(cliente_id, resumen_id, emisor_id, punto_venta_num, tipo_comprobante_num, "
+            "numero_comprobante_num, ambiente_arca) VALUES(1, 1, 1, 2, 11, 5, ?)"
         )
         self.conexion.execute(insertar, ("HOMOLOGACION",))
         self.conexion.execute(insertar, ("PRODUCCION",))

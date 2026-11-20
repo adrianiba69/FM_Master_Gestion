@@ -543,23 +543,212 @@ def _transaccion_indices_fiscales(cur):
         _restaurar_bloque_indices_fiscales(cur, nombre, propia, error)
 
 
+# Tablas de versionado ajenas a FM Master Gestión (comparación sin distinguir mayúsculas).
+_MARCADORES_VERSION_NO_RECONOCIDOS = frozenset({
+    "schema_migrations", "database_migrations", "migraciones_esquema", "alembic_version",
+    "django_migrations", "flyway_schema_history", "schema_version", "versiones_esquema",
+    "version_esquema", "migrations", "_migrations", "knex_migrations", "__efmigrationshistory",
+})
+
+# Tipos declarados idénticos en todos los esquemas históricos y en el actual.
+_TIPOS_COLUMNAS_ESPERADOS = {
+    "clientes": {"emisor_id": "INTEGER", "emisor_recomendado_id": "INTEGER",
+                 "modalidad_comprobante": "TEXT", "emisor_habitual": "TEXT"},
+    "servicios": {"cliente_id": "INTEGER", "fecha_inicio": "TEXT", "fecha_fin": "TEXT",
+                  "renovable": "INTEGER", "estado_periodo": "TEXT"},
+    "catalogo_servicios": {"nombre": "TEXT", "descripcion": "TEXT", "precio": "REAL", "activo": "INTEGER"},
+    "emisores_facturacion": {"alias": "TEXT", "cuit": "TEXT", "activo": "INTEGER", "emisor_fiscal_id": "INTEGER"},
+    "emisores_fiscales": {"cuit": "TEXT", "condicion_iva": "TEXT", "tipo_factura": "TEXT",
+                          "ambiente_arca": "TEXT", "punto_venta": "TEXT", "ruta_certificado": "TEXT",
+                          "ruta_clave_privada": "TEXT", "carpeta_facturas": "TEXT"},
+    "emisor_fiscal_arca_config": {"emisor_fiscal_id": "INTEGER", "ambiente_arca": "TEXT", "punto_venta": "TEXT",
+                                  "ruta_certificado": "TEXT", "ruta_clave_privada": "TEXT",
+                                  "carpeta_facturas": "TEXT"},
+    "arca_config": {"modo_trabajo": "TEXT"},
+    "servicio_renovaciones": {"servicio_id": "INTEGER", "cliente_id": "INTEGER",
+                              "fecha_renovacion": "TEXT", "resumen_id": "INTEGER"},
+    "resumenes": {"numero": "INTEGER", "cliente_id": "INTEGER", "emisor_fiscal_id": "INTEGER", "fecha": "TEXT",
+                  "fecha_vencimiento": "TEXT", "estado_facturacion": "TEXT", "fecha_facturacion": "TEXT",
+                  "cae": "TEXT", "vencimiento_cae": "TEXT", "numero_factura": "TEXT"},
+    "resumen_conceptos": {"resumen_id": "INTEGER", "servicio_id": "INTEGER", "concepto": "TEXT",
+                          "fecha_inicio": "TEXT", "fecha_fin": "TEXT"},
+    "cobros": {"cliente_id": "INTEGER", "fecha": "TEXT", "importe": "REAL", "factura_arca_id": "INTEGER"},
+    "tareas": {"cliente_id": "INTEGER", "fecha": "TEXT", "hora": "TEXT", "tipo": "TEXT", "estado": "TEXT"},
+    "contactos": {"cliente_id": "INTEGER", "fecha": "TEXT", "hora": "TEXT", "tipo": "TEXT", "resultado": "TEXT"},
+    "factura_arca": {
+        "cliente_id": "INTEGER", "emisor_id": "INTEGER", "resumen_id": "INTEGER", "fecha": "TEXT",
+        "punto_venta": "TEXT", "tipo_comprobante": "TEXT", "importe_total": "REAL", "estado": "TEXT",
+        "numero_factura": "TEXT", "cae": "TEXT", "vencimiento_cae": "TEXT", "punto_venta_num": "INTEGER",
+        "tipo_comprobante_num": "INTEGER", "numero_comprobante_num": "INTEGER",
+        "tipo_documento_receptor": "INTEGER", "documento_receptor": "INTEGER",
+        "snapshot_fiscal_json": "TEXT", "snapshot_version": "INTEGER", "snapshot_hash": "TEXT",
+        "ambiente_arca": "TEXT", "ruta_pdf_relativa": "TEXT", "ruta_pdf_absoluta": "TEXT",
+    },
+    "intentos_emision_arca": {
+        "resumen_id": "INTEGER", "cliente_id": "INTEGER", "emisor_fiscal_id": "INTEGER", "emisor_id": "INTEGER",
+        "cuit_emisor": "TEXT", "punto_venta": "INTEGER", "tipo_comprobante": "INTEGER",
+        "numero_planificado": "INTEGER", "concepto": "INTEGER", "estado": "TEXT", "cae": "TEXT",
+        "ambiente_arca": "TEXT", "contexto_fiscal_json": "TEXT", "contexto_fiscal_version": "INTEGER",
+        "contexto_fiscal_hash": "TEXT",
+    },
+    "oportunidades": {"cliente_id": "INTEGER", "nombre_potencial": "TEXT", "fecha": "TEXT", "estado": "TEXT"},
+    "notificaciones": {"tipo": "TEXT", "titulo": "TEXT", "estado": "TEXT", "fecha": "TEXT", "clave": "TEXT"},
+    "usuarios": {"usuario": "TEXT", "clave": "TEXT", "rol": "TEXT", "activo": "INTEGER"},
+}
+
+_COLUMNAS_NOT_NULL_ESPERADAS = {
+    "resumenes": ("numero", "cliente_id"),
+    "usuarios": ("usuario", "clave"),
+    "factura_arca": ("cliente_id", "resumen_id"),
+    "emisor_fiscal_arca_config": ("emisor_fiscal_id", "ambiente_arca"),
+    "intentos_emision_arca": ("cuit_emisor", "punto_venta", "tipo_comprobante", "numero_planificado", "estado"),
+}
+
+_RESTRICCIONES_UNICAS_ESPERADAS = (
+    ("resumenes", ("numero",)),
+    ("usuarios", ("usuario",)),
+    ("notificaciones", ("clave",)),
+    ("emisor_fiscal_arca_config", ("emisor_fiscal_id", "ambiente_arca")),
+)
+
+_CLAVES_FORANEAS_ESPERADAS = (
+    ("servicios", "cliente_id", "clientes"),
+    ("servicio_renovaciones", "servicio_id", "servicios"),
+    ("servicio_renovaciones", "cliente_id", "clientes"),
+    ("resumenes", "cliente_id", "clientes"),
+    ("resumen_conceptos", "resumen_id", "resumenes"),
+    ("resumen_conceptos", "servicio_id", "servicios"),
+    ("cobros", "cliente_id", "clientes"),
+    ("tareas", "cliente_id", "clientes"),
+    ("contactos", "cliente_id", "clientes"),
+    ("oportunidades", "cliente_id", "clientes"),
+    ("emisor_fiscal_arca_config", "emisor_fiscal_id", "emisores_fiscales"),
+    ("factura_arca", "cliente_id", "clientes"),
+    ("factura_arca", "emisor_id", "emisores_facturacion"),
+    ("factura_arca", "resumen_id", "resumenes"),
+    ("intentos_emision_arca", "resumen_id", "resumenes"),
+    ("intentos_emision_arca", "cliente_id", "clientes"),
+    ("intentos_emision_arca", "emisor_fiscal_id", "emisores_fiscales"),
+    ("intentos_emision_arca", "emisor_id", "emisores_facturacion"),
+    ("intentos_emision_arca", "factura_arca_id", "factura_arca"),
+)
+
+
+def _incompatibilidades_estructurales_sqlite(cursor, tablas):
+    """Solo lectura (PRAGMA/SELECT). Devuelve identificadores fijos, sin datos de la base.
+
+    Valida únicamente lo presente: las ausencias siguen informándose como
+    estructuras pendientes (diferencias históricas legítimas), mientras que
+    lo presente pero contradictorio con el esquema conocido bloquea.
+    """
+    hallazgos = []
+    informacion = {}
+    for tabla in _TIPOS_COLUMNAS_ESPERADOS:
+        if tabla not in tablas:
+            continue
+        cursor.execute(f"PRAGMA table_info({tabla})")
+        columnas = {fila[1]: fila for fila in cursor.fetchall()}
+        informacion[tabla] = columnas
+        for columna, tipo in _TIPOS_COLUMNAS_ESPERADOS[tabla].items():
+            if columna in columnas and str(columnas[columna][2] or "").strip().upper() != tipo:
+                hallazgos.append(f"columna_tipo_incompatible:{tabla}.{columna}")
+        for columna in _COLUMNAS_NOT_NULL_ESPERADAS.get(tabla, ()):
+            if columna in columnas and not columnas[columna][3]:
+                hallazgos.append(f"columna_not_null_ausente:{tabla}.{columna}")
+
+    for tabla, clave in _RESTRICCIONES_UNICAS_ESPERADAS:
+        if tabla not in informacion or not set(clave).issubset(informacion[tabla]):
+            continue
+        cursor.execute(f"PRAGMA index_list({tabla})")
+        unicos = [fila[1] for fila in cursor.fetchall() if fila[2] == 1 and fila[4] == 0]
+        encontrada = False
+        for indice in unicos:
+            cursor.execute('PRAGMA index_info("' + indice.replace('"', '""') + '")')
+            if tuple(fila[2] for fila in cursor.fetchall()) == clave:
+                encontrada = True
+        if not encontrada:
+            hallazgos.append(f"restriccion_unica_ausente:{tabla}({','.join(clave)})")
+
+    for tabla, columna, padre in _CLAVES_FORANEAS_ESPERADAS:
+        if tabla not in informacion or columna not in informacion[tabla]:
+            continue
+        cursor.execute(f"PRAGMA foreign_key_list({tabla})")
+        if not any(
+            fila[3] == columna and str(fila[2]).lower() == padre and fila[4] in ("id", None)
+            for fila in cursor.fetchall()
+        ):
+            hallazgos.append(f"clave_foranea_incompatible:{tabla}.{columna}")
+
+    if "emisor_fiscal_arca_config" in informacion:
+        cursor.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='emisor_fiscal_arca_config'"
+        )
+        sql_tabla = re.sub(r"\s+", "", str(cursor.fetchone()[0] or "")).lower()
+        if "check(ambiente_arcain('homologacion','produccion'))" not in sql_tabla:
+            hallazgos.append("restriccion_check_ausente:emisor_fiscal_arca_config.ambiente_arca")
+
+    catalogo = {
+        (nombre, tabla)
+        for nombre, tabla, _sql in _DEFINICIONES_INDICES_FISCALES_ACTUALES + _DEFINICIONES_INDICES_FISCALES_HISTORICAS
+    }
+    for nombre, tabla in sorted(catalogo):
+        if tabla not in tablas:
+            continue
+        try:
+            _validar_indice_fiscal_sqlite(cursor, nombre, tabla)
+        except ValueError:
+            hallazgos.append(f"indice_fiscal_incompatible:{nombre}")
+    return hallazgos
+
+
 def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=False):
     """Inspecciona una conexión SQLite existente usando solo metadatos y SELECT.
 
     No abre rutas, no ejecuta crear_base ni altera el esquema. Como todavía no
     hay una versión oficial del esquema, ninguna base histórica puede resultar
-    ACTUAL en esta fase.
+    ACTUAL en esta fase. Verifica integridad (quick_check, foreign_key_check),
+    application_id, tablas de versionado y la estructura fiscal presente; ante
+    cualquier duda clasifica de forma conservadora. Ninguna clasificación autoriza.
     """
     try:
         cursor = conexion.cursor()
         cursor.execute("PRAGMA user_version")
         fila_version = cursor.fetchone()
-        if not fila_version or isinstance(fila_version[0], bool):
+        if not fila_version or isinstance(fila_version[0], bool) or not isinstance(fila_version[0], int):
             return ResultadoInspeccionBaseSQLite(
                 "BLOQUEADA", motivos=("No se pudo leer PRAGMA user_version de forma confiable.",)
             )
         version_sqlite = int(fila_version[0])
         version_registrada = version_sqlite if version_sqlite != 0 else None
+
+        cursor.execute("PRAGMA quick_check")
+        if [tuple(fila) for fila in cursor.fetchall()] != [("ok",)]:
+            return ResultadoInspeccionBaseSQLite(
+                "BLOQUEADA",
+                version_registrada=version_registrada,
+                motivos=("integridad_sqlite_fallida: PRAGMA quick_check no devolvió 'ok'.",),
+            )
+
+        cursor.execute("PRAGMA application_id")
+        fila_aplicacion = cursor.fetchone()
+        if (
+            not fila_aplicacion or isinstance(fila_aplicacion[0], bool)
+            or not isinstance(fila_aplicacion[0], int)
+        ):
+            return ResultadoInspeccionBaseSQLite(
+                "BLOQUEADA", version_registrada=version_registrada,
+                motivos=("No se pudo leer PRAGMA application_id de forma confiable.",),
+            )
+        application_id = fila_aplicacion[0]
+
+        fk_no_concluyente = False
+        try:
+            cursor.execute("PRAGMA foreign_key_check")
+            tablas_con_huerfanos = sorted({str(fila[0]) for fila in cursor.fetchall()})
+        except sqlite3.Error:
+            # Padre ausente o sin clave compatible: no se puede afirmar que no haya huérfanos.
+            tablas_con_huerfanos = []
+            fk_no_concluyente = True
 
         cursor.execute(
             "SELECT type, name FROM sqlite_master "
@@ -567,9 +756,9 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
         )
         objetos = cursor.fetchall()
         tablas = {nombre for tipo, nombre in objetos if tipo == "table"}
-        marcadores_no_reconocidos = tablas.intersection(
-            {"schema_migrations", "database_migrations", "migraciones_esquema"}
-        )
+        marcadores_no_reconocidos = {
+            nombre for nombre in tablas if nombre.casefold() in _MARCADORES_VERSION_NO_RECONOCIDOS
+        }
 
         # FM Master Gestión no define triggers legítimos: solo se leen sus metadatos, sin ejecutar su SQL.
         triggers_no_reconocidos = []
@@ -582,7 +771,7 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
                 f"{prefijo}:{nombre}({tabla_trigger})" for nombre, tabla_trigger in cursor.fetchall()
             )
 
-        if not objetos and version_sqlite == 0:
+        if not objetos and version_sqlite == 0 and application_id == 0:
             if triggers_no_reconocidos:
                 return ResultadoInspeccionBaseSQLite(
                     "BLOQUEADA",
@@ -846,10 +1035,16 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
                         "requiere revisión manual y no se inferirá"
                     )
 
-        if marcadores_no_reconocidos or version_registrada is not None:
+        incompatibilidades_estructurales = _incompatibilidades_estructurales_sqlite(cursor, tablas)
+
+        if marcadores_no_reconocidos or version_registrada is not None or application_id != 0:
             if version_registrada is not None:
                 motivos.append(
                     f"PRAGMA user_version={version_registrada} no pertenece a una versión reconocida por este detector."
+                )
+            if application_id != 0:
+                motivos.append(
+                    f"PRAGMA application_id={application_id} no pertenece a una aplicación reconocida por este detector."
                 )
             if marcadores_no_reconocidos:
                 motivos.append(
@@ -861,6 +1056,7 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
         elif (
             duplicados or tablas_esenciales_ausentes or claves_primarias_incompatibles
             or triggers_no_reconocidos or contradicciones_fiscales
+            or incompatibilidades_estructurales or tablas_con_huerfanos or fk_no_concluyente
         ):
             motivos.extend(
                 f"tabla_esencial_ausente:{tabla}; no se recreará automáticamente"
@@ -885,6 +1081,10 @@ def inspeccionar_estado_base_sqlite(conexion, *, instalacion_nueva_confirmada=Fa
         motivos.extend(triggers_no_reconocidos)
         motivos.extend(duplicados)
         motivos.extend(contradicciones_fiscales)
+        motivos.extend(f"estructura_incompatible:{hallazgo}" for hallazgo in incompatibilidades_estructurales)
+        motivos.extend(f"clave_foranea_huerfana:{tabla}" for tabla in tablas_con_huerfanos)
+        if fk_no_concluyente:
+            motivos.append("clave_foranea_no_verificable: PRAGMA foreign_key_check no fue concluyente.")
         return ResultadoInspeccionBaseSQLite(
             estado=estado,
             version_registrada=version_registrada,
