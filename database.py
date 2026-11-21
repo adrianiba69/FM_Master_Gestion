@@ -616,6 +616,8 @@ _CLAVES_FORANEAS_ESPERADAS = (
     ("servicio_renovaciones", "servicio_id", "servicios"),
     ("servicio_renovaciones", "cliente_id", "clientes"),
     ("resumenes", "cliente_id", "clientes"),
+    ("resumenes", "emisor_fiscal_id", "emisores_fiscales"),
+    ("servicio_renovaciones", "resumen_id", "resumenes"),
     ("resumen_conceptos", "resumen_id", "resumenes"),
     ("resumen_conceptos", "servicio_id", "servicios"),
     ("cobros", "cliente_id", "clientes"),

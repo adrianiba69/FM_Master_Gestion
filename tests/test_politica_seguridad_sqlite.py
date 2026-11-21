@@ -300,8 +300,12 @@ _RESTRICCIONES_TABLA = {
     "servicio_renovaciones": (
         "FOREIGN KEY(servicio_id) REFERENCES servicios(id)",
         "FOREIGN KEY(cliente_id) REFERENCES clientes(id)",
+        "FOREIGN KEY(resumen_id) REFERENCES resumenes(id)",
     ),
-    "resumenes": ("FOREIGN KEY(cliente_id) REFERENCES clientes(id)",),
+    "resumenes": (
+        "FOREIGN KEY(cliente_id) REFERENCES clientes(id)",
+        "FOREIGN KEY(emisor_fiscal_id) REFERENCES emisores_fiscales(id)",
+    ),
     "resumen_conceptos": (
         "FOREIGN KEY(resumen_id) REFERENCES resumenes(id)",
         "FOREIGN KEY(servicio_id) REFERENCES servicios(id)",
