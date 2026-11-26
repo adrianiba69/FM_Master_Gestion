@@ -1,8 +1,10 @@
 """Huella estructural canónica de una base SQLite (solo lectura).
 
 Etapa 3D.4C.5D.2. Módulo aislado: no abre rutas, no se conecta al arranque, no
-participa de la política de autorización y no escribe nada. Recibe una
-``sqlite3.Connection`` ya abierta (idealmente ``mode=ro``) y ejecuta únicamente
+participa de la política de autorización y no escribe nada.
+Recibe una ``sqlite3.Connection`` ya abierta (idealmente ``mode=ro``) o una
+``ConexionRestringida`` (etapa 3D.4C.5D.5A, para calcular la huella dentro de la
+transacción controlada) y ejecuta únicamente
 ``SELECT`` sobre ``sqlite_master`` y ``PRAGMA`` de lectura sin asignación.
 
 Representación canónica (formato ``fm-huella-estructural-v1``)
@@ -46,6 +48,9 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
+
+# Importación unidireccional: el módulo de control solo depende de la biblioteca estándar.
+from services.sqlite_control_claves_foraneas import ConexionRestringida
 
 FORMATO_HUELLA_ESTRUCTURAL = "fm-huella-estructural-v1"
 
@@ -223,6 +228,16 @@ def _clausulas_no_expuestas(sql, columnas_pragma):
     }
 
 
+def _exigir_conexion_admitida(conexion):
+    """Admite solo ``sqlite3.Connection`` o ``ConexionRestringida`` (por tipo exacto, no por duck typing).
+
+    Solo se usa ``cursor()`` y ``execute``/``fetch*``/``close`` de los cursores; nunca se
+    accede a la conexión real que envuelve la interfaz restringida.
+    """
+    if not isinstance(conexion, (sqlite3.Connection, ConexionRestringida)):
+        raise TypeError("Se requiere una sqlite3.Connection o una ConexionRestringida.")
+
+
 def _identificador(nombre):
     return '"' + str(nombre).replace('"', '""') + '"'
 
@@ -344,8 +359,7 @@ def _estructura_tabla(cursor, nombre, sql, info_lista):
 
 def representacion_estructural_sqlite(conexion):
     """Devuelve la representación canónica (dict serializable) o lanza _NoRepresentable."""
-    if not isinstance(conexion, sqlite3.Connection):
-        raise TypeError("Se requiere una sqlite3.Connection.")
+    _exigir_conexion_admitida(conexion)
     cursor = conexion.cursor()
     try:
         cursor.execute("PRAGMA main.table_list")
@@ -389,8 +403,7 @@ def representacion_estructural_sqlite(conexion):
 
 def calcular_huella_estructural_sqlite(conexion):
     """Calcula la huella SHA-256 de la estructura. Solo lectura; no lanza por datos de la base."""
-    if not isinstance(conexion, sqlite3.Connection):
-        raise TypeError("Se requiere una sqlite3.Connection.")
+    _exigir_conexion_admitida(conexion)
     try:
         cursor = conexion.cursor()
         try:
